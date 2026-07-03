@@ -54,6 +54,9 @@ def build_record(job):
         "ts_created": job.created,
         "ts_finished": job.finished,
         "parent_id": p.get("source_id"),            # lineage: enhance->source (re-roll/clone lineage TBD)
+        "pair_id": p.get("pair_id"),                 # Q3: PAIR A/B linkage (shared across the A + B jobs)
+        "pair_variant": p.get("pair_variant"),        # "A" | "B"
+        "replicate_set_id": p.get("replicate_set_id"),  # Q3: ×N REPLICATE linkage (source job's id)
         "status": job.status,
         "machine": _MACHINE,
         # ---- independent variables (the dials) ----
@@ -91,6 +94,9 @@ def build_record(job):
         "phase_secs": dict(getattr(job, "phase_secs", {}) or {}),   # {load,warmup,generating,decoding,...}
         "seg_secs": list(getattr(job, "seg_secs", []) or []),       # seconds per shot
         "dir_ms": {str(k): v for k, v in (getattr(job, "dir_ms", {}) or {}).items()},  # per-seam director cost
+        "seam_mse": list(getattr(job, "seam_mse", []) or []),        # [[seg, mse*100], ...] (Q3)
+        "drift": list(getattr(job, "drift", []) or []),              # [[seg, pre*100, post*100], ...] (Q3)
+        "tok_counts": list(getattr(job, "tok_counts", []) or []),    # [[seg, n_tokens], ...] (Q3)
         "peak_vram_mb": getattr(job, "peak_vram", None),
         "cpu_secs": None,                            # TODO (next increment): process CPU-time sampling
         "error": job.error or "",

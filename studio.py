@@ -1136,6 +1136,147 @@ class RerollScreen(ModalScreen):
         self.dismiss(None)
 
 
+class PairScreen(ModalScreen):
+    """PAIR A/B (Q3): clone a job with ONE dial changed, same seed -- for a blind A/B comparison.
+    dismiss({"dial": str, "value": str}) confirms; dismiss(None)/escape cancels."""
+    DEFAULT_CSS = """
+    PairScreen { align: center middle; background: $background 80%; }
+    #pabox { width: 64; height: auto; border: round #2fae5f; background: #06120b; padding: 1 2; }
+    #patitle { color: #6dffab; text-style: bold; height: 1; }
+    #pasub { color: #1f9a52; height: auto; margin: 0 0 1 0; }
+    .crow { height: 3; margin-top: 1; }
+    .crow Button { margin-right: 2; }
+    #pa_ok { background: #134a2a; color: #9dffce; text-style: bold; }
+    """
+    DIALS = ("steps", "cfg", "res", "seg", "cond_strength", "steadiness", "backend", "fps")
+    BINDINGS = [("escape", "close", "Close")]
+
+    def __init__(self, summary):
+        super().__init__()
+        self.summary = summary
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="pabox"):
+            yield Static("⇄  PAIR A/B RUN", id="patitle")
+            yield Static(f"clone '{self.summary}' with ONE dial changed — same seed, for a blind A/B.\n"
+                         f"dial: {', '.join(self.DIALS)}", id="pasub")
+            yield Input(placeholder="dial name (e.g. cfg)", id="pa_dial")
+            yield Input(placeholder="new value", id="pa_value")
+            with Horizontal(classes="crow"):
+                yield Button("⇄ PAIR", id="pa_ok")
+                yield Button("✕ CANCEL", id="pa_close")
+
+    def on_mount(self):
+        self.query_one("#pabox").border_title = "« PAIR A/B »"
+        self.query_one("#pa_dial", Input).focus()
+
+    def _submit(self):
+        self.dismiss({"dial": (self.query_one("#pa_dial", Input).value or "").strip().lower(),
+                      "value": (self.query_one("#pa_value", Input).value or "").strip()})
+
+    def on_input_submitted(self, e):
+        self._submit()
+
+    def on_button_pressed(self, e):
+        if e.button.id == "pa_ok":
+            self._submit()
+        else:
+            self.dismiss(None)
+
+    def action_close(self):
+        self.dismiss(None)
+
+
+class ReplicateScreen(ModalScreen):
+    """×N REPLICATE (Q3): re-run a job N times with random seeds -- probes the seed noise floor.
+    dismiss({"n": str}) confirms (blank/invalid -> 3, clamped 2-5); dismiss(None)/escape cancels."""
+    DEFAULT_CSS = """
+    ReplicateScreen { align: center middle; background: $background 80%; }
+    #rebox { width: 64; height: auto; border: round #2fae5f; background: #06120b; padding: 1 2; }
+    #retitle { color: #6dffab; text-style: bold; height: 1; }
+    #resub { color: #1f9a52; height: auto; margin: 0 0 1 0; }
+    .crow { height: 3; margin-top: 1; }
+    .crow Button { margin-right: 2; }
+    #re_ok { background: #134a2a; color: #9dffce; text-style: bold; }
+    """
+    BINDINGS = [("escape", "close", "Close")]
+
+    def __init__(self, summary):
+        super().__init__()
+        self.summary = summary
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="rebox"):
+            yield Static("×N  REPLICATE RUN", id="retitle")
+            yield Static(f"re-run '{self.summary}' N times with random seeds — probes the seed noise floor.",
+                         id="resub")
+            yield Input(placeholder="N (2-5, default 3)", id="re_n")
+            with Horizontal(classes="crow"):
+                yield Button("×N REPLICATE", id="re_ok")
+                yield Button("✕ CANCEL", id="re_close")
+
+    def on_mount(self):
+        self.query_one("#rebox").border_title = "« REPLICATE »"
+        self.query_one("#re_n", Input).focus()
+
+    def _submit(self):
+        self.dismiss({"n": (self.query_one("#re_n", Input).value or "").strip()})
+
+    def on_input_submitted(self, e):
+        self._submit()
+
+    def on_button_pressed(self, e):
+        if e.button.id == "re_ok":
+            self._submit()
+        else:
+            self.dismiss(None)
+
+    def action_close(self):
+        self.dismiss(None)
+
+
+class RatePairScreen(ModalScreen):
+    """⚖ RATE PAIR (Q3): blind pair rating -- shows two output paths as '1'/'2' in random order (no
+    metadata that could bias the vote). dismiss("1"|"2"|"tie") records the verdict; dismiss(None)/
+    escape cancels."""
+    DEFAULT_CSS = """
+    RatePairScreen { align: center middle; background: $background 80%; }
+    #rpbox { width: 74; height: auto; border: round #2fae5f; background: #06120b; padding: 1 2; }
+    #rptitle { color: #6dffab; text-style: bold; height: 1; }
+    #rpsub { color: #1f9a52; height: auto; margin: 0 0 1 0; }
+    .crow { height: 3; margin-top: 1; }
+    .crow Button { margin-right: 2; }
+    """
+    BINDINGS = [("escape", "close", "Close")]
+
+    def __init__(self, path1, path2):
+        super().__init__()
+        self.path1, self.path2 = path1, path2
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="rpbox"):
+            yield Static("⚖  RATE PAIR (blind)", id="rptitle")
+            yield Static(f"1: {self.path1}\n2: {self.path2}\n\nplay both yourself, then pick.", id="rpsub")
+            with Horizontal(classes="crow"):
+                yield Button("1 BETTER", id="rp_1")
+                yield Button("2 BETTER", id="rp_2")
+                yield Button("TIE", id="rp_tie")
+                yield Button("✕ CANCEL", id="rp_close")
+
+    def on_button_pressed(self, e):
+        if e.button.id == "rp_1":
+            self.dismiss("1")
+        elif e.button.id == "rp_2":
+            self.dismiss("2")
+        elif e.button.id == "rp_tie":
+            self.dismiss("tie")
+        else:
+            self.dismiss(None)
+
+    def action_close(self):
+        self.dismiss(None)
+
+
 class Studio(App):
     TITLE = "LTX STUDIO"
     CSS = """
@@ -1188,6 +1329,8 @@ class Studio(App):
     #inspectpanel { border: round #1c7a42; background: #08160d; height: 1fr; padding: 0 1; }
     #inspectinfo { color: #34d977; }
     #inspectlog { display: none; }
+    #reltable { height: 8; margin-top: 1; display: none; }
+    #playchildbtn { display: none; margin-top: 1; }
     #status { height: 2; border-top: solid #1c7a42; background: #0a1c10; color: #6dffab; content-align: left middle; }
     .actions { height: 3; }
     .actions Button { margin-right: 1; }
@@ -1299,11 +1442,16 @@ class Studio(App):
                 with Horizontal(classes="actions"):
                     yield Button("⧉ CLONE", id="clonebtn")
                     yield Button("⟲ RE-ROLL", id="rerollbtn")
+                    yield Button("⇄ PAIR A/B", id="pairbtn")
+                    yield Button("×N REPLICATE", id="replbtn")
+                    yield Button("⚖ RATE PAIR", id="ratepairbtn")
                     yield Button("▲ ENHANCE", id="enhancebtn")
                     yield Button("✎ RENAME", id="renamebtn")
                     yield Button("✕ DELETE", id="deletebtn")
                 with VerticalScroll(id="inspectpanel"):
                     yield Static("[dim]Select a run above and press INSPECT.[/dim]", id="inspectinfo")
+                    yield DataTable(id="reltable", cursor_type="row")
+                    yield Button("▶ PLAY SELECTED CHILD RUN", id="playchildbtn")
                 yield RichLog(id="inspectlog", highlight=True, markup=False, wrap=True)
         yield Static("", id="status")
         yield Footer()
@@ -1313,6 +1461,7 @@ class Studio(App):
         self.theme = "pipboy"
         self.query_one("#qtable", DataTable).add_columns("id", "title", "mode", "status")
         self.query_one("#atable", DataTable).add_columns("id", "title", "status", "started", "finished", "gen", "dur")
+        self.query_one("#reltable", DataTable).add_columns("id", "relation", "status", "output")
         self.query_one("#livelog", RichLog).border_title = "« RAW TERMINAL »"
         self.query_one("#inspectlog", RichLog).border_title = "« RAW TERMINAL »"
         self.query_one("#inspectpanel").border_title = "« RUN DETAILS »"
@@ -1854,6 +2003,23 @@ class Studio(App):
         except Exception:
             return None
 
+    def _play_job(self, jid):
+        """Open a job's output in the system player. Shared by ▶ PLAY (#atable) and
+        ▶ PLAY SELECTED CHILD RUN (#reltable) -- same file, two selection sources."""
+        job = self.mgr.jobs.get(jid)
+        if not job or not job.out:
+            self.query_one("#inspectinfo", Static).update("[#ffcf5c]No output file for this run.[/#ffcf5c]")
+            return
+        abs_out = job.out if os.path.isabs(job.out) else os.path.join(REPO, job.out)
+        if not os.path.exists(abs_out):
+            self.query_one("#inspectinfo", Static).update(
+                "[#ffcf5c]Output file is missing — nothing to play.[/#ffcf5c]")
+            return
+        if not open_in_player(abs_out):
+            self.query_one("#inspectinfo", Static).update(
+                "[#ffcf5c]Couldn't open a player. Paste this into Explorer:[/#ffcf5c]\n  "
+                + self._winpath(abs_out))
+
     def _queue_current_run(self):
         """Build the NEW RUN form into a job and enqueue it. Shared by QUEUE RUN + RE-ROLL.
         Returns the queued Job, or None if blocked (empty prompt / GPU budget)."""
@@ -1987,6 +2153,116 @@ class Studio(App):
                     self.query_one("#inspectinfo", Static).update(
                         f"[#9dffce]Re-rolled {job.id} → {j.id} with seed {seed}.[/#9dffce]")
             self.push_screen(RerollScreen((job.title or job.id)[:40], job.params.get("seed")), _do_reroll)
+        elif b == "pairbtn":
+            jid = self._selected("#atable")
+            if not jid:
+                return
+            job = self.mgr.jobs.get(jid)
+            if not job:
+                return
+            if (job.params.get("mode") or job.kind) == "enhance":
+                self.query_one("#inspectinfo", Static).update(
+                    "[#ffcf5c]Enhance runs can't be paired — they have no seed. Pair the original render.[/#ffcf5c]")
+                return
+
+            def _do_pair(res):
+                if not res:                          # None -> user cancelled
+                    return
+                dial, value = res.get("dial") or "", res.get("value") or ""
+                if dial not in PairScreen.DIALS or not value:
+                    self.query_one("#inspectinfo", Static).update(
+                        f"[#ff6d6d]PAIR needs a dial in: {', '.join(PairScreen.DIALS)}.[/#ff6d6d]")
+                    return
+                cfg = self._clone_config(job)         # KEEP the seed -- only the one dial differs
+                cfg[dial] = value
+                cfg["name"] = ""                      # clear any stale NAME typed in the form (A13)
+                cfg.setdefault("backend", "ltx")      # legacy jobs missing these params must not
+                cfg.setdefault("cond_strength", "1.0")   # inherit whatever the form currently holds
+                self._apply_config(cfg)
+                j = self._queue_current_run()         # same path as QUEUE RUN (budget gate, enqueue)
+                if j:
+                    j.params["pair_id"] = job.id
+                    j.params["pair_variant"] = "B"
+                    j.save()
+                    job.params.setdefault("pair_id", job.id)      # back-annotate the source, if unset
+                    job.params.setdefault("pair_variant", "A")
+                    job.save()
+                    self.query_one("#inspectinfo", Static).update(
+                        f"[#9dffce]Paired {job.id} → {j.id} ({dial}={value}, same seed).[/#9dffce]")
+            self.push_screen(PairScreen((job.title or job.id)[:40]), _do_pair)
+        elif b == "replbtn":
+            jid = self._selected("#atable")
+            if not jid:
+                return
+            job = self.mgr.jobs.get(jid)
+            if not job:
+                return
+            if (job.params.get("mode") or job.kind) == "enhance":
+                self.query_one("#inspectinfo", Static).update(
+                    "[#ffcf5c]Enhance runs can't be replicated — they have no seed. Replicate the original render.[/#ffcf5c]")
+                return
+
+            def _do_replicate(res):
+                if not res:
+                    return
+                import random
+                try:
+                    n = max(2, min(5, int((res.get("n") or "3").strip() or "3")))
+                except Exception:
+                    n = 3
+                queued = []
+                for _ in range(n):
+                    cfg = self._clone_config(job)
+                    cfg["seed"] = str(random.randint(1, 2**31 - 1))
+                    cfg["name"] = ""
+                    cfg.setdefault("backend", "ltx")
+                    cfg.setdefault("cond_strength", "1.0")
+                    self._apply_config(cfg)
+                    j = self._queue_current_run()
+                    if j:
+                        j.params["replicate_set_id"] = job.id
+                        j.save()
+                        queued.append(j.id)
+                if queued:
+                    self.query_one("#inspectinfo", Static).update(
+                        f"[#9dffce]Replicated {job.id} ×{len(queued)}: {', '.join(queued)}.[/#9dffce]")
+            self.push_screen(ReplicateScreen((job.title or job.id)[:40]), _do_replicate)
+        elif b == "ratepairbtn":
+            jid = self._selected("#atable")
+            if not jid:
+                return
+            job = self.mgr.jobs.get(jid)
+            if not job:
+                return
+            pid = job.params.get("pair_id")
+            if not pid:
+                self.query_one("#inspectinfo", Static).update(
+                    "[#ffcf5c]Selected run has no pair — use PAIR A/B first.[/#ffcf5c]")
+                return
+            partner = next((jj for jj in self.mgr.jobs.values()
+                            if jj.id != job.id and jj.params.get("pair_id") == pid), None)
+            if not partner:
+                self.query_one("#inspectinfo", Static).update(
+                    "[#ffcf5c]Partner run not found (may have been deleted).[/#ffcf5c]")
+                return
+            import random
+            a, bb = (job, partner) if random.random() < 0.5 else (partner, job)
+            slot = {"1": a.id, "2": bb.id}
+
+            def _do_rate(pick):
+                if not pick:
+                    return
+                winner = "tie" if pick == "tie" else slot[pick]
+                rec = {"pair_id": pid, "winner": winner, "ts": time.time()}
+                try:
+                    os.makedirs(os.path.join(REPO, "runs"), exist_ok=True)
+                    with open(os.path.join(REPO, "runs", "pair_ratings.jsonl"), "a") as f:
+                        f.write(json.dumps(rec) + "\n")
+                    self.query_one("#inspectinfo", Static).update(f"[#9dffce]Recorded: {winner}.[/#9dffce]")
+                except Exception as ex:
+                    self.query_one("#inspectinfo", Static).update(
+                        f"[#ff6d6d]Couldn't record rating: {ex}[/#ff6d6d]")
+            self.push_screen(RatePairScreen(a.out or "(no output)", bb.out or "(no output)"), _do_rate)
         elif b == "enhancebtn":
             jid = self._selected("#atable")
             if not jid:
@@ -2067,19 +2343,15 @@ class Studio(App):
             jid = self._selected("#atable")
             if not jid:
                 return
-            job = self.mgr.jobs.get(jid)
-            if not job or not job.out:
-                self.query_one("#inspectinfo", Static).update("[#ffcf5c]No output file for this run.[/#ffcf5c]")
-                return
-            abs_out = job.out if os.path.isabs(job.out) else os.path.join(REPO, job.out)
-            if not os.path.exists(abs_out):
+            self._play_job(jid)
+
+        elif b == "playchildbtn":
+            jid = self._selected("#reltable")
+            if not jid:
                 self.query_one("#inspectinfo", Static).update(
-                    "[#ffcf5c]Output file is missing — nothing to play.[/#ffcf5c]")
+                    "[#ffcf5c]Select a run in the RELATED RUNS table first.[/#ffcf5c]")
                 return
-            if not open_in_player(abs_out):
-                self.query_one("#inspectinfo", Static).update(
-                    "[#ffcf5c]Couldn't open a player. Paste this into Explorer:[/#ffcf5c]\n  "
-                    + self._winpath(abs_out))
+            self._play_job(jid)
 
         elif b == "renamebtn":
             jid = self._selected("#atable")
@@ -2135,6 +2407,18 @@ class Studio(App):
         job = self.mgr.jobs.get(self._insp_jid)
         fn = self._fmt_provenance if self._insp_view == "timing" else self._fmt_inspect
         self.query_one("#inspectinfo", Static).update(fn(job))
+        self._render_related_table(job)
+
+    def _render_related_table(self, job):
+        """Populate #reltable with runs spawned from (or that spawned) `job` -- pairs, replicates,
+        enhancements -- so they can be selected and played individually without leaving inspect."""
+        t = self.query_one("#reltable", DataTable)
+        rel = self._related_jobs(job) if job else []
+        t.clear()
+        for k, label in sorted(rel, key=lambda x: x[0].created):
+            t.add_row(k.id, label, f"{_status_glyph(k.status)} {k.status}", os.path.basename(k.out or "?"), key=k.id)
+        t.display = bool(rel)
+        self.query_one("#playchildbtn", Button).display = bool(rel)
 
     def _fmt_inspect(self, job):
         if job is None:
@@ -2224,16 +2508,41 @@ class Studio(App):
                         L.append(f"      [dim]raw:[/dim] {r['raw'].strip()}")
         elif job.director:
             L += ["", "[#6dffab]LAST DIRECTOR PROMPT[/#6dffab]", f"  [#ffcf5c]{job.director}[/#ffcf5c]"]
-        kids = []
-        if getattr(self, "mgr", None):
-            kids = [j for j in self.mgr.jobs.values()
-                    if j.params.get("source_id") == job.id and j.kind == "enhance"]
-        if kids:
-            L += ["", "[#6dffab]ENHANCEMENTS[/#6dffab]"]
-            for k in sorted(kids, key=lambda j: j.created):
-                L.append(row("→", f"{_status_glyph(k.status)} {os.path.basename(k.out or '')}"))
+        rel = self._related_jobs(job) if getattr(self, "mgr", None) else []
+        if rel:
+            L += ["", "[#6dffab]RELATED RUNS[/#6dffab]",
+                  "  [dim]see the table below -- select one + ▶ PLAY SELECTED CHILD RUN.[/dim]"]
         L += ["", "[dim]⏱ TIMING for provenance · » TERMINAL (or 't') for the raw log.[/dim]"]
         return "\n".join(L)
+
+    def _related_jobs(self, job):
+        """Every OTHER job related to this one: PAIR A/B partner, ×N REPLICATE siblings/source, and
+        ENHANCE children/source. A run can now have several sibling output files (Q3's PAIR/REPLICATE) --
+        this feeds both the RELATED RUNS pointer above and the #reltable list. Returns [(Job, label), ...]."""
+        out = []
+        pid = job.params.get("pair_id")
+        if pid:
+            partner_variant = "A" if job.params.get("pair_variant") == "B" else "B"
+            out += [(j, f"pair {partner_variant}") for j in self.mgr.jobs.values()
+                    if j.id != job.id and j.params.get("pair_id") == pid]
+        rsid = job.params.get("replicate_set_id")
+        if rsid:      # this job IS a replicate -> pull in its source + sibling replicates
+            out += [(j, "replicate source" if j.id == rsid else "replicate sibling")
+                    for j in self.mgr.jobs.values()
+                    if j.id != job.id and (j.id == rsid or j.params.get("replicate_set_id") == rsid)]
+        else:         # this job might BE a replicate source
+            out += [(j, "replicate") for j in self.mgr.jobs.values()
+                    if j.id != job.id and j.params.get("replicate_set_id") == job.id]
+        out += [(j, "enhanced") for j in self.mgr.enhance_children(job.id)]
+        if job.kind == "enhance" and job.params.get("source_id"):
+            src = self.mgr.jobs.get(job.params["source_id"])
+            if src:
+                out.append((src, "enhanced from"))
+        seen, uniq = set(), []
+        for j, label in out:
+            if j.id not in seen:
+                seen.add(j.id); uniq.append((j, label))
+        return uniq
 
     def _fmt_provenance(self, job):
         if job is None:

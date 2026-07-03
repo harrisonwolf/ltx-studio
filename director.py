@@ -458,15 +458,30 @@ def make_backend(args):
 SEAM_STATIC_MSE = 18.0    # below this (luminance MSE on a 48px downscale) the seam is "static" -> HOLD skips the director
 
 
-def _seam_static(a, b):
-    """True if seam frame a is ~unchanged vs b (cheap luminance MSE). HOLD mode uses it to skip the
-    per-seam director when the scene is holding (prompt still works); real drift -> larger MSE -> the
-    director still runs to correct it. Tune SEAM_STATIC_MSE up to skip more, down to skip less."""
+def _seam_mse(a, b):
+    """Cheap luminance MSE between two frames (48px downscale). Shared by the HOLD static-skip
+    check and the SEAMMSE/DRIFT telemetry markers (Q3)."""
     from PIL import ImageChops
     sa, sb = a.convert("L").resize((48, 48)), b.convert("L").resize((48, 48))
     hist = ImageChops.difference(sa, sb).histogram()
-    mse = sum(i * i * n for i, n in enumerate(hist)) / 2304.0   # 48*48 pixels
-    return mse < SEAM_STATIC_MSE
+    return sum(i * i * n for i, n in enumerate(hist)) / 2304.0   # 48*48 pixels
+
+
+def _seam_static(a, b):
+    """True if seam frame a is ~unchanged vs b. HOLD mode uses it to skip the per-seam director
+    when the scene is holding (prompt still works); real drift -> larger MSE -> the director still
+    runs to correct it. Tune SEAM_STATIC_MSE up to skip more, down to skip less."""
+    return _seam_mse(a, b) < SEAM_STATIC_MSE
+
+
+def _emit_tokens(backend, seg_idx, prompt):
+    """[[TOKENS seg n]] -- prompt token count driving this shot (Q3 telemetry). Best-effort: a
+    backend/pipeline with no discoverable .tokenizer is silently skipped."""
+    try:
+        n = len(backend.pipe.tokenizer(prompt).input_ids)
+        print("[[TOKENS %d %d]]" % (seg_idx, n), flush=True)
+    except Exception:
+        pass
 
 
 def main():
@@ -706,6 +721,7 @@ def main():
     # --- segment 0 (fresh or resumed) ---
     if args.resume:
         video, seg_idx, current_prompt = load_checkpoint(args.resume, args.backend)
+        anchor_frame = video[seg_frames - 1]   # Q3: never persisted -- recompute (shot 1's last frame)
         print(f"resumed from {args.resume}: {len(video)} frames, seg_idx={seg_idx}")
         print(f"[[SEG {seg_idx + 1} {est_segs}]]", flush=True)   # the shot we're about to make
         print("[[PHASE warmup]]", flush=True)
@@ -717,9 +733,12 @@ def main():
         print("segment 1 (opening) ...")
         print("[[PHASE warmup]]", flush=True)
         print("[[LOAD %d %d warming up CUDA (first step is slow)]]" % (LOAD_TOTAL, LOAD_TOTAL), flush=True)
+        _emit_tokens(backend, 1, current_prompt)
         video = gen(conds, args.seed, current_prompt, False)
         _write_preview(args.preview, video)
         seg_idx = 1
+        anchor_frame = video[-1]   # Q3: shot 1's last frame anchors the drift curve for every later shot
+        print("[[DRIFT 1 0 0]]", flush=True)   # seeds the curve; SEAMMSE is continuations-only (no seam yet)
         if director:
             beats.append(args.prompt)
             if (seg_idx - last_redirect) >= redirect_every:
@@ -742,10 +761,13 @@ def main():
             globals()["_SUSPEND"] = False
         seg_idx += 1
         tail = video[-overlap:]
+        prev_last = tail[-1]   # Q3: the join point BEFORE this shot lands (crossfade rewrites video[-overlap:])
         print(f"[[SEG {seg_idx} {est_segs}]]", flush=True)
         print("[[PHASE warmup]]", flush=True)   # clear the stale 'redirecting' phase so the UI never reads "plan shot N+1"
         print(f"segment {seg_idx} (continuing from tail) ...")
+        _emit_tokens(backend, seg_idx, current_prompt)
         out = gen(backend.tail_cond(tail, args.cond_strength), args.seed + seg_idx, current_prompt, True)
+        drift_pre = _seam_mse(out[-1], anchor_frame)   # Q3: drift vs anchor BEFORE this shot's color correction
         if backend.strips_cond_head:
             # Wan: gen() already stripped the reproduced conditioning tail -> 'out' is continuation-only.
             new = color_match(out, video[-1])
@@ -762,6 +784,10 @@ def main():
                                         for i in range(overlap)]
             new = color_match(out[overlap:], video[-1])
             video += new
+        # Q3 telemetry: seam continuity + drift-vs-anchor, measured AFTER whichever correction just ran.
+        print("[[SEAMMSE %d %d]]" % (seg_idx, int(_seam_mse(new[0], prev_last) * 100)), flush=True)
+        print("[[DRIFT %d %d %d]]" % (seg_idx, int(drift_pre * 100),
+                                      int(_seam_mse(video[-1], anchor_frame) * 100)), flush=True)
         _write_preview(args.preview, video)
         if director and len(video) < target and (seg_idx - last_redirect) >= redirect_every:
             if args.steadiness == "hold" and _last_directed is not None and _seam_static(video[-1], _last_directed):

@@ -18,11 +18,15 @@ _SUSP = re.compile(r"\[\[SUSPENDED\s+(.*?)\]\]")
 _PLAN = re.compile(r"\[\[PLAN\s+(\d+)\s+(.*?)\]\]")
 _DMS = re.compile(r"\[\[DIRECT_MS\s+(\d+)\s+(\d+)\s+(\d+)\]\]")   # space-form: seg load_ms infer_ms
 _VRAM = re.compile(r"\[\[VRAM\s+(\d+)\]\]")                       # per-shot peak CUDA MB (experiment_log DV)
+_SEAMMSE = re.compile(r"\[\[SEAMMSE\s+(\d+)\s+(-?\d+)\]\]")       # seam continuity: [seg, mse*100] (Q3)
+_DRIFT = re.compile(r"\[\[DRIFT\s+(\d+)\s+(-?\d+)\s+(-?\d+)\]\]") # drift vs anchor: [seg, pre*100, post*100] (Q3)
+_TOKENS = re.compile(r"\[\[TOKENS\s+(\d+)\s+(\d+)\]\]")           # prompt token count: [seg, n] (Q3)
 _FIELDS = ["id", "title", "kind", "cmd", "params", "status", "seg", "nseg", "step", "nstep",
            "out", "error", "director", "created", "started", "finished",
            "phase", "load_step", "load_total", "load_msg", "saw_step", "first_step_ts", "first_step_seg",
            "ckpt_dir", "resumes", "last_ckpt_seg", "preview", "plans", "dir_ms",
-           "phase_started", "phase_secs", "seg_started", "seg_secs", "peak_vram"]
+           "phase_started", "phase_secs", "seg_started", "seg_secs", "peak_vram",
+           "seam_mse", "drift", "tok_counts"]
 ACTIVE = ("running", "paused")
 ARCHIVED = ("done", "failed", "cancelled", "interrupted")
 _counter = itertools.count(1)
@@ -58,6 +62,10 @@ class Job:
         self.seg_started = None     # wall-clock the current shot began
         self.seg_secs = []          # [seconds per completed shot]
         self.peak_vram = None       # max [[VRAM mb]] seen (experiment_log measured DV)
+        # ---- Q3: measurement floor (seam/drift/token telemetry) ----
+        self.seam_mse = []          # [[seg, mse*100], ...] seam continuity per continuation
+        self.drift = []             # [[seg, pre*100, post*100], ...] drift vs the shot-1 anchor
+        self.tok_counts = []        # [[seg, n_tokens], ...] prompt length per shot
 
     def jpath(self):
         return os.path.join(RUNS_DIR, f"{self.id}.json")
@@ -370,6 +378,7 @@ class JobManager:
         job.phase_started, job.phase_secs = None, {}
         job.seg_started, job.seg_secs = None, []
         job.dir_ms = {}
+        job.seam_mse, job.drift, job.tok_counts = [], [], []
         job.save()
         self.current, self.paused = job.id, False
         self._suspend_req = False
@@ -411,6 +420,17 @@ class JobManager:
                     vm = _VRAM.search(line)
                     if vm:
                         job.peak_vram = max(int(vm.group(1)), int(getattr(job, "peak_vram", 0) or 0))
+                    sm = _SEAMMSE.search(line)
+                    if sm:
+                        job.seam_mse.append([int(sm.group(1)), int(sm.group(2))])
+                        transition = True
+                    dr = _DRIFT.search(line)
+                    if dr:
+                        job.drift.append([int(dr.group(1)), int(dr.group(2)), int(dr.group(3))])
+                        transition = True
+                    tk = _TOKENS.search(line)
+                    if tk:
+                        job.tok_counts.append([int(tk.group(1)), int(tk.group(2))])   # noise -> no transition
                     d = _DIRX.search(line)
                     if d:
                         job.director = d.group(1)
