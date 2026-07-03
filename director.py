@@ -194,7 +194,36 @@ class LTXBackend(VideoBackend):
     def load(self):
         args = self.args
         print("[[LOAD 2 5 loading LTX checkpoint (largest part)]]", flush=True)
-        pipe = LTXConditionPipeline.from_pretrained("Lightricks/LTX-Video", torch_dtype=torch.bfloat16)
+        base = "Lightricks/LTX-Video"                        # T5 + tokenizer already in the HF cache
+        repo = getattr(args, "ltx_repo", None) or "Lightricks/LTX-Video-0.9.5"
+        self._distilled = getattr(args, "ltx_variant", None) == "distilled"
+        extra = {}
+        if self._distilled:
+            # 0.9.8-distilled 2B: verified present as a single-file checkpoint in the 0.9.0 base repo
+            # (ltxv-2b-0.9.8-distilled.safetensors, 6.3GB bf16). Pass it in as the transformer= override
+            # so the pipeline never downloads/builds the repo's own default transformer.
+            from diffusers import LTXVideoTransformer3DModel
+            from huggingface_hub import hf_hub_url
+            url = hf_hub_url(base, "ltxv-2b-0.9.8-distilled.safetensors")
+            extra["transformer"] = LTXVideoTransformer3DModel.from_single_file(url, torch_dtype=torch.bfloat16)
+        if repo == base:
+            pipe = LTXConditionPipeline.from_pretrained(base, torch_dtype=torch.bfloat16, **extra)
+        else:
+            # T5Tokenizer (slow), NOT T5TokenizerFast: model_index.json in both repos specifies the slow
+            # class, which tokenizes via the already-installed `sentencepiece` package directly. The fast
+            # class has no precomputed tokenizer.json in either repo's tokenizer/ subfolder, so loading it
+            # would trigger transformers' slow->fast conversion, which requires `protobuf` (not installed
+            # here, and not otherwise needed by this venv -- verified via the successful base-repo load).
+            from transformers import T5EncoderModel, T5Tokenizer
+            te = T5EncoderModel.from_pretrained(base, subfolder="text_encoder", torch_dtype=torch.bfloat16)
+            tok = T5Tokenizer.from_pretrained(base, subfolder="tokenizer")
+            pipe = LTXConditionPipeline.from_pretrained(repo, text_encoder=te, tokenizer=tok,
+                                                        torch_dtype=torch.bfloat16, **extra)
+        print(f"LTX checkpoint: {repo}" + (" (variant: 0.9.8-distilled 2B)" if self._distilled else ""),
+              flush=True)
+        # 0.9.5's VAE is timestep-conditioned (verified: vae/config.json timestep_conditioning=true, vs
+        # absent/false on the 0.9.0 base) -- only pass the decode kwargs when the loaded VAE supports them.
+        self._decode_kwargs = {} if repo == base else {"decode_timestep": 0.05, "decode_noise_scale": 0.025}
         print("[[LOAD 3 5 building pipeline]]", flush=True)
         print("[[PHASE offload]]", flush=True)
         print("[[LOAD 4 5 wiring CPU<->GPU offload (8GB mode)]]", flush=True)
@@ -210,24 +239,27 @@ class LTXBackend(VideoBackend):
         # latent token count using the diffusers DEFAULT shift constants (a deliberately tuned override,
         # validated to render clean -- NOT read from this checkpoint's scheduler_config, which differs) and
         # override set_timesteps to use linspace sigmas + that mu.
-        def _calc_shift(seq, base=256, maxs=4096, bs=0.5, ms=1.15):
-            m = (ms - bs) / (maxs - base)
-            return seq * m + (bs - m * base)
-        _lnf = (self.seg_frames - 1) // pipe.vae_temporal_compression_ratio + 1
-        _seq = _lnf * (self.H // pipe.vae_spatial_compression_ratio) * (self.W // pipe.vae_spatial_compression_ratio)
-        self._MU = _calc_shift(_seq)
-        _orig_set_timesteps = pipe.scheduler.set_timesteps
-        _MU = self._MU
-        _steps = args.steps
+        # --ltx_no_mush_patch lets the user A/B against 0.9.5's own scheduler config without a code change;
+        # the distilled variant always disables it (few-step CFG-distilled sampling uses its own schedule).
+        if not args.ltx_no_mush_patch and not self._distilled:
+            def _calc_shift(seq, base=256, maxs=4096, bs=0.5, ms=1.15):
+                m = (ms - bs) / (maxs - base)
+                return seq * m + (bs - m * base)
+            _lnf = (self.seg_frames - 1) // pipe.vae_temporal_compression_ratio + 1
+            _seq = _lnf * (self.H // pipe.vae_spatial_compression_ratio) * (self.W // pipe.vae_spatial_compression_ratio)
+            self._MU = _calc_shift(_seq)
+            _orig_set_timesteps = pipe.scheduler.set_timesteps
+            _MU = self._MU
+            _steps = args.steps
 
-        def _set_timesteps_fixed(sched_self, num_inference_steps=None, device=None, sigmas=None,
-                                 timesteps=None, mu=None, **kw):
-            n = num_inference_steps if num_inference_steps is not None else (
-                len(timesteps) if timesteps is not None else _steps)
-            sig = np.linspace(1.0, 1.0 / n, n)
-            return _orig_set_timesteps(num_inference_steps=n, device=device, sigmas=sig, mu=_MU)
-        pipe.scheduler.set_timesteps = types.MethodType(_set_timesteps_fixed, pipe.scheduler)
-        print("note: forced LTX base-pipeline schedule on condition pipe (linspace + mu=%.3f)" % self._MU)
+            def _set_timesteps_fixed(sched_self, num_inference_steps=None, device=None, sigmas=None,
+                                     timesteps=None, mu=None, **kw):
+                n = num_inference_steps if num_inference_steps is not None else (
+                    len(timesteps) if timesteps is not None else _steps)
+                sig = np.linspace(1.0, 1.0 / n, n)
+                return _orig_set_timesteps(num_inference_steps=n, device=device, sigmas=sig, mu=_MU)
+            pipe.scheduler.set_timesteps = types.MethodType(_set_timesteps_fixed, pipe.scheduler)
+            print("note: forced LTX base-pipeline schedule on condition pipe (linspace + mu=%.3f)" % self._MU)
 
         # --- #10 Phase 1: latent-space chaining (opt-in --latent_chain) ---
         # Carry each shot's LATENTS forward as the next shot's condition instead of decoding to pixels and
@@ -282,7 +314,8 @@ class LTXBackend(VideoBackend):
         out = self.pipe(conditions=cond, prompt=prompt, negative_prompt=neg,
                         width=self.W, height=self.H, num_frames=self.seg_frames,
                         num_inference_steps=args.steps, guidance_scale=args.cfg,
-                        generator=g, callback_on_step_end=step_cb).frames[0]
+                        generator=g, callback_on_step_end=step_cb,
+                        **self._decode_kwargs).frames[0]
         if args.latent_chain:
             self._lat_inj["lat"] = None
             self._carry = self._lat_stash["lat"]    # this shot's latents -> condition the next shot
@@ -463,6 +496,12 @@ def main():
     ap.add_argument("--preview", default=None, help="path to write a small live-preview PNG each segment")
     ap.add_argument("--latent_chain", action="store_true",
                     help="#10 (LTX only): carry shot latents forward instead of decode->re-encode")
+    ap.add_argument("--ltx_repo", default="Lightricks/LTX-Video-0.9.5",
+                    help="LTX diffusers checkpoint repo (escape hatch: Lightricks/LTX-Video = 0.9.0)")
+    ap.add_argument("--ltx_no_mush_patch", action="store_true",
+                    help="disable the linspace+mu scheduler override (A/B against the repo's own scheduler config)")
+    ap.add_argument("--ltx_variant", default=None, choices=["distilled"],
+                    help="LTX transformer variant (distilled = 0.9.8-distilled 2B, forces few-step/cfg=1.0)")
     ap.add_argument("--cond_strength", type=float, default=1.0,
                     help="tail-conditioning strength 0-1 (continuity dial: 1.0=tight, lower=looser/freer)")
     ap.add_argument("--no_crossfade", action="store_true", help="disable the seam crossfade (hard cut)")
@@ -473,6 +512,13 @@ def main():
         # the distill runs few-step; clamp HERE so [[STEP]] totals, the decode-phase flip, and the
         # per-step preview gates (all driven by args.steps) agree with what gen() actually runs.
         args.steps = min(args.steps, 8)
+    if args.ltx_variant == "distilled":
+        if args.backend != "ltx":
+            print("note: --ltx_variant is LTX-only; ignored for backend=%s" % args.backend, flush=True)
+        else:
+            # same reasoning as wan-turbo above: CFG-distilled + few-step.
+            args.steps = min(args.steps, 8)
+            args.cfg = 1.0
 
     signal.signal(signal.SIGUSR1, _on_suspend)
     cap_vram()                          # leave ~12% VRAM free for the OS (clean OOM, never a choke)
