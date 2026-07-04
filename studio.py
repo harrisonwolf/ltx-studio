@@ -1786,7 +1786,10 @@ class Studio(App):
         wid = getattr(self.focused, "id", None)
         if wid in HELP:
             self.query_one("#newinfo", Static).update(HELP[wid])
-        self._show_field_visual(wid)
+        # STICKY panels: the schematic + help boxes are persistent dashboard fixtures, not
+        # transient tooltips. Focusing a button/table/etc must NOT blank them — only a field
+        # that HAS a visual replaces the schematic (_refresh_field_visual no-ops otherwise).
+        self._refresh_field_visual(wid)
 
     def _show_field_visual(self, wid):
         """Show the BF6-style schematic for `wid` ABOVE the text help, or clear it if the field has
