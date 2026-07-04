@@ -30,7 +30,18 @@ ap.add_argument("--out", default="outputs/ltx.mp4")
 ap.add_argument("--preview", default=None, help="path to write a small live-preview PNG of the final frame")
 ap.add_argument("--ltx_repo", default="Lightricks/LTX-Video-0.9.5",
                 help="LTX diffusers checkpoint repo (escape hatch: Lightricks/LTX-Video = 0.9.0)")
+ap.add_argument("--ltx_variant", default=None, choices=["distilled"],
+                help="LTX transformer variant (distilled = 0.9.8-distilled 2B, forces few-step/cfg=1.0). "
+                     "Omit -> byte-identical 0.9.5 run. Mirrors director.py.")
 args = ap.parse_args()
+# --ltx_variant distilled: swap ONLY the transformer for the 0.9.8-distilled 2B single-file checkpoint,
+# keeping 0.9.5's T5/tokenizer/VAE/scheduler (same as director.py's distilled path). The distill is
+# CFG-distilled + few-step, so clamp steps<=8 and force cfg=1.0 HERE -- so the [[STEP]] totals, the
+# per-step preview gates, and the decode-phase flip (all driven by args.steps) agree with what runs.
+_distilled = getattr(args, "ltx_variant", None) == "distilled"
+if _distilled:
+    args.steps = min(args.steps, 8)
+    args.cfg = 1.0
 
 # LTX requires width/height divisible by 32 and num_frames % 8 == 1
 W = (args.width // 32) * 32
@@ -55,16 +66,25 @@ print("[[LOAD 2 5 loading LTX checkpoint (largest part)]]", flush=True)
 base = "Lightricks/LTX-Video"                         # T5 + tokenizer already in the HF cache
 repo = getattr(args, "ltx_repo", None) or "Lightricks/LTX-Video-0.9.5"
 PipeCls = LTXImageToVideoPipeline if args.image else LTXPipeline
+extra = {}
+if _distilled:
+    # 0.9.8-distilled 2B: single-file checkpoint cached in the 0.9.0 base repo
+    # (ltxv-2b-0.9.8-distilled.safetensors, ~6.3GB bf16). Pass it in as the transformer= override so the
+    # pipeline never downloads/builds the repo's own default transformer -- mirrors director.py:365-374.
+    from diffusers import LTXVideoTransformer3DModel
+    from huggingface_hub import hf_hub_url
+    url = hf_hub_url(base, "ltxv-2b-0.9.8-distilled.safetensors")
+    extra["transformer"] = LTXVideoTransformer3DModel.from_single_file(url, torch_dtype=torch.bfloat16)
 if repo == base:
-    pipe = PipeCls.from_pretrained(base, torch_dtype=torch.bfloat16)
+    pipe = PipeCls.from_pretrained(base, torch_dtype=torch.bfloat16, **extra)
 else:
     # slow T5Tokenizer (NOT T5TokenizerFast): model_index.json specifies the slow class; the fast class
     # would trigger a slow->fast conversion needing protobuf (not installed here) -- mirrors director.py.
     from transformers import T5EncoderModel, T5Tokenizer
     te = T5EncoderModel.from_pretrained(base, subfolder="text_encoder", torch_dtype=torch.bfloat16)
     tok = T5Tokenizer.from_pretrained(base, subfolder="tokenizer")
-    pipe = PipeCls.from_pretrained(repo, text_encoder=te, tokenizer=tok, torch_dtype=torch.bfloat16)
-print(f"LTX checkpoint: {repo}", flush=True)
+    pipe = PipeCls.from_pretrained(repo, text_encoder=te, tokenizer=tok, torch_dtype=torch.bfloat16, **extra)
+print(f"LTX checkpoint: {repo}" + (" (variant: 0.9.8-distilled 2B)" if _distilled else ""), flush=True)
 print("[[LOAD 3 5 building pipeline]]", flush=True)
 
 print("[[PHASE offload]]", flush=True)

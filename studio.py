@@ -4,7 +4,7 @@ Tabs: NEW RUN (configure+queue) / QUEUE / LIVE (watch+pause/cancel) / ARCHIVE (i
 Backend: studio_core.JobManager (persistent runs, queue, pause/resume/cancel).
 Launch: ./studio.sh   (or ./venv/bin/python studio.py)
 """
-import os, sys, time, json, subprocess, threading, glob, re, shutil
+import os, sys, time, json, subprocess, threading, glob, re, shutil, random
 import gpu_budget
 from textual import work
 from textual.app import App, ComposeResult
@@ -12,13 +12,14 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from rich.markup import escape
 from textual.binding import Binding
 from textual.widgets import (Button, Footer, Input, Label, RichLog, Select, Static, Switch, TextArea,
-                             TabbedContent, TabPane, DataTable, ProgressBar)
+                             TabbedContent, TabPane, DataTable, ProgressBar, OptionList)
+from textual.widgets.option_list import Option
 from textual.theme import Theme
 from textual.screen import ModalScreen
 from PIL import Image
 from rich.text import Text
 from rich.style import Style
-from studio_core import JobManager, REPO
+from studio_core import JobManager, REPO, ARCHIVED
 
 PIPBOY = Theme(
     name="pipboy",
@@ -42,6 +43,43 @@ PIPBOY = Theme(
     },
 )
 
+# T13: a few more terminal-CRT themes in the same family as PIPBOY (amber/blue/red phosphor),
+# built from the same variable shape so they drop in cleanly wherever PIPBOY's vars are referenced.
+PIPBOY_AMBER = Theme(
+    name="pipboy-amber",
+    primary="#c98a1a", secondary="#a8720f", accent="#ffcf5c",
+    foreground="#e0a83e", background="#140d02", surface="#1a1004", panel="#1f1305",
+    success="#ffe29a", warning="#ffb347", error="#ff6d6d", dark=True,
+    variables={
+        "block-cursor-foreground": "#140d02", "block-cursor-background": "#ffcf5c",
+        "footer-key-foreground": "#ffe29a", "footer-description-foreground": "#e0a83e",
+        "border": "#7a5310",
+    },
+)
+PIPBOY_BLUE = Theme(
+    name="pipboy-blue",
+    primary="#2f8fae", secondary="#1f6f9a", accent="#6dd8ff",
+    foreground="#34b0d9", background="#06111c", surface="#081a26", panel="#0a1f2e",
+    success="#9de4ff", warning="#ffcf5c", error="#ff6d6d", dark=True,
+    variables={
+        "block-cursor-foreground": "#06111c", "block-cursor-background": "#6dd8ff",
+        "footer-key-foreground": "#9de4ff", "footer-description-foreground": "#34b0d9",
+        "border": "#1c5a7a",
+    },
+)
+PIPBOY_RED = Theme(
+    name="pipboy-red",
+    primary="#ae2f2f", secondary="#9a1f1f", accent="#ff6d6d",
+    foreground="#d93434", background="#120606", surface="#1c0808", panel="#220a0a",
+    success="#ffcf5c", warning="#ffcf5c", error="#ff9d9d", dark=True,
+    variables={
+        "block-cursor-foreground": "#120606", "block-cursor-background": "#ff6d6d",
+        "footer-key-foreground": "#ffb3b3", "footer-description-foreground": "#d93434",
+        "border": "#7a1c1c",
+    },
+)
+EXTRA_THEMES = (PIPBOY, PIPBOY_AMBER, PIPBOY_BLUE, PIPBOY_RED)
+
 FP_PY = sys.executable
 AD_REPO = "/home/wolve/video_gen/AnimateDiff"
 AD_PY = os.path.join(AD_REPO, "venv/bin/python")
@@ -52,6 +90,29 @@ LTX_REPO_DEFAULT = "Lightricks/LTX-Video-0.9.5"   # the checkpoint every ltx-bac
 
 DIRECTOR_VENV_PY = "/home/wolve/video_gen/director_venv/bin/python"
 PLANNER_SCRIPT = os.path.join(REPO, "vlm_planner.py")
+
+STUDIO_CONFIG_PATH = os.path.join(REPO, "runs", "studio_config.json")   # T14: small persisted UI prefs
+
+
+def load_studio_config():
+    """Read runs/studio_config.json; missing/corrupt -> {} so every caller just applies its own defaults."""
+    try:
+        with open(STUDIO_CONFIG_PATH) as f:
+            return json.load(f) or {}
+    except Exception:
+        return {}
+
+
+def save_studio_config(cfg):
+    """Atomic write of runs/studio_config.json (mirrors Job.save()'s tmp+replace pattern)."""
+    try:
+        os.makedirs(os.path.dirname(STUDIO_CONFIG_PATH), exist_ok=True)
+        tmp = STUDIO_CONFIG_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(cfg, f)
+        os.replace(tmp, STUDIO_CONFIG_PATH)
+    except Exception:
+        pass
 
 
 def res_key(v):
@@ -73,8 +134,16 @@ INFO = ("[b]PIP-OS v8 :: JOB CONTROL[/b]\nConfigure a run and QUEUE it. Watch it
         "[dim]Vault-Tec: directing the future, frame by frame.[/dim]")
 try:
     from dials_help import DIALS as HELP   # NEW RUN dial tooltips — shared source of truth with the director (vlm_planner.py)
+    from dials_help import plain as _plain_help   # strip Rich [tags] for plain-text Button tooltips
 except Exception:
     HELP = {}
+    def _plain_help(t):
+        return t or ""
+
+
+def plain_help(key):
+    """Plain-text (markup-stripped) HELP blurb for a Button.tooltip, safe if the key is missing."""
+    return _plain_help(HELP.get(key, ""))
 
 
 def field(label, w, help_key=None):
@@ -105,6 +174,15 @@ EHELP = {
     "interpeng": "INTERP ENGINE — how the in-between frames are synthesized. RIFE: fast, great on clean/anime "
                  "motion (default). FILM: purpose-built for LARGE motion + occlusions (fewer warp artifacts) but "
                  "~5-10× slower than RIFE. Reach for FILM when RIFE smears fast or messy motion; RIFE otherwise.",
+    "restore": "RESTORE — video restoration via an AI upsampling pass (SeedVR2). SeedVR2-3B: fast, "
+               "general-purpose. SeedVR2-7B: slower, higher fidelity. None: skip restoration. Restore can "
+               "sometimes fix compression artifacts but may soften fine detail — preview on a test clip first.",
+    "tilefeather": "FEATHER TILES — blend the upscaler's tile seams so no faint grid lines show where tiles "
+                   "met. Costs nothing visible; leave on when a 4x/HAT upscale shows a checkerboard. Off = raw "
+                   "tile boundaries (marginally faster).",
+    "interpskip": "SKIP CUTS — on a hard cut or a static hold, hold the frame instead of morphing across it. "
+                  "Stops the interpolator from inventing a smeared blend between two unrelated shots. Off = "
+                  "interpolate every gap uniformly.",
 }
 
 
@@ -263,6 +341,25 @@ def _status_glyph(status):
     return {"done": "[#9dffce]✓[/#9dffce]", "failed": "[#ff6d6d]✕[/#ff6d6d]",
             "cancelled": "[dim]■[/dim]", "interrupted": "[#ffcf5c]‖[/#ffcf5c]",
             "suspended": "[#ffcf5c]▽[/#ffcf5c]"}.get(status, "·")
+
+
+def _run_kind(job):
+    """T11: classify a job's PURPOSE from its params, distinct from job.kind (single/chained/
+    director/enhance, which is really the BACKEND shape). Returns (glyph, label)."""
+    p = job.params or {}
+    if job.kind == "enhance":
+        return "▲", "enhance"
+    if p.get("pair_id"):
+        if p.get("pair_blind") and not p.get("pair_revealed"):
+            return "⇄", "blind pair"        # hide the A/B variant until REVEAL
+        variant = p.get("pair_variant") or "?"
+        return "⇄", f"pair {variant}"
+    if p.get("replicate_set_id"):
+        return "×N", "replicate"
+    if p.get("source_id"):        # generic fallback: some derived kind we don't special-case above
+        return "⟲", "derived"
+    return {"single": ("▭", "single"), "chained": ("▥", "chained"),
+            "director": ("✦", "director")}.get(job.kind, ("·", job.kind or "run"))
 
 
 def _filesize(path):
@@ -934,7 +1031,14 @@ class EnhanceOptsScreen(ModalScreen):
                                        value=self.defaults["face"], id="eopt_face", allow_blank=False), "face")
             yield field("DEFLICKER", Select([("off", "0"), ("on (stabilize)", "1")],
                                             value=self.defaults.get("deflicker", "0"), id="eopt_deflicker", allow_blank=False), "deflicker")
+            yield field("RESTORE", Select([("none", "none"), ("SeedVR2-3B", "seedvr2-3b"), ("SeedVR2-7B", "seedvr2-7b")],
+                                          value=self.defaults.get("restore", "none"), id="eopt_restore", allow_blank=False), "restore")
+            yield field("FEATHER TILES", Select([("off", "0"), ("on", "1")],
+                                                value=self.defaults.get("tile_feather", "0"), id="eopt_tilefeather", allow_blank=False), "tilefeather")
+            yield field("SKIP CUTS", Select([("off", "0"), ("on", "1")],
+                                            value=self.defaults.get("interp_skip", "0"), id="eopt_interpskip", allow_blank=False), "interpskip")
             yield Static("", id="eopt_warn")
+            yield Static("", id="eopt_eta")
             yield Static("", id="eopt_help")
             with Horizontal(classes="crow"):
                 yield Button("▲ RUN", id="eopt_run")
@@ -978,6 +1082,18 @@ class EnhanceOptsScreen(ModalScreen):
         else:
             warn.update("")
         run.disabled = block
+        # [HIGH] Enhance ETA — calibrated per 100 SOURCE frames: upscale ~80s/100f @ 4x (2x runs the
+        # same x4 model then downscales, so it costs the same as 4x), interp ~50s/100f, face ~20s/100f.
+        n100 = self.n_frames / 100.0
+        eta = 0.0
+        if up_factor:
+            eta += 80.0 * n100
+        if interp > 1:
+            eta += 50.0 * n100
+        if face:
+            eta += 20.0 * n100
+        self.query_one("#eopt_eta", Static).update(
+            f"[#ffcf5c]plan: ~{fmt(int(eta))}[/#ffcf5c]" if eta > 0 else "[dim]plan: no passes selected[/dim]")
 
     def on_button_pressed(self, e):
         if e.button.id and e.button.id.startswith("i_"):
@@ -989,7 +1105,10 @@ class EnhanceOptsScreen(ModalScreen):
                               upscale=self.query_one("#eopt_up", Select).value,
                               upmodel=self.query_one("#eopt_upmodel", Select).value,
                               face=self.query_one("#eopt_face", Select).value,
-                              deflicker=self.query_one("#eopt_deflicker", Select).value))
+                              deflicker=self.query_one("#eopt_deflicker", Select).value,
+                              restore=self.query_one("#eopt_restore", Select).value,
+                              tile_feather=self.query_one("#eopt_tilefeather", Select).value,
+                              interp_skip=self.query_one("#eopt_interpskip", Select).value))
         else:
             self.dismiss(None)
 
@@ -1039,6 +1158,62 @@ class ConfirmDeleteScreen(ModalScreen):
         self.dismiss(e.button.id == "del_yes")
 
     def action_close(self):
+        self.dismiss(False)
+
+
+class ThemePickerScreen(ModalScreen):
+    """T13: browse every registered theme with LIVE PREVIEW -- arrowing to a theme applies it
+    immediately; ENTER keeps it; ESCAPE (or closing without picking) reverts to whatever theme was
+    active when the picker opened. Textual 8.2.7's own command-palette ThemeProvider only applies on
+    select (no highlight-preview hook on Provider/Hit), so a dedicated OptionList screen is the
+    cleanest way to get a true live preview in this version."""
+    DEFAULT_CSS = """
+    ThemePickerScreen { align: center middle; background: $background 80%; }
+    #thbox { width: 50; height: auto; max-height: 80%; border: round #2fae5f; background: #06120b; padding: 1 2; }
+    #thtitle { color: #6dffab; text-style: bold; height: 1; }
+    #thsub { color: #1f9a52; height: auto; margin: 0 0 1 0; }
+    #thlist { height: auto; max-height: 20; border: round #1c7a42; background: #050d08; }
+    """
+    BINDINGS = [("escape", "cancel", "Revert + close")]
+
+    def __init__(self):
+        super().__init__()
+        self._original_theme = None
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="thbox"):
+            yield Static("◐  THEME", id="thtitle")
+            yield Static("↑/↓ previews live · ENTER keeps it · ESC reverts", id="thsub")
+            yield OptionList(id="thlist")
+
+    def on_mount(self):
+        self.query_one("#thbox").border_title = "« THEME PICKER »"
+        self._original_theme = self.app.theme
+        names = sorted(self.app.available_themes.keys())
+        opts = self.query_one("#thlist", OptionList)
+        for name in names:
+            opts.add_option(Option(("» " if name == self._original_theme else "  ") + name, id=name))
+        try:
+            opts.highlighted = names.index(self._original_theme)
+        except ValueError:
+            pass
+        opts.focus()
+
+    def on_option_list_option_highlighted(self, e: OptionList.OptionHighlighted):
+        if e.option and e.option.id:
+            try:
+                self.app.theme = e.option.id     # live preview as you arrow through
+            except Exception:
+                pass
+
+    def on_option_list_option_selected(self, e: OptionList.OptionSelected):
+        if e.option and e.option.id:
+            self.app.theme = e.option.id
+        self.dismiss(True)
+
+    def action_cancel(self):
+        if self._original_theme:
+            self.app.theme = self._original_theme    # revert -- dismissed without an explicit pick
         self.dismiss(False)
 
 
@@ -1303,6 +1478,18 @@ class Studio(App):
     Select, Switch { background: #06120b; }
     #form { width: 52; padding: 0 2 0 1; }
     #newinfo { width: 1fr; border: round #1c7a42; background: #08160d; padding: 0 1; margin: 0 1 0 2; }
+    #blindpanel { width: 1fr; border: round #2fae5f; background: #08160d; padding: 0 1; margin: 0 1 0 2; display: none; }
+    #blindpanel.-active { display: block; }
+    #blindtitle { color: #6dffab; text-style: bold; height: 1; margin: 1 0 0 0; }
+    #blindsub { color: #1f9a52; height: auto; margin: 0 0 1 0; }
+    #blindvarrow { height: 3; }
+    #blindvarrow .lbl { width: 15; }
+    .blindab { height: auto; }
+    .blindab .lbl { width: 15; }
+    #blindmsg { color: #ffcf5c; height: auto; margin: 1 0 0 0; }
+    #blindbtns { height: 3; margin-top: 1; }
+    #blindbtns Button { margin-right: 2; }
+    #blind_run { background: #134a2a; color: #9dffce; text-style: bold; }
     #runest { padding: 1 0 0 0; }
     Button { border: tall #1c7a42; background: #0a1c10; color: #7dffb8; }
     Button:hover { background: #134a2a; }
@@ -1339,7 +1526,9 @@ class Studio(App):
     BINDINGS = [("ctrl+c", "quit", "Quit"), ("t", "toggle_term", "Terminal"),
                 ("d", "toggle_dirraw", "Dir raw"),
                 ("s", "suspend", "Suspend"), ("r", "resume", "Resume"),
-                ("ctrl+p", "cycle_preview", "Preview")]
+                ("ctrl+p", "cycle_preview", "Preview"),
+                ("ctrl+k", "pick_theme", "Theme"),
+                Binding("ctrl+enter", "form_queue", "Queue run", priority=True)]
 
     SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
@@ -1384,11 +1573,22 @@ class Studio(App):
                         yield Static("▌ QUALITY", classes="sec")
                         yield field("BACKEND", Select([("LTX-2B (fast)", "ltx"), ("Wan-VACE-1.3B (nicer, slower)", "wan"), ("Wan turbo (4-step distill)", "wan-turbo")], value="ltx", id="backend", allow_blank=False))
                         yield field("RES", Select([(k, k) for k in RES], value="704 x 480  balanced", id="res", allow_blank=False))
+                        yield Static("▌ GPU", classes="sec")
+                        yield field("RESERVE (GB)", Select([("0.5 GB", "0.5"), ("1.0 GB (default)", "1.0"),
+                                                             ("1.5 GB", "1.5"), ("2.0 GB", "2.0")],
+                                                            value="1.0", id="vram_reserve", allow_blank=False), "vram_reserve")
+                        yield Static("▌ ADVANCED", classes="sec")
+                        yield field("GUIDANCE RESCALE", Select([("off", "off"), ("0.5", "0.5"), ("0.7", "0.7")],
+                                                               value="off", id="cfg_rescale", allow_blank=False), "cfg_rescale")
+                        yield field("GUIDANCE SCHEDULE", Select([("off", "off"), ("on (0.0:0.5)", "0.0:0.5")],
+                                                                value="off", id="cfg_interval", allow_blank=False), "cfg_interval")
+                        yield field("IDENTITY ANCHOR", Select([("off", "off"), ("on (Wan only)", "on")],
+                                                              value="off", id="wan_ref_anchor", allow_blank=False), "wan_ref_anchor")
                         yield field("LENGTH s", Input(value="4", id="seconds"))
                         yield field("STEPS", Input(value="40", id="steps"))
                         yield field("GUIDANCE", Input(value="3.0", id="cfg"))
                         yield field("NEG", TextArea(NEG, id="n_prompt", soft_wrap=True, tab_behavior="focus", classes="ta"))
-                        yield field("SEED", Input(value="0", id="seed"))
+                        yield field("SEED", Input(value="0", id="seed", placeholder="leave blank for random"))
                         yield field("FPS", Input(value="24", id="fps"))
                         yield Static("▌ OUTPUT", classes="sec")
                         yield field("NAME", Input(placeholder="optional — file name (else job_HHMMSS)", id="name"))
@@ -1396,7 +1596,24 @@ class Studio(App):
                         yield Button("✎ CONSULT THE DIRECTOR", id="consultbtn")
                         yield Button("⌨ CHAT WITH THE MODEL", id="chatbtn")
                         yield Button("▶ QUEUE RUN", id="queuebtn")
+                        _bab = Button("⇄ BLIND A/B", id="blindabbtn")
+                        _bab.tooltip = plain_help("blind_ab")
+                        yield _bab
                     yield Static(INFO, id="newinfo")
+                    with Vertical(id="blindpanel"):
+                        yield Static("⇄  BLIND A/B RUN", id="blindtitle")
+                        yield Static("Two runs from the CURRENT form, identical except ONE field — shared "
+                                     "seed, randomized + blind until ⚡ REVEAL. Pick a field, set A and B.",
+                                     id="blindsub")
+                        with Horizontal(id="blindvarrow", classes="row"):
+                            yield Label("Field to vary", classes="lbl")
+                            yield Select(self.BLIND_FIELD_OPTIONS, id="blind_var",
+                                         prompt="pick a field…", allow_blank=True)
+                        yield Vertical(id="blindclones")
+                        yield Static("", id="blindmsg")
+                        with Horizontal(id="blindbtns"):
+                            yield Button("▶ RUN BLIND A/B", id="blind_run")
+                            yield Button("✕ CANCEL", id="blind_cancel")
             with TabPane("≡ QUEUE", id="tab-queue"):
                 yield DataTable(id="qtable", cursor_type="row")
                 with Horizontal(classes="actions"):
@@ -1440,6 +1657,9 @@ class Studio(App):
                     yield Button("» INSPECT", id="inspectbtn")
                     yield Button("⏱ TIMING", id="timingbtn")
                     yield Button("» TERMINAL", id="arctermbtn")
+                    _rvl = Button("⚡ REVEAL", id="revealbtn")
+                    _rvl.tooltip = plain_help("blind_ab")
+                    yield _rvl
                 with Horizontal(classes="actions"):
                     yield Button("⧉ CLONE", id="clonebtn")
                     yield Button("⟲ RE-ROLL", id="rerollbtn")
@@ -1458,7 +1678,8 @@ class Studio(App):
         yield Footer()
 
     def on_mount(self):
-        self.register_theme(PIPBOY)
+        for t in EXTRA_THEMES:
+            self.register_theme(t)
         self.theme = "pipboy"
         self.query_one("#qtable", DataTable).add_columns("id", "title", "mode", "status")
         self.query_one("#atable", DataTable).add_columns("id", "title", "status", "started", "finished", "gen", "dur")
@@ -1471,6 +1692,15 @@ class Studio(App):
         self.query_one("#pacestrip").border_title = "« PACE »"
         self.query_one("#steerstrip").border_title = "« STEERING »"
         self.query_one("#phasestrip").border_title = "« PHASES »"
+        # T14: load the persisted VRAM reserve (default 1.0 GB) into the form + the job manager
+        try:
+            reserve = float(load_studio_config().get("vram_reserve_gb", 1.0))
+            opts = (0.5, 1.0, 1.5, 2.0)
+            reserve = min(opts, key=lambda o: abs(o - reserve))   # snap to the nearest Select option
+            self.query_one("#vram_reserve", Select).value = str(reserve)
+            self.mgr.vram_reserve_gb = reserve
+        except Exception:
+            pass
         self.set_interval(0.5, self.tick)
         self.tick()
         self.update_est()
@@ -1506,7 +1736,13 @@ class Studio(App):
     # restarts the WHOLE WSL VM after ~30 calls — even with NO CUDA running at all. The live VRAM%
     # meter that used it is gone; tick() now shows working/idle from our own job state instead.
 
-    def v(self, wid):
+    def v(self, wid, over=None):
+        # over: an optional field-id -> value dict (the blind-pair SNAPSHOT). When it carries this
+        # field, read it from the dict instead of the live widget -> build()/​_plan() can construct a
+        # variant WITHOUT mutating (and thus without firing on_select_changed/_sync_cfg_default on) the
+        # shared form. Falls back to the live widget for any key the snapshot omits.
+        if over is not None and wid in over and over[wid] is not None:
+            return over[wid]
         w = self.query_one(f"#{wid}")
         return w.text if isinstance(w, TextArea) else w.value
 
@@ -1520,19 +1756,36 @@ class Studio(App):
         self.update_est()
 
     def on_select_changed(self, event):
-        if getattr(event.select, "id", None) == "backend":   # ONLY a backend change may retune cfg/steps;
+        sid = getattr(event.select, "id", None)
+        if sid == "blind_var":   # inline BLIND A/B builder: (re)mount the A/B clones for the chosen field
+            val = event.value
+            self._blind_render_clones(None if val in (None, Select.BLANK) else val)
+            self.query_one("#blindmsg", Static).update("")
+            return
+        if sid == "backend":   # ONLY a backend change may retune cfg/steps;
             self._sync_cfg_default()                         # RES/MODE/etc must never clobber tuned dials
+        elif sid == "vram_reserve":   # T14: persist immediately + apply to the NEXT run this manager launches
+            try:
+                reserve = float(event.select.value)
+                self.mgr.vram_reserve_gb = reserve
+                save_studio_config({**load_studio_config(), "vram_reserve_gb": reserve})
+            except Exception:
+                pass
         self.update_est()
 
     def _sync_cfg_default(self):
         """Retarget GUIDANCE to the selected backend's sweet spot (LTX ~3.0 / Wan ~5.0 / Wan-turbo 1.0)
         when BACKEND changes, but ONLY if it is still on a known default -> a cfg you tuned is never clobbered.
-        Wan-turbo is a CFG-distilled few-step LoRA: it REQUIRES cfg 1.0, so also default STEPS down to 6."""
+        Wan-turbo is a CFG-distilled few-step LoRA: it REQUIRES cfg 1.0, so also default STEPS down to 6.
+        T7: #cfg/#steps are blurred BEFORE the assignment -- if the field has focus, Input's own focus/
+        validation handling can otherwise re-assert the OLD value over the one we just set here."""
         bk = self.v("backend") or "ltx"
         want = {"ltx": "3.0", "wan": "5.0", "wan-turbo": "1.0"}.get(bk, "3.0")
         try:
             cfg_in = self.query_one("#cfg", Input)
             if (cfg_in.value or "").strip() in ("", "1", "3", "5", "1.0", "3.0", "5.0"):
+                if cfg_in.has_focus:
+                    cfg_in.blur()
                 cfg_in.value = want
         except Exception:
             pass
@@ -1540,9 +1793,12 @@ class Studio(App):
             try:
                 steps_w = self.query_one("#steps")
                 if str(getattr(steps_w, "value", "")).strip() in ("", "20", "30", "40", "50"):
+                    if steps_w.has_focus:
+                        steps_w.blur()
                     steps_w.value = "6"
             except Exception:
                 pass
+        self.call_after_refresh(self.update_est)   # land after focus/value settle, so the ETA reflects the new default
 
     def on_switch_changed(self, event):
         self.update_est()
@@ -1652,10 +1908,13 @@ class Studio(App):
             f"  ▌ QUEUED {q}    ▶ {st}    ✓ DONE {d}    ▽ SUSP {s}     │     {self._gpu_str}")
         self.query_one("#statusmeter", Static).update(self._meter())
         # queue + archive tables — rebuilt only when content changes (cursor stays put; no rubber-band)
-        qrows = [(j.id, j.id, (j.title or j.params.get("prompt", ""))[:34], j.kind, "queued")
+        def _qkind(j):
+            g, lbl = _run_kind(j)
+            return f"{g} {lbl}"
+        qrows = [(j.id, j.id, (j.title or j.params.get("prompt", ""))[:34], _qkind(j), "[#6dffab]QUEUED[/#6dffab]")
                  for j in m.queued()]
-        qrows += [(j.id, j.id, (j.title or j.params.get("prompt", ""))[:34], j.kind,
-                   f"SUSPENDED @ shot {j.seg}/{j.nseg}") for j in m.suspended()]
+        qrows += [(j.id, j.id, (j.title or j.params.get("prompt", ""))[:34], _qkind(j),
+                   f"[#ffcf5c]SUSPENDED[/#ffcf5c] @ shot {j.seg}/{j.nseg}") for j in m.suspended()]
         _dt = lambda ts: time.strftime("%m-%d %H:%M", time.localtime(ts)) if ts else "—"
         arows = [(j.id, j.id, (("▲ " if j.kind == "enhance" and not (j.title or "").startswith("▲") else "") + (j.title or ""))[:30], j.status, _dt(j.started), _dt(j.finished), fmt(j.elapsed()), _vidlen(j)) for j in m.archived()]
         self._sync_table("#qtable", qrows, "_qsig")
@@ -1665,6 +1924,11 @@ class Studio(App):
         hdr = self.query_one("#livehdr", Static)
         over = self.query_one("#overbar", ProgressBar)
         live = self.query_one("#livelog", RichLog)
+        for bid in ("pausebtn", "resumebtn", "suspendbtn", "cancelbtn"):
+            try:
+                self.query_one(f"#{bid}", Button).disabled = job is None
+            except Exception:
+                pass
         if job is None:
             hdr.update("[dim]no active run — queue one in NEW RUN[/dim]")
             self.query_one("#livephase", Static).update("[dim]Nothing is generating right now.[/dim]")
@@ -1681,7 +1945,8 @@ class Studio(App):
                 self._preview_id = None
             return
         tag = "‖ PAUSED" if m.paused else "▶ RUNNING"
-        hdr.update(f"[b]{tag}[/b]   {(job.title or job.params.get('prompt', ''))[:48]}")
+        kglyph, klabel = _run_kind(job)
+        hdr.update(f"[b]{tag}[/b]   [#9dffce]{kglyph} {klabel}[/#9dffce]   {(job.title or job.params.get('prompt', ''))[:48]}")
         loading = job.is_loading() if hasattr(job, "is_loading") else False
         if loading:
             over.update(total=max(1, getattr(job, "load_total", 0) or 1),
@@ -1695,14 +1960,17 @@ class Studio(App):
         self.query_one("#livephase", Static).update(self._phase(job, m.paused))
         now_painting = job.director or job.params.get("prompt", "")
         self.query_one("#director", Static).update(
-            ("[dim]this shot →[/dim] " + now_painting) if now_painting else "")
+            ("[dim]this shot →[/dim] " + now_painting) if now_painting
+            else ("[dim]—[/dim]" if job.kind != "director" else ""))
         # live frame preview + director's notes (both reset on job change)
         pv = self.query_one("#preview", Static)
         notes = self.query_one("#dirnotes", RichLog)
         if job.id != self._preview_id:
             self._preview_id, self._preview_mtime, self._notes_n = job.id, 0.0, 0
-            pv.update(Text())
+            pv.update("[dim]waiting for first frame…[/dim]")   # T12: placeholder until the first preview lands
             notes.clear()
+            if job.kind != "director":     # T12: non-director runs never populate director's-notes -- say so
+                notes.write("[dim]This run uses no director steering.[/dim]")
         ppath = getattr(job, "preview", None)
         if ppath and os.path.exists(ppath):
             mt = os.path.getmtime(ppath)
@@ -1820,10 +2088,12 @@ class Studio(App):
     # ---------- planning: cap per-segment memory, auto-chain for length ----------
     SAFE_PX = 20_000_000  # frames*W*H budget per segment that fits 8GB (704x480 -> ~59 frames)
 
-    def _plan(self):
-        """(W,H,fps,total_frames,seg_frames,nseg,chain) - length auto-chains; resolution is the hard cap."""
-        W, H = RES[self.v("res")]
-        wan = (self.v("backend") or "ltx") in ("wan", "wan-turbo")   # Wan/turbo render at native 16fps on a //4 grid
+    def _plan(self, over=None):
+        """(W,H,fps,total_frames,seg_frames,nseg,chain) - length auto-chains; resolution is the hard cap.
+        over: optional snapshot dict (blind-pair build) read instead of the live form via v()."""
+        V = lambda wid: self.v(wid, over)
+        W, H = RES[V("res")]
+        wan = (V("backend") or "ltx") in ("wan", "wan-turbo")   # Wan/turbo render at native 16fps on a //4 grid
         if wan:
             # mirror WanBackend.dims(): Wan upscales the short side to >=480 (//32). Plan with the REAL
             # render dims or the SAFE_PX segment budget + estimate are computed ~2x too generous at 512x320.
@@ -1832,13 +2102,13 @@ class Studio(App):
                 s = 480.0 / short
                 W = max(32, round(W * s / 32) * 32)
                 H = max(32, round(H * s / 32) * 32)
-        fps = 16 if wan else max(1, int(float(self.v("fps"))))
+        fps = 16 if wan else max(1, int(float(V("fps"))))
         q = (lambda n: ((max(1, n) - 1) // 4) * 4 + 1) if wan else (lambda n: (max(1, n) // 8) * 8 + 1)
         r = round if wan else int          # match each backend's to_frames() rounding EXACTLY, or the
-        total_frames = max(9, q(r(float(self.v("seconds")) * fps)))   # backend plans one more segment than
+        total_frames = max(9, q(r(float(V("seconds")) * fps)))   # backend plans one more segment than
         safe = max(9, q(int(self.SAFE_PX / (W * H))))       # the studio -> phantom-seg suspend zombie
-        if self.v("mode") == "director":
-            seg_frames = min(q(r(float(self.v("seg")) * fps)), safe)
+        if V("mode") == "director":
+            seg_frames = min(q(r(float(V("seg")) * fps)), safe)
         else:
             seg_frames = min(total_frames, safe)
         seg_frames = max(9, seg_frames)
@@ -1847,63 +2117,97 @@ class Studio(App):
         nseg = (1 + -(-(total_frames - seg_frames) // max(1, seg_frames - overlap))) if chain else 1
         return W, H, fps, total_frames, seg_frames, nseg, chain
 
-    def build(self):
-        W, H, fps, total_frames, seg_frames, nseg, chain = self._plan()
+    def build(self, over=None):
+        # over: optional field-id -> value SNAPSHOT (blind-pair build). When present, every form read
+        # goes through it instead of the live widgets, so a variant is constructed without mutating the
+        # shared form (no on_select_changed/_sync_cfg_default clobber of cfg/steps). over may also carry
+        # the virtual key "_ltx_variant" ("distilled"/"none") -> appended as --ltx_variant on BOTH the
+        # director.py and run_ltx.py paths so a checkpoint A/B is real at any clip length.
+        V = lambda wid: self.v(wid, over)
+        W, H, fps, total_frames, seg_frames, nseg, chain = self._plan(over)
         seg_sec = round(seg_frames / fps, 2)
-        slug = slugify(self.v("name")) or ("job_" + time.strftime("%H%M%S"))
+        slug = slugify(V("name")) or ("job_" + time.strftime("%H%M%S"))
         if os.path.exists(os.path.join(REPO, f"outputs/{slug}.mp4")):   # collision-safe
             slug = f"{slug}_{time.strftime('%H%M%S')}"
             base, n = slug, 2
             while os.path.exists(os.path.join(REPO, f"outputs/{slug}.mp4")):
                 slug = f"{base}-{n}"; n += 1
         out, fdir = f"outputs/{slug}.mp4", f"outputs/{slug}_frames"
-        prompt = (self.v("prompt") or "").strip()
-        neg = (self.v("n_prompt") or "").strip() or NEG
-        director = self.v("mode") == "director"
-        backend = self.v("backend") or "ltx"
-        steps_s = self.v("steps")
+        prompt = (V("prompt") or "").strip()
+        neg = (V("n_prompt") or "").strip() or NEG
+        director = V("mode") == "director"
+        backend = V("backend") or "ltx"
+        steps_s = V("steps")
         if backend == "wan-turbo":
             try:                                             # the distill runs few-step; clamp at the SOURCE so
                 steps_s = str(min(int(float(steps_s)), 8))   # [[STEP]] totals / previews / ETA all stay honest
             except Exception:
                 steps_s = "6"
-        common = ["--steps", steps_s, "--cfg", self.v("cfg"), "--seed", self.v("seed"),
+        common = ["--steps", steps_s, "--cfg", V("cfg"), "--seed", V("seed"),
                   "--width", str(W), "--height", str(H), "--fps", str(fps), "--out", out, "--frames_dir", fdir]
-        img = (self.v("image") or "").strip()
+        # Q4/Q5 opt-in advanced levers. Every one DEFAULTS OFF -> when untouched, `common` is byte-identical
+        # to before. Backend scope mirrors director.py's own no-op gating; we also skip appending on the
+        # backends where the flag is a hard no-op so the recorded command stays honest.
+        try:
+            _cfg_val = float((V("cfg") or "1").strip() or "1")
+        except Exception:
+            _cfg_val = 1.0
+        cfg_rescale = V("cfg_rescale") or "off"
+        cfg_interval = V("cfg_interval") or "off"
+        wan_ref_anchor = V("wan_ref_anchor") or "off"
+        if cfg_rescale != "off" and _cfg_val > 1.0 and backend != "wan-turbo":
+            common += ["--cfg_rescale", cfg_rescale]           # LTX + Wan; no-op on wan-turbo / cfg<=1
+        if cfg_interval != "off" and _cfg_val > 1.0 and backend != "wan-turbo":
+            common += ["--cfg_interval", cfg_interval]         # LTX + Wan; no-op on wan-turbo / cfg<=1
+        if wan_ref_anchor == "on" and backend in ("wan", "wan-turbo"):
+            common += ["--wan_ref_anchor"]                     # Wan / Wan-turbo only
+        # checkpoint variant (blind-pair only): the snapshot carries "_ltx_variant". distilled = the
+        # 0.9.8-distilled 2B transformer, LTX-backend only. Both director.py AND run_ltx.py now accept
+        # --ltx_variant, so a checkpoint A/B is real at ANY clip length (short single clip or chained).
+        ltx_variant = (over or {}).get("_ltx_variant") or "none"
+        want_distilled = (ltx_variant == "distilled" and backend == "ltx")
+        img = (V("image") or "").strip()
         if chain or director or backend in ("wan", "wan-turbo"):     # chained gen; Wan always routes through director.py
             cmd = [FP_PY, "director.py", "--prompt", prompt, "--n_prompt", neg,
-                   "--total", self.v("seconds"), "--seg", str(seg_sec),
-                   "--cond_strength", (self.v("cond_strength") or "1.0"), "--backend", backend] + common
+                   "--total", V("seconds"), "--seg", str(seg_sec),
+                   "--cond_strength", (V("cond_strength") or "1.0"), "--backend", backend] + common
             if backend == "ltx":
                 cmd += ["--latent_chain",                   # LTX-only (Wan has no latent-chain equivalent)
                         "--ltx_repo", LTX_REPO_DEFAULT]     # pin + record the 0.9.5 checkpoint (Q1 provenance)
-            anchors = (self.v("anchors") or "").strip()
+                if want_distilled:
+                    cmd += ["--ltx_variant", "distilled"]
+            anchors = (V("anchors") or "").strip()
             if anchors:                                     # style leash applies to ANY chained run, not just director
                 cmd += ["--anchors", anchors]
             if director:
-                cmd += ["--vlm", "--directive", (self.v("directive") or prompt),
-                        "--steadiness", self.v("steadiness")]
+                cmd += ["--vlm", "--directive", (V("directive") or prompt),
+                        "--steadiness", V("steadiness")]
             if img:
                 cmd += ["--image", img]
-            title = ((self.v("directive") if director else "") or prompt)[:40]
+            title = ((V("directive") if director else "") or prompt)[:40]
         else:                                               # short enough to fit one clip
-            cmd = ([FP_PY, "run_ltx.py", "--prompt", prompt, "--n_prompt", neg, "--seconds", self.v("seconds")]
+            cmd = ([FP_PY, "run_ltx.py", "--prompt", prompt, "--n_prompt", neg, "--seconds", V("seconds")]
                    + common + ["--ltx_repo", LTX_REPO_DEFAULT])   # single clips are always LTX; pin 0.9.5 (Q1)
+            if want_distilled:                              # run_ltx.py mirrors director.py's --ltx_variant handling
+                cmd += ["--ltx_variant", "distilled"]
             if img:
                 cmd += ["--image", img]
             title = prompt[:40]
         kind = "director" if director else ("chained" if chain else "single")
         params = dict(
-            mode=kind, prompt=prompt, steps=steps_s, cfg=self.v("cfg"), seed=self.v("seed"),
-            fps=str(fps), seconds=self.v("seconds"), seg_sec=(seg_sec if (chain or director) else ""),
-            res=self.v("res"), width=W, height=H, nseg=nseg, seg_frames=seg_frames, total_frames=total_frames,
-            directive=(self.v("directive") if director else ""), anchors=(self.v("anchors") or ""),
-            steadiness=(self.v("steadiness") if director else ""),
+            mode=kind, prompt=prompt, steps=steps_s, cfg=V("cfg"), seed=V("seed"),
+            fps=str(fps), seconds=V("seconds"), seg_sec=(seg_sec if (chain or director) else ""),
+            res=V("res"), width=W, height=H, nseg=nseg, seg_frames=seg_frames, total_frames=total_frames,
+            directive=(V("directive") if director else ""), anchors=(V("anchors") or ""),
+            steadiness=(V("steadiness") if director else ""),
             image=img, out=out, frames_dir=fdir, name=slug, n_prompt=neg, backend=backend,
-            cond_strength=(self.v("cond_strength") or "1.0"),
+            cond_strength=(V("cond_strength") or "1.0"),
+            cfg_rescale=cfg_rescale, cfg_interval=cfg_interval, wan_ref_anchor=wan_ref_anchor,
         )
         if backend == "ltx":                             # checkpoint provenance (Q1): every ltx run records its repo
             params["ltx_repo"] = LTX_REPO_DEFAULT
+        if want_distilled:                               # record the variant intent honestly on the job
+            params["ltx_variant"] = "distilled"
         return title, kind, cmd, params
 
     def _apply_config(self, c):
@@ -1911,7 +2215,8 @@ class Studio(App):
         if not c:
             return
         for wid in ("name", "prompt", "directive", "anchors", "image", "seconds", "seg",
-                    "steps", "cfg", "seed", "fps", "n_prompt", "backend", "cond_strength"):
+                    "steps", "cfg", "seed", "fps", "n_prompt", "backend", "cond_strength",
+                    "cfg_rescale", "cfg_interval", "wan_ref_anchor"):
             if c.get(wid) is not None:
                 try:
                     v = str(c[wid])
@@ -1954,6 +2259,8 @@ class Studio(App):
             "steps": p.get("steps"), "cfg": p.get("cfg"), "seed": p.get("seed"), "fps": p.get("fps"),
             "n_prompt": p.get("n_prompt"), "res": p.get("res"),
             "backend": p.get("backend"), "cond_strength": p.get("cond_strength"),
+            "cfg_rescale": p.get("cfg_rescale"), "cfg_interval": p.get("cfg_interval"),
+            "wan_ref_anchor": p.get("wan_ref_anchor"),
             # NAME intentionally omitted -> build() auto-mints job_HHMMSS
         }
         seg = p.get("seg_sec")                     # form field id is 'seg'; param key is 'seg_sec'
@@ -1975,11 +2282,16 @@ class Studio(App):
             director = self.v("mode") == "director"
             # Calibrated against real 8GB runs (sequential offload, 7B per-seam director).
             # LTX: load ~150s once; per shot ~steps*1.5*px gen + ~70s warmup + ~20s decode.
-            # Wan-VACE is much heavier per step + a multi-minute decode (and runs at 16fps internally);
+            # Wan-VACE is much heavier per step + a slower per-shot warmup than LTX (and runs at
+            # 16fps internally, already reflected in W/H/seg_frames via _plan()'s real render dims);
             # the per-seam director is now the A1 resident CPU daemon (~90s/seam: no reload, no GPU
             # eviction; was ~300 for the per-seam GPU reload). Backend-independent.
+            # [HIGH] refit 2026-07-04 against runs/*.json phase_secs from 5 completed Wan renders
+            # (704x480/768x512, 25-45 steps, 1-4 shots): the OLD constants under-read gen by ~1.3-1.6x
+            # and warm by ~2.4-4.7x, while over-reading decode by ~3x. New fit: COEF 4.8, WARM 220s/shot,
+            # DECODE 38 (least-squares against actual phase_secs; one 21646s decode outlier excluded).
             if (self.v("backend") or "ltx") in ("wan", "wan-turbo"):
-                LOAD, COEF, WARM, DECODE, SEAM, SEG_REF = 40, 3.5, 60, 120, 90, 29
+                LOAD, COEF, WARM, DECODE, SEAM, SEG_REF = 40, 4.8, 220, 38, 90, 29
             else:
                 LOAD, COEF, WARM, DECODE, SEAM, SEG_REF = 150, 1.5, 70, 20, 90, 49
             ff = seg_frames / SEG_REF              # per-shot gen + decode scale with frame count -> fps/seg now move the ETA
@@ -2025,14 +2337,15 @@ class Studio(App):
                 "[#ffcf5c]Couldn't open a player. Paste this into Explorer:[/#ffcf5c]\n  "
                 + self._winpath(abs_out))
 
-    def _queue_current_run(self):
+    def _queue_current_run(self, over=None):
         """Build the NEW RUN form into a job and enqueue it. Shared by QUEUE RUN + RE-ROLL.
+        over: optional field-id snapshot (blind-pair) built WITHOUT mutating the live form.
         Returns the queued Job, or None if blocked (empty prompt / GPU budget)."""
-        if not (self.v("prompt") or "").strip():
+        if not (self.v("prompt", over) or "").strip():
             self.query_one("#newinfo", Static).update("[#ffcf5c]Enter a PROMPT first.[/#ffcf5c]")
             return None
         try:
-            title, kind, cmd, params = self.build()
+            title, kind, cmd, params = self.build(over)
         except Exception as ex:   # bad numbers must never crash the app (a crash kills a live render)
             self.query_one("#newinfo", Static).update(
                 f"[#ff6d6d]Can't plan this run — check LENGTH / FPS / SEGMENT / STEPS are numbers ({type(ex).__name__}).[/#ff6d6d]")
@@ -2053,10 +2366,365 @@ class Studio(App):
         self.query_one("#newinfo", Static).update(f"[#9dffce]Queued {j.id}[/#9dffce]\n{title}")
         return j
 
+    # ---------- ⇄ BLIND A/B (fresh, blind, randomized variable-isolation pair) ----------
+    # Every run-affecting field is varyable. 'checkpoint' is virtual (ltx_variant none<->distilled, LTX-only).
+    BLIND_VARS = ("prompt", "n_prompt", "seconds", "steps", "cfg", "seed", "fps", "res",
+                  "backend", "seg", "cond_strength", "steadiness", "checkpoint",
+                  "cfg_rescale", "cfg_interval", "wan_ref_anchor")
+
+    # (var, friendly label) for the 'Field to vary' Select — order = the builder's dropdown order.
+    BLIND_FIELD_OPTIONS = [
+        ("prompt", "prompt"), ("negative", "n_prompt"), ("length (seconds)", "seconds"),
+        ("steps", "steps"), ("guidance (cfg)", "cfg"), ("seed", "seed"), ("fps", "fps"),
+        ("resolution", "res"), ("backend", "backend"), ("segment (seg)", "seg"),
+        ("cond_strength", "cond_strength"), ("steadiness", "steadiness"),
+        ("checkpoint", "checkpoint"), ("guidance rescale", "cfg_rescale"),
+        ("guidance schedule", "cfg_interval"), ("identity anchor", "wan_ref_anchor"),
+    ]
+
+    def _blind_clone_widget(self, var, wid, prefill):
+        """Build a FRESH widget of the SAME class + options/validation as the form's field for `var`,
+        with id `wid`, pre-set to `prefill`. Select fields clone their exact option list; numeric/text
+        fields become Input; prompt/negative become TextArea. checkpoint -> a 0.9.5/0.9.8 Select."""
+        SELECT_OPTS = {
+            "res": [(k, k) for k in RES],
+            "backend": [("LTX-2B (fast)", "ltx"), ("Wan-VACE-1.3B (nicer, slower)", "wan"),
+                        ("Wan turbo (4-step distill)", "wan-turbo")],
+            "steadiness": [("Hold (faithful)", "hold"), ("Balanced", "balanced"),
+                           ("Evolve (journey)", "evolve")],
+            "cfg_rescale": [("off", "off"), ("0.5", "0.5"), ("0.7", "0.7")],
+            "cfg_interval": [("off", "off"), ("on (0.0:0.5)", "0.0:0.5")],
+            "wan_ref_anchor": [("off", "off"), ("on (Wan only)", "on")],
+            "checkpoint": [("0.9.5 (base)", "none"), ("0.9.8-distilled", "distilled")],
+        }
+        if var in ("prompt", "n_prompt"):
+            return TextArea(str(prefill or ""), id=wid, soft_wrap=True, tab_behavior="focus", classes="ta")
+        if var in SELECT_OPTS:
+            opts = SELECT_OPTS[var]
+            vals = [v for _, v in opts]
+            val = prefill if prefill in vals else vals[0]
+            return Select(opts, id=wid, value=val, allow_blank=False)
+        return Input(value=str(prefill if prefill is not None else ""), id=wid)
+
+    def _blind_render_clones(self, var):
+        """Mount/replace the two A/B clone widgets for the chosen field inside #blindclones.
+        A pre-fills from the current form value; B seeds a sensible different default."""
+        box = self.query_one("#blindclones", Vertical)
+        for child in list(box.children):
+            child.remove()
+        if not var:
+            return
+        a_default = self._blind_form_default(var)
+        b_default = self._blind_b_default(var, a_default)
+        arow = Horizontal(Label("A", classes="lbl"),
+                          self._blind_clone_widget(var, "blind_a", a_default), classes="row blindab")
+        brow = Horizontal(Label("B", classes="lbl"),
+                          self._blind_clone_widget(var, "blind_b", b_default), classes="row blindab")
+        box.mount(arow)
+        box.mount(brow)
+
+    def _blind_b_default(self, var, a_default):
+        """A sensible starting B value that differs from A (user overrides freely)."""
+        if var == "checkpoint":
+            return "none" if str(a_default) != "none" else "distilled"
+        if var == "backend":
+            return "wan" if str(a_default) != "wan" else "ltx"
+        if var == "steadiness":
+            return "balanced" if str(a_default) != "balanced" else "evolve"
+        if var in ("cfg_rescale", "cfg_interval", "wan_ref_anchor"):
+            return "off"
+        if var == "res":
+            keys = list(RES.keys())
+            for k in keys:
+                if k != a_default:
+                    return k
+            return keys[0]
+        return ""
+
+    def _blind_read_clone(self, wid):
+        """Read a clone widget's current value (TextArea.text / Input.value / Select.value)."""
+        w = self.query_one(f"#{wid}")
+        val = w.text if isinstance(w, TextArea) else w.value
+        return "" if val in (None, Select.BLANK) else str(val)
+
+    def _current_form_config(self):
+        """Snapshot the NEW RUN form as a field-id-keyed config dict (same shape _apply_config consumes),
+        so a blind pair can be rebuilt twice with only ONE field swapped. NAME dropped -> auto-timestamps."""
+        c = {"mode": ("director" if self.v("mode") == "director" else "single")}
+        for wid in ("prompt", "directive", "anchors", "image", "seconds", "seg", "steps", "cfg",
+                    "seed", "fps", "n_prompt", "backend", "cond_strength", "cfg_rescale",
+                    "cfg_interval", "wan_ref_anchor", "steadiness"):
+            try:
+                c[wid] = self.v(wid)
+            except Exception:
+                pass
+        try:
+            c["res"] = self.v("res")
+        except Exception:
+            pass
+        return c
+
+    def _blind_form_default(self, var):
+        """The A-value default for a blind variable = its CURRENT form value (checkpoint -> 'none')."""
+        if var == "checkpoint":
+            return "none"
+        try:
+            return str(self.v("seg" if var == "seg" else var))
+        except Exception:
+            return ""
+
+    def _blind_apply_var(self, cfg, var, value):
+        """Set ONE blind variable on a field-id config dict. checkpoint is virtual (handled post-build)."""
+        if var == "checkpoint":
+            cfg["_ltx_variant"] = "distilled" if str(value).strip().lower() in ("distilled", "0.9.8", "b") else "none"
+        else:
+            cfg[var] = value
+
+    def _validate_blind_value(self, var, value):
+        """Reject a typo before it becomes a silently-coerced run. Returns an error string or None."""
+        if var in ("steps", "cfg", "seg", "cond_strength", "fps", "seconds"):
+            try:
+                float(value)
+            except (TypeError, ValueError):
+                return f"{var} must be a number (got '{value}')."
+        elif var == "seed":
+            if not str(value).strip().lstrip("-").isdigit():
+                return f"seed must be an integer (got '{value}')."
+        elif var == "res":
+            if value not in RES:
+                return f"res must be one of: {', '.join(RES.keys())} (got '{value}')."
+        elif var in ("prompt", "n_prompt"):
+            if not str(value).strip():
+                return f"{var} must not be empty."
+        elif var == "backend":
+            if value.lower().replace(" ", "-") not in ("ltx", "wan", "wan-turbo"):
+                return f"backend must be one of: ltx, wan, wan-turbo (got '{value}')."
+        elif var == "steadiness":
+            if value.lower() not in ("hold", "balanced", "evolve"):
+                return f"steadiness must be one of: hold, balanced, evolve (got '{value}')."
+        elif var in ("cfg_rescale", "cfg_interval"):
+            ok = ("off", "on") if var == "cfg_interval" else None   # cfg_rescale accepts off + a numeric strength
+            if var == "cfg_interval":
+                if value.lower() not in ("off", "on", "0.0:0.5"):
+                    return f"cfg_interval must be off or on/0.0:0.5 (got '{value}')."
+            else:
+                if value.lower() != "off":
+                    try:
+                        float(value)
+                    except (TypeError, ValueError):
+                        return f"cfg_rescale must be off or a number (got '{value}')."
+        elif var == "wan_ref_anchor":
+            if value.lower() not in ("off", "on"):
+                return f"wan_ref_anchor must be off or on (got '{value}')."
+        elif var == "checkpoint":
+            if str(value).strip().lower() not in ("none", "distilled", "0.9.5", "0.9.8", "a", "b"):
+                return f"checkpoint must be none (0.9.5) or distilled (0.9.8) (got '{value}')."
+        return None
+
+    def _blind_variant_cfg(self, base_cfg, var, value, seed):
+        """The override SNAPSHOT dict for one variant (name auto, shared seed, one field swapped).
+        Pure/torch-free: no widget I/O, no side effects -- used both to queue and to self-check that
+        the two variants differ in exactly one field before anything is enqueued."""
+        cfg = dict(base_cfg)
+        cfg["name"] = ""
+        cfg["seed"] = str(seed)
+        cfg.pop("_ltx_variant", None)
+        self._blind_apply_var(cfg, var, value)
+        return cfg
+
+    def _queue_blind_variant(self, base_cfg, var, value, seed):
+        """Build the base-form SNAPSHOT with ONE variable = value + the shared seed, and queue it
+        WITHOUT mutating the live form widgets. Building from the snapshot dict (via build(over=...))
+        means no on_select_changed/_sync_cfg_default side-effect can fire and clobber cfg/steps, so the
+        two variants are guaranteed identical except the one varied field. The virtual `checkpoint`
+        variable rides as over["_ltx_variant"], appended as --ltx_variant on WHICHEVER engine runs
+        (director.py or run_ltx.py). Returns the Job (or None if blocked / refused)."""
+        cfg = self._blind_variant_cfg(base_cfg, var, value, seed)   # one field swapped, shared seed, no widget I/O
+        # REFUSE a false pairing: a checkpoint A/B is only real on the LTX backend (the distilled flag is
+        # LTX-only and silently ignored on wan/wan-turbo). Record nothing rather than a lie.
+        if cfg.get("_ltx_variant") == "distilled" and (cfg.get("backend") or "ltx") != "ltx":
+            self.query_one("#newinfo", Static).update(
+                "[#ff6d6d]checkpoint A/B needs backend=ltx (0.9.8-distilled is LTX-only) — "
+                "switch BACKEND to ltx, then retry.[/#ff6d6d]")
+            return None
+        return self._queue_current_run(over=cfg)          # same gated path as QUEUE RUN, dict-driven build
+
+    def _blind_msg(self, markup):
+        """Show a builder status line in the inline panel (falls back to #newinfo if not mounted)."""
+        try:
+            self.query_one("#blindmsg", Static).update(markup)
+        except Exception:
+            self.query_one("#newinfo", Static).update(markup)
+
+    def _run_blind(self, var, a_val, b_val):
+        """Queue a BLIND A/B pair from the CURRENT form, varying ONE field (a_val vs b_val). REUSED by
+        the inline builder. Shared seed + coin-flip labels + randomized enqueue order + one-field
+        isolation self-check; both variants built from the snapshot dict via build(over=...) so ONLY the
+        chosen field differs. Writes status to the builder message line. No modal, no widget mutation."""
+        if var not in self.BLIND_VARS:
+            self._blind_msg(f"[#ff6d6d]BLIND A/B needs a field in: {', '.join(self.BLIND_VARS)}.[/#ff6d6d]")
+            return
+        base_cfg = self._current_form_config()
+        # A base PROMPT is required unless the prompt itself is the field being varied (then the A/B
+        # clones supply it). n_prompt/others still need a real prompt to render anything.
+        if var != "prompt" and not (base_cfg.get("prompt") or "").strip():
+            self._blind_msg("[#ffcf5c]Enter a base PROMPT first — or set 'Field to vary' to prompt.[/#ffcf5c]")
+            return
+        a_val = (a_val if a_val is not None else "")
+        b_val = (b_val if b_val is not None else "")
+        if var not in ("prompt", "n_prompt"):
+            a_val, b_val = a_val.strip(), b_val.strip()
+        if not a_val:
+            a_val = self._blind_form_default(var)
+        if not str(b_val).strip():
+            self._blind_msg("[#ff6d6d]Enter a B value.[/#ff6d6d]")
+            return
+        for label, val in (("A", a_val), ("B", b_val)):
+            err = self._validate_blind_value(var, val)
+            if err:
+                self._blind_msg(f"[#ff6d6d]{label}: {err}[/#ff6d6d]")
+                return
+        if str(a_val).strip().lower() == str(b_val).strip().lower():
+            self._blind_msg("[#ff6d6d]A and B are the same value — nothing to isolate.[/#ff6d6d]")
+            return
+        # Pre-flight the checkpoint-needs-LTX refusal HERE so the message lands on the visible builder
+        # line (the same guard fires again inside _queue_blind_variant on #newinfo, but that panel is
+        # hidden while the builder is open).
+        if var == "checkpoint":
+            def _is_distilled(x):
+                return str(x).strip().lower() in ("distilled", "0.9.8", "b")
+            if (_is_distilled(a_val) or _is_distilled(b_val)) and (base_cfg.get("backend") or "ltx") != "ltx":
+                self._blind_msg("[#ff6d6d]checkpoint A/B needs backend=ltx (0.9.8-distilled is LTX-only) — "
+                                "switch BACKEND to ltx, then retry.[/#ff6d6d]")
+                return
+        # SINGLE shared seed: honor the form seed if set, else mint ONE concrete random seed for both.
+        s = (base_cfg.get("seed") or "").strip()
+        seed = s if (s and s.lstrip("-").isdigit()) else str(random.randint(1, 2**31 - 1))
+        # ISOLATION SELF-CHECK (torch-free): for a NON-cascading variable (not backend/checkpoint,
+        # which legitimately move a 2nd engine-mandatory field), the two variant snapshots MUST
+        # differ in exactly one key. Refuse to enqueue a pair that would secretly differ in more.
+        if var not in ("backend", "checkpoint"):
+            ca = self._blind_variant_cfg(base_cfg, var, a_val, seed)
+            cb = self._blind_variant_cfg(base_cfg, var, b_val, seed)
+            keys = set(ca) | set(cb)
+            diff = sorted(k for k in keys if ca.get(k) != cb.get(k))
+            if diff != [var]:
+                self._blind_msg(
+                    f"[#ff6d6d]BLIND A/B isolation check failed — variants differ in {diff}, "
+                    f"expected only ['{var}']. Not queued.[/#ff6d6d]")
+                return
+        # BLINDING via two independent coin-flips:
+        #   (1) which VALUE is labeled "A" vs "B"  -- so the label leaks nothing about the value
+        #   (2) the ORDER the two physical runs are enqueued -- so run order leaks nothing either
+        if random.random() < 0.5:                 # flip #1: assign the A/B labels to the values
+            label_value = {"A": a_val, "B": b_val}
+        else:
+            label_value = {"A": b_val, "B": a_val}
+        enqueue_labels = ["A", "B"]
+        random.shuffle(enqueue_labels)            # flip #2: randomize enqueue order
+        pair_id = time.strftime("blind-%y%m%d-%H%M%S") + f"-{random.randint(1000, 9999)}"
+        jobs = {}                                 # label ("A"/"B") -> Job
+        for lbl in enqueue_labels:
+            j = self._queue_blind_variant(base_cfg, var, label_value[lbl], seed)
+            if not j:                            # gate blocked (empty prompt / GPU budget / checkpoint refusal) -> abort
+                self._blind_msg(
+                    "[#ff6d6d]BLIND A/B aborted — a run was blocked (check GPU budget / prompt / backend).[/#ff6d6d]")
+                return
+            j.params["pair_id"] = pair_id
+            j.params["pair_variant"] = lbl
+            j.params["pair_blind"] = True
+            j.params["pair_varied_dial"] = var
+            j.params["pair_revealed"] = False
+            j.save()
+            jobs[lbl] = j
+        a_job, b_job = jobs.get("A"), jobs.get("B")
+        # BLIND STORAGE: the ONLY place the A/B <-> config truth lives in the clear.
+        try:
+            os.makedirs(os.path.join(REPO, "runs"), exist_ok=True)
+            with open(os.path.join(REPO, "runs", "pair_blinds.jsonl"), "a") as f:
+                f.write(json.dumps({
+                    "pair_id": pair_id,
+                    "a_job_id": a_job.id if a_job else None,
+                    "b_job_id": b_job.id if b_job else None,
+                    "varied": var,
+                    "a_value": label_value["A"],   # what logical label A actually ran
+                    "b_value": label_value["B"],   # what logical label B actually ran
+                    "seed": seed, "ts": time.time()}) + "\n")
+        except Exception:
+            pass
+        # done -> hide the builder, restore the info panel, report on #newinfo, jump to the queue.
+        self._close_blind_panel()
+        # wan-turbo is a mandatory cfg=1.0 / few-step distill: when a backend A/B pits it against
+        # ltx/wan, the engine forces cfg/steps for the turbo side, so that variant unavoidably
+        # differs in cfg+steps too (not a pure one-variable isolation). Warn, don't block.
+        _turbo_note = ""
+        if var == "backend" and any(
+                str(x).lower().replace(" ", "-") == "wan-turbo" for x in (a_val, b_val)):
+            _turbo_note = ("  [#ffcf5c]note: wan-turbo forces cfg=1.0 / steps≤8, so that side also "
+                           "differs in cfg+steps (engine-mandatory).[/#ffcf5c]")
+        self.query_one(TabbedContent).active = "tab-queue"
+        self.query_one("#newinfo", Static).update(
+            f"[#9dffce]Queued BLIND A/B pair {pair_id} — two runs, seed {seed}, varying "
+            f"'{var}' (blind). Rate with ⚖ RATE PAIR, then ⚡ REVEAL in ARCHIVE.[/#9dffce]"
+            + _turbo_note)
+
+    def _open_blind_panel(self):
+        """Show the inline builder in the right region, hide the plain info panel, reset its state."""
+        self.query_one("#newinfo", Static).display = False
+        panel = self.query_one("#blindpanel", Vertical)
+        panel.add_class("-active")
+        self.query_one("#blindmsg", Static).update("")
+        try:                                     # start with no field chosen -> no clones mounted
+            self.query_one("#blind_var", Select).value = Select.BLANK
+        except Exception:
+            pass
+        self._blind_render_clones(None)
+
+    def _close_blind_panel(self):
+        """Hide the inline builder and restore the normal info panel."""
+        try:
+            self.query_one("#blindpanel", Vertical).remove_class("-active")
+        except Exception:
+            pass
+        try:
+            self.query_one("#newinfo", Static).display = True
+        except Exception:
+            pass
+
     def on_button_pressed(self, e: Button.Pressed):
         b = e.button.id
+        if b and b.startswith("i_"):        # ⓘ tooltip buttons -> show the dial's help in the focus #newinfo panel
+            key = b[2:]
+            if key in HELP:
+                self.query_one("#newinfo", Static).update(HELP[key])
+            return
         if b == "queuebtn":
             self._queue_current_run()
+        elif b == "blindabbtn":
+            # TOGGLE the inline builder in the right region (no modal). Opening does NOT require a prompt
+            # — 'prompt' is itself a varyable field, so the base prompt may legitimately be empty here;
+            # the base-prompt requirement is enforced at RUN time in _run_blind only when var != prompt.
+            if self.query_one("#blindpanel", Vertical).has_class("-active"):
+                self._close_blind_panel()
+                return
+            self._open_blind_panel()
+        elif b == "blind_cancel":
+            self._close_blind_panel()
+        elif b == "blind_run":
+            try:
+                var = self.query_one("#blind_var", Select).value
+            except Exception:
+                var = Select.BLANK
+            if var in (None, Select.BLANK):
+                self._blind_msg("[#ff6d6d]Pick a field to vary first.[/#ff6d6d]")
+                return
+            try:
+                a_val = self._blind_read_clone("blind_a")
+                b_val = self._blind_read_clone("blind_b")
+            except Exception:
+                self._blind_msg("[#ff6d6d]Pick a field to vary first.[/#ff6d6d]")
+                return
+            self._run_blind(var, a_val, b_val)
         elif b == "consultbtn":
             if self.mgr.active() is not None:
                 self.query_one("#newinfo", Static).update(
@@ -2106,6 +2774,40 @@ class Studio(App):
             self.query_one("#inspectpanel").display = True
             self.query_one("#inspectlog").display = False
             self.query_one("#arctermbtn", Button).label = "» TERMINAL"
+
+        elif b == "revealbtn":
+            jid = self._selected("#atable")
+            if not jid:
+                return
+            job = self.mgr.jobs.get(jid)
+            if not job:
+                return
+            if not (job.params.get("pair_blind") and job.params.get("pair_id")):
+                self.query_one("#inspectinfo", Static).update(
+                    "[#ffcf5c]Selected run isn't a blind A/B pair — nothing to reveal.[/#ffcf5c]")
+                return
+            if job.params.get("pair_revealed"):
+                self.query_one("#inspectinfo", Static).update(
+                    "[#ffcf5c]This blind A/B pair is already revealed.[/#ffcf5c]")
+                return
+            pid = job.params.get("pair_id")
+            partners = [jj for jj in self.mgr.jobs.values() if jj.params.get("pair_id") == pid]
+            # Only reveal once BOTH runs have finished (never leak while a result is still forming).
+            unfinished = [jj for jj in partners if jj.status not in ARCHIVED]
+            if unfinished:
+                self.query_one("#inspectinfo", Static).update(
+                    "[#ffcf5c]Both runs must finish before REVEAL — keeps the comparison honest.[/#ffcf5c]")
+                return
+            for jj in partners:                          # flip BOTH jobs of the pair (persists via params)
+                jj.params["pair_revealed"] = True
+                jj.save()
+            self._asig = None                            # force the ARCHIVE table (kind glyph) to repaint
+            # Re-render the INSPECT view so the varied value + variant now show; then leave a summary line.
+            self._insp_jid = jid
+            self._insp_view = "inspect"
+            self._render_inspect()
+            self.query_one("#inspectpanel").display = True
+            self.query_one("#inspectlog").display = False
 
         elif b == "clonebtn":
             jid = self._selected("#atable")
@@ -2318,9 +3020,11 @@ class Studio(App):
                             interp_engine=(job.params.get("enh_interpeng") or "rife"),
                             upscale=("0" if w0 >= 1280 else "4"),  # auto-off once already large
                             upmodel=(job.params.get("enh_upmodel") or "realesrgan"),
-                            face="gfpgan", deflicker="0")
+                            face="gfpgan", deflicker="0", restore="none",
+                            tile_feather="0", interp_skip="0")
 
             def _go(d):
+                nonlocal gen            # _go mutates gen (line below); without this the read 2 lines down raises UnboundLocalError
                 if not d:
                     return
                 # budget_ok() runs nvidia-smi -> ONLY probe when the board is idle (nvidia-smi during
@@ -2341,6 +3045,13 @@ class Studio(App):
                     pf += ["--upscale", "--upscaler", d.get("upmodel", "realesrgan"), "--upscale_factor", d["upscale"]]
                 if d["face"] != "0":
                     pf += ["--face", "--face_model", d["face"]]
+                restore = d.get("restore", "none")
+                if restore != "none":      # "seedvr2-3b" / "seedvr2-7b" -> --restore seedvr2 --restore_model 3b/7b
+                    pf += ["--restore", "seedvr2", "--restore_model", restore.split("-")[-1]]
+                if d.get("tile_feather") == "1":
+                    pf += ["--tile_feather"]
+                if d.get("interp_skip") == "1":
+                    pf += ["--interp_skip_cuts"]
                 base = re.sub(r"_enh\d+$", "", os.path.splitext(os.path.basename(job.out or "job"))[0])
                 out_rel = f"outputs/{base}_enh{gen}.mp4"
                 fout_rel = f"outputs/{base}_enh{gen}_frames"
@@ -2359,6 +3070,8 @@ class Studio(App):
                                            enh_interp=d["interp"], enh_upscale=d["upscale"], enh_face=d["face"],
                                            enh_deflicker=d.get("deflicker", "0"),
                                            enh_upmodel=d.get("upmodel", "realesrgan"), enh_interpeng=d.get("interp_engine", "rife"),
+                                           enh_restore=restore,
+                                           enh_tile_feather=d.get("tile_feather", "0"), enh_interp_skip=d.get("interp_skip", "0"),
                                            source_id=job.id, source_root=job.params.get("source_root", job.id),
                                            source_title=(job.title or "")))
                 ej.cmd = cmd               # enhance runs in the AnimateDiff repo (absolute paths point home)
@@ -2451,6 +3164,31 @@ class Studio(App):
         t.display = bool(rel)
         self.query_one("#playchildbtn", Button).display = bool(rel)
 
+    def _blind_lookup(self, pair_id):
+        """Look up a blind A/B pair's TRUE mapping in runs/pair_blinds.jsonl (the only in-the-clear copy).
+        Returns the last matching record dict, or None."""
+        if not pair_id:
+            return None
+        path = os.path.join(REPO, "runs", "pair_blinds.jsonl")
+        rec = None
+        try:
+            with open(path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        d = json.loads(line)
+                    except Exception:
+                        continue
+                    if d.get("pair_id") == pair_id:
+                        rec = d           # keep the last (most recent) match
+        except FileNotFoundError:
+            return None
+        except Exception:
+            return None
+        return rec
+
     def _fmt_inspect(self, job):
         if job is None:
             return "[dim]run not found[/dim]"
@@ -2458,6 +3196,15 @@ class Studio(App):
 
         def row(k, v):
             return f"  {k:<12}{v}"
+
+        # --- blind A/B: while blind + not yet revealed, hide the ONE varied dial's value + the variant ---
+        _blind = bool(p.get("pair_blind")) and not p.get("pair_revealed")
+        _varied = p.get("pair_varied_dial") if p.get("pair_id") else None
+        _HIDDEN = "[hidden — blind A/B, REVEAL to show]"
+
+        def brow(k, v, dial):
+            """A SETTINGS row that hides its value iff this dial is the blind-varied one."""
+            return row(k, _HIDDEN if (_blind and _varied == dial) else v)
 
         _KGLYPH = {"single": "▭", "chained": "▥", "director": "✦", "enhance": "▲"}
         L = [f"[b]{job.id}[/b]    {_status_glyph(job.status)} [{job.status.upper()}]",
@@ -2471,14 +3218,33 @@ class Studio(App):
             L += ["[#6dffab]ANCHORS[/#6dffab]", f"  {p['anchors']}"]
         if p.get("image"):
             L += ["[#6dffab]START IMAGE[/#6dffab]", f"  {p['image']}"]
-        L += ["", "[#6dffab]SETTINGS[/#6dffab]",
-              row("mode", job.kind + (f" · {p['steadiness']}" if p.get("steadiness") else "")),
-              row("resolution", p.get("res", "?")),
+        L += ["", "[#6dffab]SETTINGS[/#6dffab]"]
+        if _blind and _varied == "steadiness":
+            L.append(row("mode", f"{job.kind} · {_HIDDEN}" if p.get("steadiness") else job.kind))
+        else:
+            L.append(row("mode", job.kind + (f" · {p['steadiness']}" if p.get("steadiness") else "")))
+        L += [row("resolution", p.get("res", "?")),
               row("length", f"{p.get('seconds', '?')}s")]
         if int(job.nseg or 1) > 1:
-            L.append(row("shots", f"{job.nseg}  ×  {p.get('seg_sec', '?')}s each"))
-        L += [row("steps", p.get("steps", "?")), row("guidance", p.get("cfg", "?")),
-              row("seed", p.get("seed", "?")), row("fps", p.get("fps", "?"))]
+            if _blind and _varied == "seg":
+                L.append(row("shots", f"{job.nseg}  ×  {_HIDDEN}"))
+            else:
+                L.append(row("shots", f"{job.nseg}  ×  {p.get('seg_sec', '?')}s each"))
+        L += [brow("steps", p.get("steps", "?"), "steps"), brow("guidance", p.get("cfg", "?"), "cfg"),
+              row("seed", p.get("seed", "?")), brow("fps", p.get("fps", "?"), "fps")]
+        if _blind:
+            L += ["", "[#6dffab]BLIND A/B[/#6dffab]",
+                  row("status", "blind — variant + varied value hidden"),
+                  row("varied", "[hidden] — press ⚡ REVEAL (below) once both runs finish")]
+        elif p.get("pair_blind") and p.get("pair_revealed") and p.get("pair_id"):
+            bl = self._blind_lookup(p.get("pair_id"))
+            L += ["", "[#6dffab]A/B RESULT[/#6dffab]",
+                  row("variant", p.get("pair_variant", "?"))]
+            if bl:
+                L.append(row("varied", f"{bl.get('varied', p.get('pair_varied_dial') or '?')}   "
+                                       f"A={bl.get('a_value', '?')} vs B={bl.get('b_value', '?')}"))
+            else:
+                L.append(row("varied", p.get("pair_varied_dial", "?")))
         neg = p.get("n_prompt")
         if neg and neg != NEG:
             L += ["", "[#6dffab]NEGATIVE[/#6dffab]", f"  {neg}"]
@@ -2496,6 +3262,13 @@ class Studio(App):
             _fc = "gfpgan" if _fc == "1" else _fc    # legacy on-flag
             if _fc not in ("0", ""):
                 modes.append(f"face: {_fc}")
+            _rs = str(p.get("enh_restore") or "none")
+            if _rs != "none":
+                modes.append(f"restore: {_rs}")
+            if str(p.get("enh_tile_feather")) == "1":
+                modes.append("feather tiles")
+            if str(p.get("enh_interp_skip")) == "1":
+                modes.append("skip cuts")
             L += ["", "[#6dffab]ENHANCED FROM[/#6dffab]",
                   row("source", p.get("source_title") or p.get("source_id", "?")),
                   row("generation", f"gen {p.get('enh_gen', 1)}"),
@@ -2512,7 +3285,11 @@ class Studio(App):
                   row("windows", self._winpath(out_abs))]
             fd = p.get("frames_dir")
             if fd:
-                L.append(row("frames", fd if os.path.isabs(fd) else os.path.join(REPO, fd)))
+                fd_abs = fd if os.path.isabs(fd) else os.path.join(REPO, fd)
+                if glob.glob(os.path.join(fd_abs, "*.png")):
+                    L.append(row("frames", fd_abs))
+                else:
+                    L.append(row("frames", "[dim]No saved frames — ENHANCE to re-frame.[/dim]"))
         if job.error:
             L += ["", "[#ff6d6d]✕ ERROR[/#ff6d6d]", f"  {job.error[:240]}",
                   "  [dim]full trace → » TERMINAL[/dim]"]
@@ -2553,8 +3330,12 @@ class Studio(App):
         out = []
         pid = job.params.get("pair_id")
         if pid:
-            partner_variant = "A" if job.params.get("pair_variant") == "B" else "B"
-            out += [(j, f"pair {partner_variant}") for j in self.mgr.jobs.values()
+            if job.params.get("pair_blind") and not job.params.get("pair_revealed"):
+                partner_label = "blind pair"        # hide the partner's A/B variant until REVEAL
+            else:
+                partner_variant = "A" if job.params.get("pair_variant") == "B" else "B"
+                partner_label = f"pair {partner_variant}"
+            out += [(j, partner_label) for j in self.mgr.jobs.values()
                     if j.id != job.id and j.params.get("pair_id") == pid]
         rsid = job.params.get("replicate_set_id")
         if rsid:      # this job IS a replicate -> pull in its source + sibling replicates
@@ -2656,6 +3437,10 @@ class Studio(App):
         self._preview_mtime = 0.0    # force a re-render on the next tick
         self.notify(f"Preview style: {PREVIEW_MODE}")
 
+    def action_pick_theme(self):
+        """T13: open the live-preview theme picker (Ctrl+K)."""
+        self.push_screen(ThemePickerScreen())
+
     def action_toggle_dirraw(self):
         """Expand/collapse the director's FULL raw model output per seam (LIVE notes + ARCHIVE inspect)."""
         self._dir_raw = not self._dir_raw
@@ -2678,6 +3463,19 @@ class Studio(App):
             self._toggle_live_term()
         elif tab == "tab-arch":
             self._toggle_arc_term()
+
+    def action_form_queue(self):
+        """Ctrl+Enter anywhere in the NEW RUN form -> QUEUE RUN, same as clicking the button.
+        The form's TextAreas (prompt/anchors/directive/n_prompt) would otherwise swallow Ctrl+Enter
+        as an indent; blur the focused field first so it commits its value before we read it."""
+        if self.query_one(TabbedContent).active != "tab-new":
+            return
+        try:
+            if self.focused is not None:
+                self.focused.blur()
+        except Exception:
+            pass
+        self._queue_current_run()
 
     def action_suspend(self):
         self.mgr.suspend()

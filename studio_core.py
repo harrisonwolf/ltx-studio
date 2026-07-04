@@ -27,6 +27,9 @@ _FIELDS = ["id", "title", "kind", "cmd", "params", "status", "seg", "nseg", "ste
            "ckpt_dir", "resumes", "last_ckpt_seg", "preview", "plans", "dir_ms",
            "phase_started", "phase_secs", "seg_started", "seg_secs", "peak_vram",
            "seam_mse", "drift", "tok_counts"]
+# Blind A/B pair state (pair_id, pair_variant, pair_blind, pair_varied_dial, pair_revealed) lives INSIDE
+# each job's `params` dict, which is itself in _FIELDS above and round-trips through save()/load() -- so
+# pair_revealed already survives an app restart with no extra top-level field needed.
 ACTIVE = ("running", "paused")
 ARCHIVED = ("done", "failed", "cancelled", "interrupted")
 _counter = itertools.count(1)
@@ -158,6 +161,7 @@ class JobManager:
         self.paused = False
         self._stop = False
         self._suspend_req = False
+        self.vram_reserve_gb = 1.0   # T14: GB of the 8GB card to leave for the desktop; studio.py loads/persists this
         for p in glob.glob(os.path.join(RUNS_DIR, "*.json")):
             try:
                 j = Job.load(p); self.jobs[j.id] = j
@@ -371,6 +375,12 @@ class JobManager:
 
     def _run(self, job):
         env = dict(os.environ, PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
+        # T14: VRAM headroom reserved for the Windows desktop, as a fraction of the 8GB card.
+        # gpu_budget.cap_vram() reads this env var in the subprocess (STUDIO_VRAM_HEADROOM=0.12 default).
+        try:
+            env["STUDIO_VRAM_HEADROOM"] = str(max(0.0, float(self.vram_reserve_gb)) / 8.0)
+        except Exception:
+            pass
         job.status, job.started, job.seg, job.step = "running", time.time(), 0, 0
         # reset load/phase tracking on every (re)start
         job.phase, job.load_step, job.load_total, job.load_msg = "", 0, 0, ""

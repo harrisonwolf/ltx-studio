@@ -11,7 +11,7 @@ import os
 import json
 import socket
 
-SCHEMA = 1
+SCHEMA = 2   # v2 (ADDITIVE): + pair_varied_dial / pair_blind / pair_revealed (blind A/B). v1 rows still parse.
 REPO = os.path.dirname(os.path.abspath(__file__))
 LOG_PATH = os.path.join(REPO, "runs", "experiments.jsonl")
 
@@ -56,6 +56,9 @@ def build_record(job):
         "parent_id": p.get("source_id"),            # lineage: enhance->source (re-roll/clone lineage TBD)
         "pair_id": p.get("pair_id"),                 # Q3: PAIR A/B linkage (shared across the A + B jobs)
         "pair_variant": p.get("pair_variant"),        # "A" | "B"
+        "pair_varied_dial": p.get("pair_varied_dial"),  # blind A/B: which variable differs between A and B
+        "pair_blind": bool(p.get("pair_blind")) or None,   # blind A/B: True while the A/B↔config mapping is hidden
+        "pair_revealed": (bool(p.get("pair_revealed")) if p.get("pair_blind") else None),  # blind A/B: unblinded yet?
         "replicate_set_id": p.get("replicate_set_id"),  # Q3: ×N REPLICATE linkage (source job's id)
         "status": job.status,
         "machine": _MACHINE,

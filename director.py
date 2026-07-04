@@ -22,6 +22,10 @@ import ltx_preview
 # --- suspend signal ---
 _SUSPEND = False
 
+# Q4 interval-CFG: sentinel for "no step seen yet" — distinct from any real _current_timestep (incl. None,
+# which the pipelines set after the denoise loop) so per-shot rewind can't collide with a real value.
+_CFG_UNSET = object()
+
 
 def _on_suspend(signum, frame):
     global _SUSPEND
@@ -248,6 +252,15 @@ class VideoBackend:
 
     def __init__(self, args):
         self.args = args
+        self._cfg_state = None      # Q4 interval-CFG gate state (set by _install_cfg_interval); None = off
+
+    def _reset_cfg_state(self):
+        """Q4: rewind the interval-CFG step counter at each shot start. The denoise timestep sequence is
+        identical shot-to-shot, so the step index is keyed on _current_timestep IDENTITY and rewound here
+        (via a sentinel distinct from any real value, incl. the pipeline's post-loop _current_timestep=None)."""
+        if self._cfg_state is not None:
+            self._cfg_state["t"] = _CFG_UNSET
+            self._cfg_state["step"] = -1
 
     def dims(self, width, height):
         """Round to a tile-safe (W, H). //32 for both backends keeps the [[SEG]] denominator aligned
@@ -278,6 +291,49 @@ class VideoBackend:
 
     def preview_step(self, i, cbk, path):
         return
+
+    # --- Q4 CFG surgery: shared interval-CFG gate (both backends) ---------------------------------
+    # LTX and Wan both gate their uncond forward on `pipe.do_classifier_free_guidance`, a class property
+    # that returns `self._guidance_scale > 1.0`. Interval CFG overrides that property so it ALSO returns
+    # False on OFF-steps -> the pipeline skips the uncond pass on those steps (LTX: no batch-doubling of the
+    # single fused forward; Wan: no 2nd forward), which is where the compute is saved. We key the step index
+    # off `pipe._current_timestep` (set at the TOP of each denoise step, before any do_cfg read, by both
+    # pipelines) so the answer is stable across the multiple reads within one step. The override multiplies
+    # the real gate by the interval mask, so cfg<=1 / turbo stay OFF (real gate False) => bit-identical.
+    def _install_cfg_interval(self, spec, real_cfg, total_steps):
+        pipe = self.pipe
+        state = {"t": _CFG_UNSET, "step": -1}
+        self._cfg_state = state       # gen() resets this per shot (timesteps repeat across shots)
+        cls = type(pipe)
+        real_prop = cls.do_classifier_free_guidance      # the pipeline's own guidance_scale>1 gate
+
+        def _is_on(i):
+            if spec[0] == "every":
+                return (i % spec[1]) == 0                 # steps 0, N, 2N, ... keep CFG
+            frac = i / max(1, total_steps)                # [0,1) position in the schedule
+            return spec[1] <= frac < spec[2]
+
+        def _gated(self_pipe):
+            base = real_prop.fget(self_pipe)              # False when cfg<=1 (or turbo) -> stays OFF
+            if not base:
+                return False
+            ct = getattr(self_pipe, "_current_timestep", None)
+            if ct is not state["t"]:                      # a new denoise step began (identity, not value)
+                # Absorb the pre-loop do_cfg read: both pipelines set _current_timestep=None BEFORE the
+                # denoise loop and read do_cfg once there (LTX:1011/1058/1067, Wan:849/889). That None is
+                # NOT a real step, so record it but don't advance -> the first REAL timestep is index 0.
+                # (Wan also re-Nones it post-loop at 1018; absorbed the same way. Per-shot rewind restores
+                # the _CFG_UNSET sentinel, so each shot's first real step is again index 0.)
+                if ct is not None:
+                    state["step"] += 1
+                state["t"] = ct
+            return _is_on(state["step"])
+        # Instance-level property override via a one-off subclass (leaves other pipelines untouched).
+        if not getattr(cls, "_q4_gated_subclass", False):
+            gated_cls = type(cls.__name__ + "_Q4CFG", (cls,),
+                             {"do_classifier_free_guidance": property(_gated),
+                              "_q4_gated_subclass": True})
+            pipe.__class__ = gated_cls
 
 
 class LTXBackend(VideoBackend):
@@ -444,6 +500,14 @@ class LTXBackend(VideoBackend):
         self._PREVIEW_START = max(1, int(0.3 * args.steps))
         self._LF, self._LH, self._LW = ltx_preview.latent_grid_dims(self.W, self.H, self.seg_frames)
 
+        # Q4 interval CFG (LTX): the distilled variant runs cfg=1.0 (no uncond pass) -> nothing to gate.
+        if getattr(args, "_cfg_interval", None) is not None and args.cfg > 1.0 and not self._distilled:
+            self._install_cfg_interval(args._cfg_interval, args.cfg, args.steps)
+            print("director: Q4 interval CFG ON (%s) — uncond forward skipped on off-steps"
+                  % (args._cfg_interval,), flush=True)
+        if args.cfg_rescale > 0 and args.cfg > 1.0 and not self._distilled:
+            print("director: Q4 guidance_rescale=%.3f (LTX native passthrough)" % args.cfg_rescale, flush=True)
+
     def first_cond(self, image_path):
         return [LTXVideoCondition(image=load_image(image_path), frame_index=0)] if image_path else None
 
@@ -453,14 +517,19 @@ class LTXBackend(VideoBackend):
 
     def gen(self, cond, seed, prompt, neg, step_cb, is_continuation):
         args = self.args
+        self._reset_cfg_state()                     # Q4: rewind the interval-CFG step counter for this shot
         if args.latent_chain and is_continuation:
             self._lat_inj["lat"] = self._carry      # condition this shot on the previous shot's tail latents
         g = torch.Generator("cpu").manual_seed(seed)
+        # Q4: LTXConditionPipeline natively rescales when guidance_rescale>0 (it applies rescale_noise_cfg
+        # only inside the do_cfg branch, i.e. cfg>1.0 -- the verified 1.01 floor). Pass it straight through;
+        # at cfg<=1 the pipeline never enters that branch, so this is an automatic no-op (default 0 anyway).
+        gr = {"guidance_rescale": args.cfg_rescale} if args.cfg_rescale > 0 else {}
         out = self.pipe(conditions=cond, prompt=prompt, negative_prompt=neg,
                         width=self.W, height=self.H, num_frames=self.seg_frames,
                         num_inference_steps=args.steps, guidance_scale=args.cfg,
                         generator=g, callback_on_step_end=step_cb,
-                        **self._decode_kwargs).frames[0]
+                        **gr, **self._decode_kwargs).frames[0]
         if args.latent_chain:
             self._lat_inj["lat"] = None
             self._carry = self._lat_stash["lat"]    # this shot's latents -> condition the next shot
@@ -540,7 +609,75 @@ class WanBackend(VideoBackend):
         self._white = Image.new("L", (self.W, self.H), 255)
         self._PREVIEW_EVERY = 3
         self._PREVIEW_START = max(1, int(0.3 * self.args.steps))
+        self._ref_anchor = None      # Q5: shot-1 last frame (PIL), set by main() after shot 1; None = off
         print("director: Wan-VACE-1.3B backend (bf16 VAE, tail-mask chaining)", flush=True)
+
+        # --- Q4 CFG surgery (Wan). wan-turbo runs cfg=1.0 (no uncond pass) -> both are hard no-ops. ---
+        args = self.args
+        if not self.turbo and args.cfg > 1.0:
+            # Interval CFG: same shared gate as LTX (drives _guidance_scale per step -> the pipeline's
+            # do_classifier_free_guidance property skips the uncond forward on off-steps). Wan may carry a
+            # second transformer (wan2.2 boundary split); gate both if present.
+            if getattr(args, "_cfg_interval", None) is not None:
+                self._install_cfg_interval(args._cfg_interval, args.cfg, args.steps)
+                print("director: Q4 interval CFG ON (%s) — uncond forward skipped on off-steps"
+                      % (args._cfg_interval,), flush=True)
+            # guidance_rescale: WanVACEPipeline has NO native guidance_rescale (it combines CFG inline with
+            # no rescale hook). Wrap the transformer forward to pair the per-step cond/uncond predictions and
+            # substitute the uncond return so the pipeline's own `u + s*(c-u)` combine yields the RESCALED
+            # result (rescale_noise_cfg, verbatim math). Exact reconstruction; off => never installed.
+            if args.cfg_rescale > 0:
+                self._install_cfg_rescale_wan([pipe.transformer, getattr(pipe, "transformer_2", None)],
+                                              args.cfg_rescale, args.cfg)
+                print("director: Q4 guidance_rescale=%.3f (Wan forward-wrapper)" % args.cfg_rescale, flush=True)
+
+    def _install_cfg_rescale_wan(self, transformers, phi, real_cfg):
+        """Wan-only guidance_rescale. Per step the pipeline calls the transformer twice: cond then uncond.
+        We capture the cond prediction `c`, and on the uncond call compute the true uncond `u`, then return
+        a SUBSTITUTE u' so the pipeline's inline `u' + s*(c - u')` equals rescale_noise_cfg(u + s*(c-u), c).
+        Solving u'(1-s) = desired - s*c -> u' = (desired - s*c)/(1-s) (exact; s=real_cfg != 1). On an
+        interval OFF-step the uncond forward never happens, so there is nothing to rescale (correct no-op)."""
+        st = {"t": None, "phase": 0, "cond": None}
+
+        def _rescale(noise_cfg, noise_text):     # rescale_noise_cfg, vendored math (SD/LTX identical)
+            std_text = noise_text.std(dim=list(range(1, noise_text.ndim)), keepdim=True)
+            std_cfg = noise_cfg.std(dim=list(range(1, noise_cfg.ndim)), keepdim=True)
+            resc = noise_cfg * (std_text / std_cfg)
+            return phi * resc + (1.0 - phi) * noise_cfg
+
+        def _wrap(mod):
+            if mod is None:
+                return
+            orig = mod.forward
+
+            def fwd(*a, **kw):
+                tt = kw.get("timestep", a[1] if len(a) > 1 else None)
+                try:
+                    key = float(tt.flatten()[0]) if tt is not None else None
+                except Exception:
+                    key = None
+                if key != st["t"]:       # new denoise step -> next forward is this step's cond
+                    st["t"] = key
+                    st["phase"] = 0
+                out = orig(*a, **kw)
+                res = out[0] if isinstance(out, tuple) else out
+                if st["phase"] == 0:                 # cond prediction
+                    st["cond"] = res
+                    st["phase"] = 1
+                else:                                # uncond prediction -> substitute u'
+                    c, u, s = st["cond"], res, float(real_cfg)
+                    if c is not None and c.shape == u.shape and abs(1.0 - s) > 1e-6:
+                        cfg_std = u + s * (c - u)
+                        desired = _rescale(cfg_std, c)
+                        sub = (desired - s * c) / (1.0 - s)
+                        res = sub
+                    st["phase"] = 0
+                    st["cond"] = None
+                    return (res,) + tuple(out[1:]) if isinstance(out, tuple) else res
+                return out
+            mod.forward = fwd
+        for m in transformers:
+            _wrap(m)
 
     def first_cond(self, image_path):
         img = load_image(image_path).convert("RGB").resize((self.W, self.H)) if image_path else None
@@ -567,13 +704,20 @@ class WanBackend(VideoBackend):
 
     def gen(self, cond, seed, prompt, neg, step_cb, is_continuation):
         args = self.args
+        self._reset_cfg_state()                     # Q4: rewind the interval-CFG step counter for this shot
         video, mask, cs, K = self._build(cond)
         g = torch.Generator("cpu").manual_seed(seed)
+        # Q5: VACE reference-image identity anchor. On continuations, pass shot-1's last frame as a trained-in
+        # reference conditioning so every shot anchors to shot 1. This is an INPUT to the pipe only -- it does
+        # NOT touch the latent carry / seam (Wan chains via the tail mask), so the Q2 raw-carry rule is intact.
+        ref = {}
+        if args.wan_ref_anchor and is_continuation and self._ref_anchor is not None:
+            ref["reference_images"] = [self._ref_anchor.resize((self.W, self.H))]
         out = self.pipe(prompt=prompt, negative_prompt=neg, video=video, mask=mask,
                         conditioning_scale=cs, width=self.W, height=self.H, num_frames=self.seg_frames,
                         num_inference_steps=(min(args.steps, 8) if self.turbo else args.steps),  # distill is few-step
                         guidance_scale=(1.0 if self.turbo else args.cfg),   # CFG-distilled LoRA blurs at cfg>1
-                        generator=g, callback_on_step_end=step_cb, output_type="pil").frames[0]
+                        generator=g, callback_on_step_end=step_cb, output_type="pil", **ref).frames[0]
         torch.cuda.empty_cache(); gc.collect()
         if is_continuation and K:
             return out[K:]      # strip the K reproduced conditioning-tail frames -> continuation-only
@@ -670,11 +814,21 @@ def main():
                     help="disable the linspace+mu scheduler override (A/B against the repo's own scheduler config)")
     ap.add_argument("--ltx_variant", default=None, choices=["distilled"],
                     help="LTX transformer variant (distilled = 0.9.8-distilled 2B, forces few-step/cfg=1.0)")
+    # --- Q4 CFG surgery (both backends). Default off => output identical to today. ---
+    ap.add_argument("--cfg_rescale", type=float, default=0.0,
+                    help="Q4: guidance-rescale phi (0=off). Rescales CFG noise toward the cond prediction "
+                         "(fixes over-exposure/over-saturation from high cfg). No-op when CFG is off.")
+    ap.add_argument("--cfg_interval", default=None,
+                    help="Q4: interval CFG 'START:END' (fractions 0-1 of the schedule) OR every-Nth as 'N' "
+                         "(e.g. '2'); OFF-steps skip the uncond forward (cheaper, ~free). Default off.")
     ap.add_argument("--cond_strength", type=float, default=1.0,
                     help="tail-conditioning strength 0-1 (continuity dial: 1.0=tight, lower=looser/freer)")
     ap.add_argument("--no_crossfade", action="store_true", help="disable the seam crossfade (hard cut)")
     ap.add_argument("--backend", default="ltx", choices=["ltx", "wan", "wan-turbo"],
                     help="video backend (ltx=LTX-2B, wan=Wan-VACE-1.3B, wan-turbo=Wan + 4-step distill LoRA)")
+    ap.add_argument("--wan_ref_anchor", action="store_true",
+                    help="Q5 (Wan/VACE only): pass shot-1's last frame as a VACE reference image on every "
+                         "continuation so identity/style anchors to shot 1. Default off => output identical to today.")
     args = ap.parse_args()
     if args.backend == "wan-turbo":
         # the distill runs few-step; clamp HERE so [[STEP]] totals, the decode-phase flip, and the
@@ -690,6 +844,39 @@ def main():
     if (args.latent_adain > 0 or args.latent_fuse) and not args.latent_chain:
         # #2 Q2: AdaIN + fuse are latent-space ops living inside the latent-chain hooks; ignore them otherwise.
         print("note: --latent_adain/--latent_fuse require --latent_chain (latent-space ops); ignoring", flush=True)
+
+    # --- Q4 CFG surgery: parse --cfg_interval once; clamp --cfg_rescale; warn on the CFG-off cases. ---
+    # cfg_interval accepts "START:END" (schedule fractions, CFG active only inside) or "N" (every Nth step).
+    args._cfg_interval = None
+    if args.cfg_interval:
+        try:
+            raw = str(args.cfg_interval).strip()
+            if ":" in raw:
+                a, b = raw.split(":", 1)
+                lo, hi = float(a), float(b)
+                if not (0.0 <= lo < hi <= 1.0):
+                    raise ValueError("START:END must satisfy 0<=START<END<=1")
+                args._cfg_interval = ("range", lo, hi)
+            else:
+                n = int(raw)
+                if n < 1:
+                    raise ValueError("every-Nth must be >=1")
+                args._cfg_interval = ("every", n)
+        except Exception as e:
+            print("note: --cfg_interval %r invalid (%s); interval CFG disabled" % (args.cfg_interval, e), flush=True)
+            args._cfg_interval = None
+    args.cfg_rescale = max(0.0, float(args.cfg_rescale))
+    _cfg_surgery_on = args.cfg_rescale > 0 or args._cfg_interval is not None
+    if _cfg_surgery_on and args.backend == "wan-turbo":
+        # wan-turbo forces cfg=1.0 (CFG off): there is no uncond pass to rescale or interval-gate.
+        print("note: CFG surgery (--cfg_rescale/--cfg_interval) is a no-op on wan-turbo (cfg forced 1.0)", flush=True)
+        args.cfg_rescale = 0.0
+        args._cfg_interval = None
+    elif _cfg_surgery_on and args.cfg <= 1.0 and args.backend != "wan-turbo":
+        # CFG itself is off below the 1.01 floor -> nothing to rescale/gate; leave a one-liner, keep default output.
+        print("note: CFG surgery has no effect at --cfg %.3f (CFG off at cfg<=1.0)" % args.cfg, flush=True)
+    if args.wan_ref_anchor and args.backend not in ("wan", "wan-turbo"):
+        print("note: --wan_ref_anchor is Wan/VACE-only; ignored for backend=%s" % args.backend, flush=True)
 
     signal.signal(signal.SIGUSR1, _on_suspend)
     cap_vram()                          # leave ~12% VRAM free for the OS (clean OOM, never a choke)
@@ -891,6 +1078,8 @@ def main():
         video, seg_idx, current_prompt = load_checkpoint(args.resume, args.backend)
         setattr(backend, "_resumed", True)     # #2 Q2: latent AdaIN anchor can't be reconstructed from a ckpt
         anchor_frame = video[seg_frames - 1]   # Q3: never persisted -- recompute (shot 1's last frame)
+        if args.wan_ref_anchor:                # Q5: shot-1 last frame -> VACE reference on continuations
+            setattr(backend, "_ref_anchor", anchor_frame)
         if args.palette_lock > 0:              # #2 Q2: never persisted -- recompute the pool from shot-1 frames
             palette_pool = build_palette_pool(video[:seg_frames], args.seed)
         print(f"resumed from {args.resume}: {len(video)} frames, seg_idx={seg_idx}")
@@ -909,6 +1098,8 @@ def main():
         _write_preview(args.preview, video)
         seg_idx = 1
         anchor_frame = video[-1]   # Q3: shot 1's last frame anchors the drift curve for every later shot
+        if args.wan_ref_anchor:    # Q5: shot-1 last frame -> VACE reference on every continuation
+            setattr(backend, "_ref_anchor", anchor_frame)
         if args.palette_lock > 0:  # #2 Q2: sample the anchor pixel pool from shot 1 (all its frames)
             palette_pool = build_palette_pool(video, args.seed)
         print("[[DRIFT 1 0 0]]", flush=True)   # seeds the curve; SEAMMSE is continuations-only (no seam yet)
