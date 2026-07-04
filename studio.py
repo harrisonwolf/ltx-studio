@@ -140,6 +140,15 @@ except Exception:
     def _plain_help(t):
         return t or ""
 
+try:
+    import field_visuals   # BF6-style visual tooltips for NEW RUN fields — additive, degrades to None
+except Exception:
+    field_visuals = None
+try:
+    import readout   # T22: global READOUT meter strip — additive, degrades to None
+except Exception:
+    readout = None
+
 
 def plain_help(key):
     """Plain-text (markup-stripped) HELP blurb for a Button.tooltip, safe if the key is missing."""
@@ -235,6 +244,10 @@ def _dir_cost_line(job, seg):
     ssecs = getattr(job, "seg_secs", []) or []   # 0-based per completed shot
     shot = f"  ·  shot gen {fmt(int(ssecs[seg - 1]))}" if 0 < seg <= len(ssecs) else ""
     return f"[dim]director:[/dim] load {load_s:.0f}s + think {think_s:.1f}s{shot}"
+
+
+import itertools
+_slug_counter = itertools.count(1000)   # process-monotonic tail for auto-name uniqueness (never collides)
 
 
 def slugify(s, maxlen=40):
@@ -1477,9 +1490,17 @@ class Studio(App):
     Input:focus { border: tall #6dffab; }
     Select, Switch { background: #06120b; }
     #form { width: 52; padding: 0 2 0 1; }
-    #newinfo { width: 1fr; border: round #1c7a42; background: #08160d; padding: 0 1; margin: 0 1 0 2; }
-    #blindpanel { width: 1fr; border: round #2fae5f; background: #08160d; padding: 0 1; margin: 0 1 0 2; display: none; }
+    #rightcol { width: 1fr; height: 100%; margin: 0 1 0 2; overflow-y: auto; }
+    #rctop { width: 1fr; height: auto; }
+    #rightcol.-narrow #rctop { layout: vertical; }
+    #fieldvisual { width: 1fr; border: round #2fae5f; background: #08160d; padding: 0 1; margin: 0 1 1 0; height: auto; display: none; }
+    #fieldvisual.-active { display: block; }
+    #newinfo { width: 1fr; border: round #1c7a42; background: #08160d; padding: 0 1; margin: 0 0 1 0; height: auto; }
+    #blindpanel { width: 1fr; border: round #2fae5f; background: #08160d; padding: 0 1; margin: 0 0 1 0; height: auto; display: none; }
     #blindpanel.-active { display: block; }
+    #readout { width: 1fr; border: round #1c7a42; background: #08160d;
+               padding: 0 1; margin: 0 0 1 0; height: auto; display: none; }
+    #readout.-active { display: block; }
     #blindtitle { color: #6dffab; text-style: bold; height: 1; margin: 1 0 0 0; }
     #blindsub { color: #1f9a52; height: auto; margin: 0 0 1 0; }
     #blindvarrow { height: 3; }
@@ -1599,21 +1620,29 @@ class Studio(App):
                         _bab = Button("⇄ BLIND A/B", id="blindabbtn")
                         _bab.tooltip = plain_help("blind_ab")
                         yield _bab
-                    yield Static(INFO, id="newinfo")
-                    with Vertical(id="blindpanel"):
-                        yield Static("⇄  BLIND A/B RUN", id="blindtitle")
-                        yield Static("Two runs from the CURRENT form, identical except ONE field — shared "
-                                     "seed, randomized + blind until ⚡ REVEAL. Pick a field, set A and B.",
-                                     id="blindsub")
-                        with Horizontal(id="blindvarrow", classes="row"):
-                            yield Label("Field to vary", classes="lbl")
-                            yield Select(self.BLIND_FIELD_OPTIONS, id="blind_var",
-                                         prompt="pick a field…", allow_blank=True)
-                        yield Vertical(id="blindclones")
-                        yield Static("", id="blindmsg")
-                        with Horizontal(id="blindbtns"):
-                            yield Button("▶ RUN BLIND A/B", id="blind_run")
-                            yield Button("✕ CANCEL", id="blind_cancel")
+                    # Right region: [schematic | text help] side-by-side on top, READOUT full-width
+                    # below. Three-across cramped everything; a single full-width stack wasted the
+                    # horizontal space. #rightcol.-narrow (set in on_resize) restacks the top row
+                    # vertically when the window is snapped/scaled small.
+                    with Vertical(id="rightcol"):
+                        with Horizontal(id="rctop"):
+                            yield Static("", id="fieldvisual")
+                            yield Static(INFO, id="newinfo")
+                        yield Static("", id="readout")      # T22: global readout meters
+                        with Vertical(id="blindpanel"):
+                            yield Static("⇄  BLIND A/B RUN", id="blindtitle")
+                            yield Static("Two runs from the CURRENT form, identical except ONE field — shared "
+                                         "seed, randomized + blind until ⚡ REVEAL. Pick a field, set A and B.",
+                                         id="blindsub")
+                            with Horizontal(id="blindvarrow", classes="row"):
+                                yield Label("Field to vary", classes="lbl")
+                                yield Select(self.BLIND_FIELD_OPTIONS, id="blind_var",
+                                             prompt="pick a field…", allow_blank=True)
+                            yield Vertical(id="blindclones")
+                            yield Static("", id="blindmsg")
+                            with Horizontal(id="blindbtns"):
+                                yield Button("▶ RUN BLIND A/B", id="blind_run")
+                                yield Button("✕ CANCEL", id="blind_cancel")
             with TabPane("≡ QUEUE", id="tab-queue"):
                 yield DataTable(id="qtable", cursor_type="row")
                 with Horizontal(classes="actions"):
@@ -1701,6 +1730,13 @@ class Studio(App):
             self.mgr.vram_reserve_gb = reserve
         except Exception:
             pass
+        # T22: readout meter strip — exposed configs (studio_config.json), both default ON
+        try:
+            _rc = load_studio_config()
+            self.readout_enabled = bool(_rc.get("readout_enabled", True))
+            self.readout_autofit = bool(_rc.get("readout_autofit", True))
+        except Exception:
+            self.readout_enabled, self.readout_autofit = True, True
         self.set_interval(0.5, self.tick)
         self.tick()
         self.update_est()
@@ -1750,9 +1786,44 @@ class Studio(App):
         wid = getattr(self.focused, "id", None)
         if wid in HELP:
             self.query_one("#newinfo", Static).update(HELP[wid])
+        self._show_field_visual(wid)
+
+    def _show_field_visual(self, wid):
+        """Show the BF6-style schematic for `wid` ABOVE the text help, or clear it if the field has
+        none. Purely additive: #newinfo text help is untouched. Never shown while the blind builder
+        is active (it, like #newinfo, is hidden then). Defensive: any failure just clears the panel."""
+        try:
+            panel = self.query_one("#fieldvisual", Static)
+        except Exception:
+            return
+        art = None
+        try:
+            if field_visuals is not None and wid:
+                # while the blind builder owns the right region, keep the visual hidden too
+                if not self.query_one("#blindpanel", Vertical).has_class("-active"):
+                    art = field_visuals.render(wid, self)
+        except Exception:
+            art = None
+        if art:
+            panel.update(art)
+            panel.add_class("-active")
+        else:
+            panel.update("")
+            panel.remove_class("-active")
 
     # any dial change -> refresh the plan estimate
     def on_input_changed(self, event):
+        self.update_est()
+
+    def on_resize(self, event):
+        # window resized (scaled down / snapped to half) -> (1) restack the [schematic|help] top
+        # row vertically when the right region gets narrow, (2) re-render the readout bars at the
+        # new panel width so they never wrap. update_est is cheap string math; refit is mtime-gated.
+        try:
+            rc = self.query_one("#rightcol")
+            (rc.add_class if rc.content_size.width < 76 else rc.remove_class)("-narrow")
+        except Exception:
+            pass
         self.update_est()
 
     def on_select_changed(self, event):
@@ -1772,6 +1843,34 @@ class Studio(App):
             except Exception:
                 pass
         self.update_est()
+        self._refresh_field_visual(sid)   # value-aware schematic must track the NEW select value
+
+    def on_input_submitted(self, event):
+        """Plain ENTER inside a NEW RUN form Input -> REFRESH that field's value-aware schematic
+        (and the plan estimate), so a freshly TYPED value updates the tooltip marker. This is
+        'enter = update this tooltip', NOT enter-to-queue: queueing stays Ctrl+Enter
+        (action_form_queue). We only touch the visual + est and never enqueue. Guarded to the
+        NEW RUN tab, only when the blind builder is inactive, and only when the field has a visual."""
+        try:
+            if self.query_one("#blindpanel", Vertical).has_class("-active"):
+                return                                 # blind builder owns the region -> leave it be
+        except Exception:
+            pass
+        self.update_est()
+        self._refresh_field_visual(getattr(getattr(event, "input", None), "id", None))
+
+    def _refresh_field_visual(self, wid):
+        """Re-render #fieldvisual for `wid` via the SAME path used on focus, but only if that field
+        actually has a visual (so a plain-Enter on a visual-less field doesn't blank a currently
+        shown one). No-op when field_visuals is unavailable or the blind builder is active."""
+        if not wid or field_visuals is None:
+            return
+        try:
+            if field_visuals.VISUALS.get(wid) is None:
+                return                                 # no schematic for this field -> don't disturb the panel
+        except Exception:
+            return
+        self._show_field_visual(wid)
 
     def _sync_cfg_default(self):
         """Retarget GUIDANCE to the selected backend's sweet spot (LTX ~3.0 / Wan ~5.0 / Wan-turbo 1.0)
@@ -2117,6 +2216,42 @@ class Studio(App):
         nseg = (1 + -(-(total_frames - seg_frames) // max(1, seg_frames - overlap))) if chain else 1
         return W, H, fps, total_frames, seg_frames, nseg, chain
 
+    def _unique_slug(self, slug):
+        """Return a slug whose outputs/<slug>.mp4 + outputs/<slug>_frames collide with NOTHING —
+        neither a file already on disk NOR the output path of any job already known to the manager
+        (queued/running/finished). The old check only looked at on-disk files, so two runs queued in
+        the SAME second (classic: a blind A/B pair, both with a blank NAME -> the same job_HHMMSS base)
+        both passed — their renders had not written yet — and got the IDENTICAL out path, so variant B
+        would clobber variant A's finished mp4 on disk (data loss). We now also reserve against every
+        in-memory job's `out`, and fall through to a process-monotonic counter so uniqueness holds even
+        if two builds land in the same second before either job is registered. This is a GENERAL fix
+        (any two same-second jobs) and BLIND-SAFE: the disambiguator is a neutral timestamp/counter, it
+        never encodes the A/B label or the varied value, so it leaks nothing about which variant is which."""
+        taken = set()
+        try:
+            for j in self.mgr.jobs.values():
+                o = (j.params or {}).get("out") or getattr(j, "out", None)
+                if o:
+                    taken.add(os.path.basename(o)[:-4] if o.endswith(".mp4") else os.path.basename(o))
+        except Exception:
+            pass
+
+        def _free(s):
+            return (s not in taken
+                    and not os.path.exists(os.path.join(REPO, f"outputs/{s}.mp4"))
+                    and not os.path.exists(os.path.join(REPO, f"outputs/{s}_frames")))
+
+        if _free(slug):
+            return slug
+        base, n = slug, 2                                  # first collision -> -2, -3, ... then a counter
+        while True:
+            cand = f"{base}-{n}"
+            if _free(cand):
+                return cand
+            n += 1
+            if n > 999:                                    # pathological: guarantee termination + uniqueness
+                return f"{base}-{next(_slug_counter)}"
+
     def build(self, over=None):
         # over: optional field-id -> value SNAPSHOT (blind-pair build). When present, every form read
         # goes through it instead of the live widgets, so a variant is constructed without mutating the
@@ -2127,11 +2262,7 @@ class Studio(App):
         W, H, fps, total_frames, seg_frames, nseg, chain = self._plan(over)
         seg_sec = round(seg_frames / fps, 2)
         slug = slugify(V("name")) or ("job_" + time.strftime("%H%M%S"))
-        if os.path.exists(os.path.join(REPO, f"outputs/{slug}.mp4")):   # collision-safe
-            slug = f"{slug}_{time.strftime('%H%M%S')}"
-            base, n = slug, 2
-            while os.path.exists(os.path.join(REPO, f"outputs/{slug}.mp4")):
-                slug = f"{base}-{n}"; n += 1
+        slug = self._unique_slug(slug)
         out, fdir = f"outputs/{slug}.mp4", f"outputs/{slug}_frames"
         prompt = (V("prompt") or "").strip()
         neg = (V("n_prompt") or "").strip() or NEG
@@ -2303,8 +2434,67 @@ class Studio(App):
             mode = "DIRECTOR" if director else ("auto-chained" if chain else "single clip")
             warn = "  [b]!! lower resolution[/b]" if seg_frames < 17 else ""
             est.update(f"[#ffcf5c]plan: {nseg} shot(s) x {round(seg_frames / fps, 1)}s = {round(total_frames / fps, 1)}s  ::  {mode}  ::  ~{fmt(secs)}{warn}[/#ffcf5c]")
+            self._update_readout(secs, (W, H, fps, total_frames, seg_frames, nseg, chain))   # T22
         except Exception:
             est.update("[dim]plan: enter numbers[/dim]")
+            self._update_readout(None, None)   # T22
+
+    def _update_readout(self, secs, plan):
+        """T22: refresh the #readout meter strip from the current form. Display-only; a no-op when
+        the readout config is off, the module failed to import, or the blind builder owns the right
+        region (same coexistence rule as #fieldvisual). Any failure just clears the panel — it must
+        never break update_est(). maybe_refit() self-gates on file mtime, so calling it per keystroke
+        is cheap; autofit=False falls back to the cached fit only."""
+        if readout is None or not getattr(self, "readout_enabled", True):
+            return
+        try:
+            panel = self.query_one("#readout", Static)
+        except Exception:
+            return
+        try:                                       # blind builder owns the region -> keep readout hidden too
+            if self.query_one("#blindpanel", Vertical).has_class("-active"):
+                panel.update("")
+                panel.remove_class("-active")
+                return
+        except Exception:
+            pass
+        try:
+            def rd(wid, default=None):             # defensive per-field read (some ids have no widget)
+                try:
+                    return self.v(wid)
+                except Exception:
+                    return default
+            if plan is not None:
+                W, H, fps, total_frames, seg_frames, nseg, chain = plan
+            else:
+                W = H = fps = total_frames = seg_frames = nseg = 0
+                chain = False
+            try:
+                consult = bool(self.consult.alive())
+            except Exception:
+                consult = False
+            cfg = {"backend": rd("backend"), "mode": rd("mode"), "steadiness": rd("steadiness"),
+                   "W": W, "H": H, "fps": fps, "seg_frames": seg_frames, "total_frames": total_frames,
+                   "nseg": nseg, "chain": chain, "steps": rd("steps"), "cfg": rd("cfg"),
+                   "cond_strength": rd("cond_strength"), "ltx_variant": rd("ltx_variant"),
+                   "wan_ref_anchor": rd("wan_ref_anchor"), "latent_adain": rd("latent_adain"),
+                   "reserve_gb": rd("vram_reserve", "1.0"), "consult": consult}
+            fit = readout.maybe_refit(REPO) if getattr(self, "readout_autofit", True) else readout.load_fit(REPO)
+            # size the bars to the panel's REAL content width -> nothing wraps on narrow/snapped
+            # windows (on_resize re-runs update_est -> back here with the fresh measurement)
+            try:
+                wd = int(panel.content_size.width) or int(self.query_one("#rightcol").content_size.width) - 2
+            except Exception:
+                wd = 0
+            art = readout.render_readout(cfg, secs, fit, width=(wd if wd > 0 else None))
+        except Exception:
+            art = None
+        if art:
+            panel.update(art)
+            panel.add_class("-active")
+        else:
+            panel.update("")
+            panel.remove_class("-active")
 
     def _winpath(self, linux_abs):
         r"""WSL abs path -> \\wsl.localhost UNC, pasteable into Windows Explorer."""
@@ -2670,6 +2860,18 @@ class Studio(App):
 
     def _open_blind_panel(self):
         """Show the inline builder in the right region, hide the plain info panel, reset its state."""
+        try:                                     # the blind builder owns the region -> hide the visual too
+            fv = self.query_one("#fieldvisual", Static)
+            fv.update("")
+            fv.remove_class("-active")
+        except Exception:
+            pass
+        try:                                     # T22: hide the readout strip while the builder owns the region
+            rp = self.query_one("#readout", Static)
+            rp.update("")
+            rp.remove_class("-active")
+        except Exception:
+            pass
         self.query_one("#newinfo", Static).display = False
         panel = self.query_one("#blindpanel", Vertical)
         panel.add_class("-active")
@@ -2690,6 +2892,10 @@ class Studio(App):
             self.query_one("#newinfo", Static).display = True
         except Exception:
             pass
+        try:
+            self.update_est()                    # T22: re-render the readout strip now the region is free
+        except Exception:
+            pass
 
     def on_button_pressed(self, e: Button.Pressed):
         b = e.button.id
@@ -2697,6 +2903,7 @@ class Studio(App):
             key = b[2:]
             if key in HELP:
                 self.query_one("#newinfo", Static).update(HELP[key])
+            self._show_field_visual(key)
             return
         if b == "queuebtn":
             self._queue_current_run()
@@ -3189,6 +3396,32 @@ class Studio(App):
             return None
         return rec
 
+    def _pair_rating(self, pair_id):
+        """Return the LAST recorded rating for this pair from runs/pair_ratings.jsonl -> its dict
+        ({'pair_id','winner','ts'}, winner = a job id or 'tie'), or None if never rated. Used post-REVEAL
+        to map the user's picked video (recorded by job id) back to its variant + varied value."""
+        if not pair_id:
+            return None
+        path = os.path.join(REPO, "runs", "pair_ratings.jsonl")
+        rec = None
+        try:
+            with open(path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        d = json.loads(line)
+                    except Exception:
+                        continue
+                    if d.get("pair_id") == pair_id:
+                        rec = d           # keep the last (most recent) rating
+        except FileNotFoundError:
+            return None
+        except Exception:
+            return None
+        return rec
+
     def _fmt_inspect(self, job):
         if job is None:
             return "[dim]run not found[/dim]"
@@ -3238,13 +3471,41 @@ class Studio(App):
                   row("varied", "[hidden] — press ⚡ REVEAL (below) once both runs finish")]
         elif p.get("pair_blind") and p.get("pair_revealed") and p.get("pair_id"):
             bl = self._blind_lookup(p.get("pair_id"))
+            _pv = p.get("pair_variant", "?")
             L += ["", "[#6dffab]A/B RESULT[/#6dffab]",
-                  row("variant", p.get("pair_variant", "?"))]
+                  row("variant", _pv)]
+            _vdial = (bl.get("varied") if bl else None) or p.get("pair_varied_dial") or "?"
             if bl:
-                L.append(row("varied", f"{bl.get('varied', p.get('pair_varied_dial') or '?')}   "
+                L.append(row("varied", f"{_vdial}   "
                                        f"A={bl.get('a_value', '?')} vs B={bl.get('b_value', '?')}"))
             else:
-                L.append(row("varied", p.get("pair_varied_dial", "?")))
+                L.append(row("varied", _vdial))
+            # PICK: map the recorded rating (winner by JOB ID) -> variant + varied value, so the user
+            # sees plainly which CONFIG the video they preferred was, without hopping slot->job->variant.
+            rt = self._pair_rating(p.get("pair_id"))
+            if rt is None:
+                L.append(row("your pick", "not rated yet — use ⚖ RATE PAIR, then this shows your winner"))
+            elif rt.get("winner") == "tie":
+                L.append(row("your pick", "you rated it a TIE (no preferred config)"))
+            else:
+                win_id = rt.get("winner")
+                win_job = self.mgr.jobs.get(win_id)
+                # variant of the winner: prefer its own recorded variant, else infer from the blind record.
+                win_var = (win_job.params.get("pair_variant") if win_job else None)
+                if not win_var and bl:
+                    if win_id == bl.get("a_job_id"):
+                        win_var = "A"
+                    elif win_id == bl.get("b_job_id"):
+                        win_var = "B"
+                win_var = win_var or "?"
+                other_var = "B" if win_var == "A" else ("A" if win_var == "B" else "?")
+                if bl:
+                    win_val = bl.get(f"{win_var.lower()}_value", "?") if win_var in ("A", "B") else "?"
+                    other_val = bl.get(f"{other_var.lower()}_value", "?") if other_var in ("A", "B") else "?"
+                    L.append(row("your pick", f"variant {win_var} = {_vdial}={win_val}"
+                                              f"   (other = variant {other_var} = {other_val})"))
+                else:
+                    L.append(row("your pick", f"variant {win_var} (varied value unavailable)"))
         neg = p.get("n_prompt")
         if neg and neg != NEG:
             L += ["", "[#6dffab]NEGATIVE[/#6dffab]", f"  {neg}"]
