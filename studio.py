@@ -48,6 +48,7 @@ AD_PY = os.path.join(AD_REPO, "venv/bin/python")
 NEG = ("worst quality, inconsistent motion, blurry, jittery, distorted, low detail, "
        "deformed, malformed anatomy, missing or extra limbs, mutated, fused body, headless")
 RES = {"512 x 320  fast": (512, 320), "704 x 480  balanced": (704, 480), "768 x 512  sharp": (768, 512)}
+LTX_REPO_DEFAULT = "Lightricks/LTX-Video-0.9.5"   # the checkpoint every ltx-backend run pins (Q1); recorded per run
 
 DIRECTOR_VENV_PY = "/home/wolve/video_gen/director_venv/bin/python"
 PLANNER_SCRIPT = os.path.join(REPO, "vlm_planner.py")
@@ -1874,7 +1875,8 @@ class Studio(App):
                    "--total", self.v("seconds"), "--seg", str(seg_sec),
                    "--cond_strength", (self.v("cond_strength") or "1.0"), "--backend", backend] + common
             if backend == "ltx":
-                cmd += ["--latent_chain"]                   # LTX-only (Wan has no latent-chain equivalent)
+                cmd += ["--latent_chain",                   # LTX-only (Wan has no latent-chain equivalent)
+                        "--ltx_repo", LTX_REPO_DEFAULT]     # pin + record the 0.9.5 checkpoint (Q1 provenance)
             anchors = (self.v("anchors") or "").strip()
             if anchors:                                     # style leash applies to ANY chained run, not just director
                 cmd += ["--anchors", anchors]
@@ -1885,7 +1887,8 @@ class Studio(App):
                 cmd += ["--image", img]
             title = ((self.v("directive") if director else "") or prompt)[:40]
         else:                                               # short enough to fit one clip
-            cmd = [FP_PY, "run_ltx.py", "--prompt", prompt, "--n_prompt", neg, "--seconds", self.v("seconds")] + common
+            cmd = ([FP_PY, "run_ltx.py", "--prompt", prompt, "--n_prompt", neg, "--seconds", self.v("seconds")]
+                   + common + ["--ltx_repo", LTX_REPO_DEFAULT])   # single clips are always LTX; pin 0.9.5 (Q1)
             if img:
                 cmd += ["--image", img]
             title = prompt[:40]
@@ -1899,6 +1902,8 @@ class Studio(App):
             image=img, out=out, frames_dir=fdir, name=slug, n_prompt=neg, backend=backend,
             cond_strength=(self.v("cond_strength") or "1.0"),
         )
+        if backend == "ltx":                             # checkpoint provenance (Q1): every ltx run records its repo
+            params["ltx_repo"] = LTX_REPO_DEFAULT
         return title, kind, cmd, params
 
     def _apply_config(self, c):
@@ -2168,10 +2173,36 @@ class Studio(App):
             def _do_pair(res):
                 if not res:                          # None -> user cancelled
                     return
-                dial, value = res.get("dial") or "", res.get("value") or ""
+                dial, value = res.get("dial") or "", (res.get("value") or "").strip()
                 if dial not in PairScreen.DIALS or not value:
                     self.query_one("#inspectinfo", Static).update(
                         f"[#ff6d6d]PAIR needs a dial in: {', '.join(PairScreen.DIALS)}.[/#ff6d6d]")
+                    return
+                # Validate the VALUE per dial -> a typo becomes a clear rejection, not a silently-coerced run
+                # (the form's own fallbacks would otherwise turn 'sdxl' into ltx, or bad res into 704x480).
+                err = None
+                if dial in ("steps", "cfg", "seg", "cond_strength", "fps"):
+                    try:
+                        float(value)
+                    except (TypeError, ValueError):
+                        err = f"{dial} must be a number (got '{value}')."
+                elif dial == "res":
+                    digits = ""
+                    for ch in value:                  # mirror res_key()'s leading-digit match; reject its silent fallback
+                        if ch.isdigit():
+                            digits += ch
+                        elif digits:
+                            break
+                    if not any(k.split()[0] == digits for k in RES):
+                        err = f"res must round-trip to one of: {', '.join(RES)} (got '{value}')."
+                elif dial == "backend":
+                    if value.lower().replace(" ", "-") not in ("ltx", "wan", "wan-turbo"):
+                        err = f"backend must be one of: ltx, wan, wan-turbo (got '{value}')."
+                elif dial == "steadiness":
+                    if value.lower() not in ("hold", "balanced", "evolve"):
+                        err = f"steadiness must be one of: hold, balanced, evolve (got '{value}')."
+                if err:
+                    self.query_one("#inspectinfo", Static).update(f"[#ff6d6d]{err}[/#ff6d6d]")
                     return
                 cfg = self._clone_config(job)         # KEEP the seed -- only the one dial differs
                 cfg[dial] = value

@@ -63,6 +63,8 @@ def build_record(job):
         "kind": job.kind,
         "mode": p.get("mode") or job.kind,
         "backend": p.get("backend"),
+        "ltx_repo": p.get("ltx_repo"),               # checkpoint provenance (Q1): which LTX repo this run pinned
+        "ltx_variant": p.get("ltx_variant"),          # e.g. "distilled" when the 0.9.8-distilled 2B was used
         "steps": _num(p.get("steps")),
         "cfg": _num(p.get("cfg")),
         "seed": _num(p.get("seed")),

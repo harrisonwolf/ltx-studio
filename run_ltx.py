@@ -28,9 +28,10 @@ ap.add_argument("--fast_offload", action="store_true", help="model-level offload
 ap.add_argument("--frames_dir", default=None, help="also dump PNG frames here (for the AnimateDiff enhance suite)")
 ap.add_argument("--out", default="outputs/ltx.mp4")
 ap.add_argument("--preview", default=None, help="path to write a small live-preview PNG of the final frame")
+ap.add_argument("--ltx_repo", default="Lightricks/LTX-Video-0.9.5",
+                help="LTX diffusers checkpoint repo (escape hatch: Lightricks/LTX-Video = 0.9.0)")
 args = ap.parse_args()
 
-MODEL = "Lightricks/LTX-Video"
 # LTX requires width/height divisible by 32 and num_frames % 8 == 1
 W = (args.width // 32) * 32
 H = (args.height // 32) * 32
@@ -48,10 +49,22 @@ _LF, _LH, _LW = ltx_preview.latent_grid_dims(W, H, num_frames)
 
 print("[[PHASE loading]]", flush=True)
 print("[[LOAD 2 5 loading LTX checkpoint (largest part)]]", flush=True)
-if args.image:
-    pipe = LTXImageToVideoPipeline.from_pretrained(MODEL, torch_dtype=torch.bfloat16)
+# Match director.py's Q1 load pattern so single clips and chained runs use the SAME checkpoint (0.9.5
+# default) and the SAME escape hatch. Reuse the already-cached T5 -- 0.9.5 ships its own ~9GB
+# text_encoder shards; loading them naively re-downloads weights we already have.
+base = "Lightricks/LTX-Video"                         # T5 + tokenizer already in the HF cache
+repo = getattr(args, "ltx_repo", None) or "Lightricks/LTX-Video-0.9.5"
+PipeCls = LTXImageToVideoPipeline if args.image else LTXPipeline
+if repo == base:
+    pipe = PipeCls.from_pretrained(base, torch_dtype=torch.bfloat16)
 else:
-    pipe = LTXPipeline.from_pretrained(MODEL, torch_dtype=torch.bfloat16)
+    # slow T5Tokenizer (NOT T5TokenizerFast): model_index.json specifies the slow class; the fast class
+    # would trigger a slow->fast conversion needing protobuf (not installed here) -- mirrors director.py.
+    from transformers import T5EncoderModel, T5Tokenizer
+    te = T5EncoderModel.from_pretrained(base, subfolder="text_encoder", torch_dtype=torch.bfloat16)
+    tok = T5Tokenizer.from_pretrained(base, subfolder="tokenizer")
+    pipe = PipeCls.from_pretrained(repo, text_encoder=te, tokenizer=tok, torch_dtype=torch.bfloat16)
+print(f"LTX checkpoint: {repo}", flush=True)
 print("[[LOAD 3 5 building pipeline]]", flush=True)
 
 print("[[PHASE offload]]", flush=True)
@@ -66,6 +79,9 @@ print(f"mode={'i2v' if args.image else 't2v'}  {W}x{H}  frames={num_frames}  ste
 gen = torch.Generator("cpu").manual_seed(args.seed)
 kw = dict(prompt=args.prompt, negative_prompt=args.n_prompt, width=W, height=H,
           num_frames=num_frames, num_inference_steps=args.steps, guidance_scale=args.cfg, generator=gen)
+if repo != base:      # 0.9.5's VAE is timestep-conditioned -- pass the decode kwargs only then (0.9.0 omits)
+    kw["decode_timestep"] = 0.05
+    kw["decode_noise_scale"] = 0.025
 if args.image:
     kw["image"] = load_image(args.image)
 
