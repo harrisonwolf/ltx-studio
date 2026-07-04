@@ -8,7 +8,7 @@ Both backends emit the SAME stdout markers + outputs, so studio_core/studio.py s
 
   python director.py --prompt "..." --total 12 --seg 3 [--image start.png] [--backend wan]
 """
-import argparse, os, gc, json, signal, sys, glob, re, types
+import argparse, os, gc, json, signal, sys, glob, re, types, time
 import numpy as np
 import torch
 from gpu_budget import cap_vram
@@ -25,6 +25,17 @@ _SUSPEND = False
 # Q4 interval-CFG: sentinel for "no step seen yet" — distinct from any real _current_timestep (incl. None,
 # which the pipelines set after the denoise loop) so per-shot rewind can't collide with a real value.
 _CFG_UNSET = object()
+
+# T18: live-preview wall-clock floor. The per-step gate (_PREVIEW_EVERY / _PREVIEW_START) decides when a
+# preview *may* be written; this floor guarantees that on slow/long denoise steps the preview is refreshed
+# at least once per PREVIEW_SEC of wall-clock, so a long shot never leaves a stale frame in the LIVE pane.
+# Exposed as a dial (Harrison pref: changed timings become configs, not hardcoded constants).
+def _preview_sec():
+    try:
+        return max(1.0, float(os.environ.get("STUDIO_PREVIEW_SEC", "15.0")))
+    except Exception:
+        return 15.0
+PREVIEW_SEC = _preview_sec()
 
 
 def _on_suspend(signum, frame):
@@ -498,6 +509,7 @@ class LTXBackend(VideoBackend):
         # per-step live-preview config (LTX projects latents -> RGB, cheap; Wan has no equivalent)
         self._PREVIEW_EVERY = 3
         self._PREVIEW_START = max(1, int(0.3 * args.steps))
+        self._last_preview = 0.0     # T18: monotonic ts of the last written preview (wall-clock floor)
         self._LF, self._LH, self._LW = ltx_preview.latent_grid_dims(self.W, self.H, self.seg_frames)
 
         # Q4 interval CFG (LTX): the distilled variant runs cfg=1.0 (no uncond pass) -> nothing to gate.
@@ -538,9 +550,16 @@ class LTXBackend(VideoBackend):
 
     def preview_step(self, i, cbk, path):
         args = self.args
-        if path and (i + 1 == args.steps or (i >= self._PREVIEW_START and i % self._PREVIEW_EVERY == 0)):
+        # T18: fire on the existing per-step stride OR whenever >=PREVIEW_SEC of wall-clock has passed since
+        # the last write (a floor for slow/long steps) -- never widens the cadence, only tightens it. Always
+        # the final step. Reuses the same cheap latent->RGB preview path; only the *when* changes.
+        due = (i + 1 == args.steps
+               or (i >= self._PREVIEW_START and i % self._PREVIEW_EVERY == 0)
+               or (i >= self._PREVIEW_START and time.monotonic() - self._last_preview >= PREVIEW_SEC))
+        if path and due:
             try:
                 if ltx_preview.write_preview_from_latents(cbk.get("latents"), path, self._LF, self._LH, self._LW):
+                    self._last_preview = time.monotonic()
                     print(f"[[PREVIEW {i + 1}]]", flush=True)
             except Exception as e:
                 print("[[PREVIEW-ERR]]", e, flush=True)
@@ -609,6 +628,7 @@ class WanBackend(VideoBackend):
         self._white = Image.new("L", (self.W, self.H), 255)
         self._PREVIEW_EVERY = 3
         self._PREVIEW_START = max(1, int(0.3 * self.args.steps))
+        self._last_preview = 0.0     # T18: monotonic ts of the last written preview (wall-clock floor)
         self._ref_anchor = None      # Q5: shot-1 last frame (PIL), set by main() after shot 1; None = off
         print("director: Wan-VACE-1.3B backend (bf16 VAE, tail-mask chaining)", flush=True)
 
@@ -728,9 +748,14 @@ class WanBackend(VideoBackend):
         8GB). Color is approximate; the clean frame still lands per-shot via _write_preview. Studio polls
         the PNG by mtime, so writing it is what refreshes the pane. Best-effort -> never kills a run."""
         args = self.args
-        if path and (i + 1 == args.steps or (i >= self._PREVIEW_START and i % self._PREVIEW_EVERY == 0)):
+        # T18: same wall-clock floor as LTX -- per-step stride OR >=PREVIEW_SEC since the last write.
+        due = (i + 1 == args.steps
+               or (i >= self._PREVIEW_START and i % self._PREVIEW_EVERY == 0)
+               or (i >= self._PREVIEW_START and time.monotonic() - self._last_preview >= PREVIEW_SEC))
+        if path and due:
             try:
                 if ltx_preview.atomic_save_png(ltx_preview.wan_latent_preview(cbk.get("latents")), path):
+                    self._last_preview = time.monotonic()
                     print("[[PREVIEW %d]]" % (i + 1), flush=True)
             except Exception as e:
                 print("[[PREVIEW-ERR]]", e, flush=True)

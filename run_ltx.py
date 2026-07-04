@@ -6,7 +6,7 @@ enable_model_cpu_offload; VAE tiling on. No compilation / fp8 needed.
   python run_ltx.py --prompt "..." --seconds 5
   python run_ltx.py --image start.png --prompt "..." --seconds 5
 """
-import argparse, os
+import argparse, os, time
 print("[[PHASE importing]]", flush=True)
 print("[[LOAD 1 5 initializing torch + diffusers]]", flush=True)
 import torch
@@ -56,6 +56,13 @@ import ltx_preview
 # live-preview cadence: skip the pure-noise phase, then every K steps, always the last step
 PREVIEW_EVERY = 3
 PREVIEW_START = max(1, int(0.3 * args.steps))
+# T18: wall-clock floor (dial via STUDIO_PREVIEW_SEC, default 15s) so a slow/long step still refreshes the
+# LIVE pane within ~PREVIEW_SEC instead of only every PREVIEW_EVERY steps. Never widens the cadence.
+try:
+    PREVIEW_SEC = max(1.0, float(os.environ.get("STUDIO_PREVIEW_SEC", "15.0")))
+except Exception:
+    PREVIEW_SEC = 15.0
+_last_preview = 0.0
 _LF, _LH, _LW = ltx_preview.latent_grid_dims(W, H, num_frames)
 
 print("[[PHASE loading]]", flush=True)
@@ -106,15 +113,21 @@ if args.image:
     kw["image"] = load_image(args.image)
 
 def _cb(pp, i, t, cbk):
+    global _last_preview
     if i == 0:
         print("[[PHASE generating]]", flush=True)
     print(f"[[STEP {i + 1} {args.steps}]]", flush=True)
     if i + 1 == args.steps:
         print("[[PHASE decoding]]", flush=True)
-    # best-effort live preview from the in-flight latent (never crashes the run)
-    if args.preview and (i + 1 == args.steps or (i >= PREVIEW_START and i % PREVIEW_EVERY == 0)):
+    # best-effort live preview from the in-flight latent (never crashes the run). T18: fire on the per-step
+    # stride OR when >=PREVIEW_SEC of wall-clock has elapsed since the last write (floor for slow steps).
+    due = (i + 1 == args.steps
+           or (i >= PREVIEW_START and i % PREVIEW_EVERY == 0)
+           or (i >= PREVIEW_START and time.monotonic() - _last_preview >= PREVIEW_SEC))
+    if args.preview and due:
         try:
             if ltx_preview.write_preview_from_latents(cbk.get("latents"), args, _LF, _LH, _LW):
+                _last_preview = time.monotonic()
                 print(f"[[PREVIEW {i + 1}]]", flush=True)
         except Exception as e:
             print("[[PREVIEW-ERR]]", e, flush=True)
