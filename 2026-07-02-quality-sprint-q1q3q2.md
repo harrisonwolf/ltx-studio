@@ -291,9 +291,10 @@ recomputed from frames on resume, same rule as Q3's anchor frame).
 
 **Pitfalls:**
 - `_lat_stash`/`_carry` interplay: the carry is consumed by the NEXT shot's conditioning hook
-  (`director.py:248-256, 279-288`). Apply AdaIN before the stash is copied into `_carry`, or
-  the correction never propagates. Read the whole hook block before editing; it is the
-  subtlest code in the file.
+  (`director.py:248-256, 279-288`). ~~Apply AdaIN before the stash is copied into `_carry`, or
+  the correction never propagates.~~ **SUPERSEDED 2026-07-03 — this instruction was wrong, see
+  the Addendum at the end of this section: never apply corrections before the stash.** Read the
+  whole hook block before editing; it is the subtlest code in the file.
 - dtype/device: latents are bf16 on CUDA at stash time; the anchor lives on CPU — cast/move at
   use (`anchor.to(lat.device, lat.dtype)`), never permanently move the stash.
 - The mu-shifted scheduler means latent scales differ early vs late in denoise — only touch
@@ -317,6 +318,23 @@ recomputed from frames on resume, same rule as Q3's anchor frame).
 - GPU (user go-ahead): fixed-seed 4-shot LTX `--latent_chain` A/B: baseline vs
   `--latent_adain 0.5 --palette_lock 0.7`. Compare the `[[DRIFT]]` curves (Q3 telemetry) —
   acceptance = post-correction drift flat-or-shrinking instead of monotonically growing.
+
+**Addendum (2026-07-03) — design correction, ON path was falsified:** An 8-shot static
+"hold-stress" test (`_q2tests/hold_stress.sh`) showed anchored drift exploding to ~5x baseline
+by shot 3 (monotonically diverging thereafter), the opposite of this item's goal. Root cause,
+diagnosed and confirmed in code: the original fix shape (above) said to apply AdaIN "BEFORE the
+stash is copied into `_carry`... or the correction never propagates" — i.e. carry the
+*corrected* latents forward. That is wrong. `_carry` becomes the next shot's hard tail
+conditioning; feeding it a statistically-shifted (AdaIN'd/fused) tensor makes the model treat
+the shift as real content, regress back toward its natural statistics, and get hit by an even
+larger correction next shot — a positive feedback loop, not a correction. The corrected design,
+now implemented in `director.py`'s `_denorm_stash`: **stash/carry the RAW, pre-correction
+latents always; apply `adain_normalize_latents` and `linear_overlap_fuse` only to the tensor
+handed to the decoder for this shot's own output.** Nothing that has been modified by AdaIN or
+fuse may ever reach `_lat_stash` / `_carry`. This makes the corrections purely cosmetic/local to
+each shot's decode, with zero compounding across shots — which is the only way "anchor to shot
+1" can behave as a *correction* rather than a *new baseline every shot*. Re-validate the ON path
+against this build before trusting the GPU acceptance test above.
 
 ---
 

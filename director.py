@@ -58,6 +58,111 @@ def color_match(frames, ref_img):
     return out
 
 
+# ============================ #2 Q2: drift-kill anchors ============================
+# Three flag-gated anti-drift mechanisms that anchor to SHOT 1 instead of the previous tail. All
+# default OFF; the OFF path is bit-identical to the pre-Q2 behavior.
+#   adain_normalize_latents / linear_overlap_fuse: VENDORED VERBATIM (math unchanged) from
+#     venv/lib/python3.10/site-packages/diffusers/pipelines/ltx/pipeline_ltx_i2v_long_multi_prompt.py
+#     (adain_normalize_latents :145, linear_overlap_fuse :212). Do NOT "improve" this math -- the plan
+#     mandates the upstream formulas so the anchor pack matches diffusers' own long-video pipeline.
+
+def adain_normalize_latents(curr_latents, ref_latents, factor):
+    """Channel-wise mean/variance matching of curr_latents to ref_latents, blended by factor in [0,1]
+    (0 keeps current stats; 1 matches reference). Stats over (T,H,W); shapes may differ in T."""
+    if ref_latents is None or factor is None or factor <= 0:
+        return curr_latents
+    eps = torch.tensor(1e-6, device=curr_latents.device, dtype=curr_latents.dtype)
+    mu_curr = curr_latents.mean(dim=(2, 3, 4), keepdim=True)
+    sigma_curr = curr_latents.std(dim=(2, 3, 4), keepdim=True)
+    mu_ref = ref_latents.mean(dim=(2, 3, 4), keepdim=True).to(device=curr_latents.device, dtype=curr_latents.dtype)
+    sigma_ref = ref_latents.std(dim=(2, 3, 4), keepdim=True).to(device=curr_latents.device, dtype=curr_latents.dtype)
+    mu_blend = (1.0 - float(factor)) * mu_curr + float(factor) * mu_ref
+    sigma_blend = (1.0 - float(factor)) * sigma_curr + float(factor) * sigma_ref
+    sigma_blend = torch.clamp(sigma_blend, min=float(eps))
+    curr_norm = (curr_latents - mu_curr) / (sigma_curr + eps)
+    return curr_norm * sigma_blend + mu_blend
+
+
+def linear_overlap_fuse(prev, new, overlap):
+    """Temporal linear crossfade between two latent clips [B,C,F,H,W] over the overlap region.
+    Returns [B,C, F_prev + F_new - overlap, H,W]. overlap<=1 concatenates without a blend."""
+    if overlap <= 1:
+        return torch.cat([prev, new], dim=2)
+    alpha = torch.linspace(1, 0, overlap + 2, device=prev.device, dtype=prev.dtype)[1:-1]
+    shape = [1] * prev.ndim
+    shape[2] = alpha.size(0)
+    alpha = alpha.reshape(shape)
+    blended = alpha * prev[:, :, -overlap:] + (1 - alpha) * new[:, :, :overlap]
+    return torch.cat([prev[:, :, :-overlap], blended, new[:, :, overlap:]], dim=2)
+
+
+def _sample_pixels(frames, n, size=128, rng=None):
+    """Uniformly sample up to n RGB pixels from frames, each downscaled so its long side ~= size.
+    Vectorized (np.asarray per frame); returns uint8 (M,3) with M <= n."""
+    rng = rng if rng is not None else np.random.default_rng(0)
+    pools = []
+    for im in frames:
+        w, h = im.size
+        sc = size / max(1, max(w, h))
+        sm = im.convert("RGB").resize((max(1, round(w * sc)), max(1, round(h * sc))))
+        pools.append(np.asarray(sm, dtype=np.uint8).reshape(-1, 3))
+    allpix = np.concatenate(pools, axis=0) if pools else np.zeros((0, 3), np.uint8)
+    if allpix.shape[0] > n:
+        allpix = allpix[rng.choice(allpix.shape[0], n, replace=False)]
+    return allpix
+
+
+def build_palette_pool(frames, seed=0, n=200000, size=128):
+    """The palette-lock anchor pool: ~n pixels sampled uniformly from SHOT-1 frames (downscaled ~128px)."""
+    return _sample_pixels(frames, n, size, np.random.default_rng(seed))
+
+
+def refresh_palette_pool(pool, new_frames, seed=0, frac=0.10, size=128):
+    """Decay: replace ~frac (10%) of the pool with pixels from a newly ACCEPTED shot so slow, legitimate
+    scene evolution stays legal. Pool size is preserved. Constant 10% by design (not a flag)."""
+    if pool is None or pool.shape[0] == 0 or not new_frames:
+        return pool
+    rng = np.random.default_rng(seed)
+    k = max(1, int(pool.shape[0] * frac))
+    fresh = _sample_pixels(new_frames, k, size, rng)
+    if fresh.shape[0] == 0:
+        return pool
+    k = min(k, fresh.shape[0])
+    out = pool.copy()
+    out[rng.choice(pool.shape[0], k, replace=False)] = fresh[:k]
+    return out
+
+
+def palette_lock(frames, pool, strength):
+    """256-bin per-channel CDF (quantile) match of each frame toward the anchor pixel pool.
+    frames: list[PIL.Image]; pool: np.uint8 (N,3); strength 0..1 lerps between identity and
+    fully-matched. Returns a new list; len/size unchanged. strength<=0 returns the input UNTOUCHED
+    (same list object) so the OFF path is bit-identical."""
+    if strength <= 0 or not frames or pool is None or pool.shape[0] == 0:
+        return frames
+    s = float(max(0.0, min(1.0, strength)))
+    # Precompute the pool's per-channel (quantile -> value) template once (classic histogram matching).
+    tmpl = []
+    for c in range(3):
+        vals, counts = np.unique(pool[:, c], return_counts=True)
+        q = np.cumsum(counts).astype(np.float64) / pool.shape[0]
+        tmpl.append((q, vals.astype(np.float64)))
+    out = []
+    for im in frames:
+        arr = np.asarray(im.convert("RGB"), dtype=np.uint8)
+        H, W, _ = arr.shape
+        res = np.empty(arr.shape, dtype=np.float64)
+        for c in range(3):
+            src = arr[:, :, c].reshape(-1)
+            s_vals, s_inv, s_counts = np.unique(src, return_inverse=True, return_counts=True)
+            s_q = np.cumsum(s_counts).astype(np.float64) / src.size
+            mapped = np.interp(s_q, tmpl[c][0], tmpl[c][1])       # frame CDF -> pool inverse CDF (vectorized)
+            matched = mapped[s_inv].reshape(H, W)
+            res[:, :, c] = arr[:, :, c] * (1.0 - s) + matched * s
+        out.append(Image.fromarray(np.clip(np.round(res), 0, 255).astype(np.uint8)))
+    return out
+
+
 def _fold_anchors(prompt, anchors):
     """In chained (non-director) mode the ONE prompt is reused for every shot with no VLM to keep the
     subject/style consistent -> fold the anchors (the 'style leash') straight into that prompt. In
@@ -149,8 +254,9 @@ class VideoBackend:
         with studio.py's untouchable nseg formula."""
         return (width // 32) * 32, (height // 32) * 32
 
-    def configure(self, W, H, seg_frames):
+    def configure(self, W, H, seg_frames, overlap=None):
         self.W, self.H, self.seg_frames = W, H, seg_frames
+        self.overlap = overlap            # #2 Q2: pixel overlap -> latent-frame overlap for --latent_fuse
 
     def fps_for(self, requested):
         return requested
@@ -186,6 +292,10 @@ class LTXBackend(VideoBackend):
         self._carry = None
         self._lat_inj = {"lat": None}     # previous shot's latents -> condition next shot (None = pixel fallback)
         self._lat_stash = {"lat": None}   # the current shot's own latents, captured during its decode
+        self._anchor_lat = None           # #2 Q2: shot-1 latents on CPU (AdaIN reference); captured once
+        self._fuse_warned = False         # #2 Q2: latent_fuse overlap-too-small warning fires at most once
+        self._resumed = False             # #2 Q2: set on --resume -> shot-1 latent anchor is unrecoverable
+        self._adain_resume_warned = False
 
     def to_frames(self, sec, fps):
         n = int(sec * fps)
@@ -287,12 +397,47 @@ class LTXBackend(VideoBackend):
             _ltxmod.retrieve_latents = _retrieve_patched
             _orig_denorm = type(pipe)._denormalize_latents
             _lat_stash = self._lat_stash
+            self._overlap_lat = (self.overlap - 1) // 8 if self.overlap else 0   # 8x VAE temporal compression
 
             def _denorm_stash(latents, latents_mean, latents_std, scaling_factor=1.0):
-                _lat_stash["lat"] = latents.detach()
-                return _orig_denorm(latents, latents_mean, latents_std, scaling_factor)
+                # #2 Q2 drift-kill anchors. RULE: nothing that has been modified here may enter the carry --
+                # corrections (AdaIN / fuse) are DECODE-SIDE ONLY. _lat_stash feeds _carry (see gen(), below),
+                # which becomes the NEXT shot's hard tail conditioning; carrying CORRECTED latents creates a
+                # positive-feedback loop (the model treats the statistical shift as content, regresses toward
+                # natural stats, the next correction over-shoots further) -- falsified by the 2026-07-03 8-shot
+                # hold-stress test (anchored drift ~5x baseline by shot 3, monotonically diverging thereafter).
+                # Always stash/carry RAW; apply adain/fuse only to the tensor handed to the decoder.
+                raw = latents
+                out = raw
+                if args.latent_adain > 0:
+                    if self._anchor_lat is None:
+                        # A resumed run has no shot-1 latents (not persisted, same as the latent carry) -> DON'T
+                        # anchor to a mid-clip post-resume shot (that would pull toward drift). Skip + warn once.
+                        if self._resumed:
+                            if not self._adain_resume_warned:
+                                print("latent_adain: shot-1 latent anchor unrecoverable after --resume "
+                                      "(not persisted, like the latent carry); AdaIN skipped this run", flush=True)
+                                self._adain_resume_warned = True
+                        else:
+                            self._anchor_lat = raw.detach().clone().to("cpu")   # shot 1 = the anchor; capture once (CPU), RAW
+                    else:
+                        anchor = self._anchor_lat.to(raw.device, raw.dtype)  # cast/move at use; never move the stash
+                        out = adain_normalize_latents(raw, anchor, factor=args.latent_adain)
+                if args.latent_fuse and self._carry is not None:            # continuations only (carry = prev tail)
+                    prev_tail = self._carry.to(out.device, out.dtype)
+                    K = min(self._overlap_lat, prev_tail.shape[2], out.shape[2])
+                    if K >= 2:
+                        out = linear_overlap_fuse(prev_tail[:, :, -K:], out, K)   # blend leading K frames -> seam
+                    elif not self._fuse_warned:
+                        print("latent_fuse: overlap too small (<2 latent frames), no-op — use --overlap 17+", flush=True)
+                        self._fuse_warned = True
+                _lat_stash["lat"] = raw.detach()      # RAW only -- see rule above; this becomes _carry in gen()
+                return _orig_denorm(out, latents_mean, latents_std, scaling_factor)
             pipe._denormalize_latents = _denorm_stash
             print("director: LATENT-SPACE chaining ON (carry latents, skip the VAE round-trip)", flush=True)
+            if args.latent_adain > 0 or args.latent_fuse:
+                print("director: Q2 latent anchors -> adain=%.2f fuse=%s (overlap_lat=%d)"
+                      % (args.latent_adain, bool(args.latent_fuse), self._overlap_lat), flush=True)
 
         # per-step live-preview config (LTX projects latents -> RGB, cheap; Wan has no equivalent)
         self._PREVIEW_EVERY = 3
@@ -511,6 +656,14 @@ def main():
     ap.add_argument("--preview", default=None, help="path to write a small live-preview PNG each segment")
     ap.add_argument("--latent_chain", action="store_true",
                     help="#10 (LTX only): carry shot latents forward instead of decode->re-encode")
+    ap.add_argument("--latent_adain", type=float, default=0.0,
+                    help="#2 (LTX+latent_chain): AdaIN-normalize each shot's latents toward shot 1 (0=off..1=full)")
+    ap.add_argument("--latent_fuse", action="store_true",
+                    help="#2 (LTX+latent_chain): blend each continuation's leading latent frames toward the carried tail")
+    ap.add_argument("--palette_lock", type=float, default=0.0,
+                    help="#2 (both backends): 256-bin CDF palette match to a shot-1 pixel pool instead of color_match (0=off..1=full)")
+    ap.add_argument("--palette_lock_evolve", action="store_true",
+                    help="#2: also apply --palette_lock in steadiness=evolve (default: hold/balanced only)")
     ap.add_argument("--ltx_repo", default="Lightricks/LTX-Video-0.9.5",
                     help="LTX diffusers checkpoint repo (escape hatch: Lightricks/LTX-Video = 0.9.0)")
     ap.add_argument("--ltx_no_mush_patch", action="store_true",
@@ -534,6 +687,9 @@ def main():
             # same reasoning as wan-turbo above: CFG-distilled + few-step.
             args.steps = min(args.steps, 8)
             args.cfg = 1.0
+    if (args.latent_adain > 0 or args.latent_fuse) and not args.latent_chain:
+        # #2 Q2: AdaIN + fuse are latent-space ops living inside the latent-chain hooks; ignore them otherwise.
+        print("note: --latent_adain/--latent_fuse require --latent_chain (latent-space ops); ignoring", flush=True)
 
     signal.signal(signal.SIGUSR1, _on_suspend)
     cap_vram()                          # leave ~12% VRAM free for the OS (clean OOM, never a choke)
@@ -547,7 +703,7 @@ def main():
     seg_frames = backend.to_frames(args.seg, fps)
     target = backend.to_frames(args.total, fps)
     overlap = max(1, min(args.overlap, seg_frames - 8))   # floor at 1: a short Wan seg_frames must never go negative
-    backend.configure(W, H, seg_frames)
+    backend.configure(W, H, seg_frames, overlap)
 
     print("[[PHASE loading]]", flush=True)
     backend.load()                      # emits [[LOAD 2/3/4]] + [[PHASE offload]]
@@ -577,6 +733,18 @@ def main():
     # faithful default: an empty/echoing directive can never invent a story, regardless of the flag
     if (not args.directive) or args.directive.strip() == args.prompt.strip():
         args.steadiness = "hold"
+    # #2 Q2 palette-lock gate: hold/balanced get it whenever --palette_lock>0; evolve is excluded unless
+    # --palette_lock_evolve (evolve WANTS drift). palette_pool is built after shot 1 (below); None = off.
+    palette_active = args.palette_lock > 0 and (args.steadiness != "evolve" or args.palette_lock_evolve)
+    palette_pool = None
+
+    def _recolor(frames, ref):
+        """#2 Q2: palette-lock each shot's frames toward the shot-1 pool when active, else the original
+        per-channel color_match toward `ref` (the prior tail). OFF path -> color_match, unchanged."""
+        if palette_active and palette_pool is not None:
+            return palette_lock(frames, palette_pool, args.palette_lock)
+        return color_match(frames, ref)
+
     # chained (non-director) runs reuse ONE prompt for every shot with no VLM rewriting -> fold the
     # anchors into it so the style leash actually bites (director mode lets the VLM fold them per seam).
     base_prompt = args.prompt if director else _fold_anchors(args.prompt, args.anchors)
@@ -721,7 +889,10 @@ def main():
     # --- segment 0 (fresh or resumed) ---
     if args.resume:
         video, seg_idx, current_prompt = load_checkpoint(args.resume, args.backend)
+        setattr(backend, "_resumed", True)     # #2 Q2: latent AdaIN anchor can't be reconstructed from a ckpt
         anchor_frame = video[seg_frames - 1]   # Q3: never persisted -- recompute (shot 1's last frame)
+        if args.palette_lock > 0:              # #2 Q2: never persisted -- recompute the pool from shot-1 frames
+            palette_pool = build_palette_pool(video[:seg_frames], args.seed)
         print(f"resumed from {args.resume}: {len(video)} frames, seg_idx={seg_idx}")
         print(f"[[SEG {seg_idx + 1} {est_segs}]]", flush=True)   # the shot we're about to make
         print("[[PHASE warmup]]", flush=True)
@@ -738,6 +909,8 @@ def main():
         _write_preview(args.preview, video)
         seg_idx = 1
         anchor_frame = video[-1]   # Q3: shot 1's last frame anchors the drift curve for every later shot
+        if args.palette_lock > 0:  # #2 Q2: sample the anchor pixel pool from shot 1 (all its frames)
+            palette_pool = build_palette_pool(video, args.seed)
         print("[[DRIFT 1 0 0]]", flush=True)   # seeds the curve; SEAMMSE is continuations-only (no seam yet)
         if director:
             beats.append(args.prompt)
@@ -770,11 +943,11 @@ def main():
         drift_pre = _seam_mse(out[-1], anchor_frame)   # Q3: drift vs anchor BEFORE this shot's color correction
         if backend.strips_cond_head:
             # Wan: gen() already stripped the reproduced conditioning tail -> 'out' is continuation-only.
-            new = color_match(out, video[-1])
+            new = _recolor(out, video[-1])
             video += new
         elif args.no_crossfade or len(out) <= overlap:
             new = out[overlap:] if len(out) > overlap else out
-            new = color_match(new, video[-1])
+            new = _recolor(new, video[-1])
             video += new
         else:
             # seam polish: crossfade the overlap region -> blend shot N's tail (fading out) with
@@ -782,12 +955,15 @@ def main():
             tail_n, head = video[-overlap:], out[:overlap]
             video = video[:-overlap] + [Image.blend(tail_n[i], head[i], (i + 1) / (overlap + 1))
                                         for i in range(overlap)]
-            new = color_match(out[overlap:], video[-1])
+            new = _recolor(out[overlap:], video[-1])
             video += new
-        # Q3 telemetry: seam continuity + drift-vs-anchor, measured AFTER whichever correction just ran.
+        # Q3 telemetry: seam continuity + drift-vs-anchor, measured AFTER whichever correction just ran
+        # (color_match OR #2 Q2's palette_lock / AdaIN), so the marker directly scores this work.
         print("[[SEAMMSE %d %d]]" % (seg_idx, int(_seam_mse(new[0], prev_last) * 100)), flush=True)
         print("[[DRIFT %d %d %d]]" % (seg_idx, int(drift_pre * 100),
                                       int(_seam_mse(video[-1], anchor_frame) * 100)), flush=True)
+        if palette_pool is not None:   # #2 Q2 decay: refresh 10% of the pool from this accepted shot
+            palette_pool = refresh_palette_pool(palette_pool, new, args.seed + seg_idx)
         _write_preview(args.preview, video)
         if director and len(video) < target and (seg_idx - last_redirect) >= redirect_every:
             if args.steadiness == "hold" and _last_directed is not None and _seam_static(video[-1], _last_directed):
