@@ -1,8 +1,8 @@
 # readout.py — T22 global readout meters: estimators, auto-refit, gauge renderers.
 # Pure stdlib. No torch, no textual, no studio imports. All colors via Rich markup tags.
 #
-# Five live gauges for the NEW RUN right column: est. peak VRAM, RAM/swap pressure,
-# generation time, quality outlook, drift/seam risk. Display-only — nothing here changes
+# Six live gauges for the NEW RUN right column: est. peak VRAM, max clip/shot, RAM/swap
+# pressure, generation time, quality outlook, drift/seam risk. Display-only — nothing here changes
 # run behaviour. Hand formulas ship as the v0 fallback; maybe_refit() re-derives the
 # VRAM (k) and time (COEF/WARM/DECODE) constants from runs/experiments.jsonl as it grows
 # and caches them, self-gating on file mtime so it is cheap to call on every keystroke.
@@ -443,7 +443,7 @@ def _row(title, bar, label):
 
 
 def render_readout(cfg, secs, fit, width=None):
-    """The full five-gauge strip as ONE Rich-markup string. Order: VRAM, RAM, TIME, QUALITY,
+    """The full six-gauge strip as ONE Rich-markup string. Order: VRAM, CLIP, RAM, TIME, QUALITY,
     DRIFT. Defensive: a single gauge failing degrades to a dim placeholder rather than crashing
     the panel. `width` = the panel's CONTENT width in cells (studio measures it and re-renders
     on window resize); bars are sized to fit so nothing wraps on narrow/snapped windows."""
@@ -463,6 +463,25 @@ def render_readout(cfg, secs, fit, width=None):
         lines.append("      " + _c("dim", "peak · red≥%.1fG rsv%.1f" % (red_start, reserve)))
     except Exception:
         lines += ["VRAM " + _c("dim", "n/a"), ""]
+
+    # ---- CLIP (max frames per shot: the lever RES actually trades. Peak VRAM is capped, so a
+    #      higher res SHRINKS the segment instead of using more memory -> this is what visibly
+    #      moves when you change RES, where the VRAM bar stays ~flat) ----
+    try:
+        sf = int(_f(cfg.get("seg_frames")))
+        ns = int(_f(cfg.get("nseg"))) or 1
+        fpsv = _f(cfg.get("fps")) or 0.0
+        if sf > 0:
+            frac = _clamp(sf / 130.0, 0.0, 1.0) * 100.0     # ~130fr ~ a long single segment; bar shrinks as res climbs
+            col = CLEAN if ns <= 1 else (MID if ns <= 3 else WARN)
+            val = ("%dfr x%d" % (sf, ns)) if ns > 1 else ("%dfr" % sf)
+            lines.append(_row("CLIP ", _score_bar(frac, w_bar, col), _c(col, val)))
+            sper = ("%.1fs/shot " % (sf / fpsv)) if fpsv > 0 else ""
+            lines.append("      " + _c("dim", sper + ". res up=shorter"))
+        else:
+            lines += ["CLIP " + _c("dim", "n/a"), ""]
+    except Exception:
+        lines += ["CLIP " + _c("dim", "n/a"), ""]
 
     # ---- RAM ----
     try:

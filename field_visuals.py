@@ -159,7 +159,9 @@ def _steps(app):
 
 
 # =====================================================================================
-# RES — the frame box: bigger = sharper but tighter on 8GB VRAM + shorter max clip
+# RES — the frame box: bigger = sharper. Peak VRAM is bounded (SAFE_PX working-set cap),
+#       so higher res buys detail by SHRINKING the max clip/segment (more seams + time),
+#       NOT by using more peak memory -> the VRAM meter stays ~flat as res changes.
 # =====================================================================================
 def _res(app):
     # three fixed tiers (matches studio.py RES dict) drawn as boxes of increasing size, small -> big.
@@ -198,7 +200,9 @@ def _res(app):
                 lines.append(_c("dim", "  ↑ now ") + _c(ACCENT, s))
                 break
             col += box_width + 2
-    lines.append(_c("dim", "  bigger box = ") + _c(BAD, "more VRAM + shorter max clip"))
+    lines.append(_c("dim", "  bigger box = ") + _c(MID, "sharper") + _c("dim", " + ")
+                 + _c(BAD, "shorter max clip"))
+    lines.append(_c("dim", "  peak VRAM held ~flat (res trades ") + _c(WARN, "clip len") + _c("dim", ")"))
     return "\n".join(lines)
 
 
@@ -245,10 +249,20 @@ def _backend(app):
 # =====================================================================================
 def _seconds(app):
     seconds = _num(app, "seconds")
-    seg = _num(app, "seg", 2.5) or 2.5
-    n_shots = 1
-    if seconds is not None and seg > 0:
-        n_shots = max(1, int(seconds / seg + 0.9999))
+    # Use the REAL plan (same nseg + frame-grid quantization as the QUEUE RUN plan line and the CLIP
+    # gauge) so this schematic never disagrees with them. In single/auto-chain mode _plan ignores the
+    # SEG field (segments come from the SAFE_PX cap), which is exactly why the old ceil(seconds/seg)
+    # here diverged. Fall back to the rough estimate only if _plan is unavailable (fields mid-edit).
+    n_shots, actual_s = 1, seconds
+    try:
+        _W, _H, fps, total_frames, _sf, nseg, _chain = app._plan()
+        n_shots = max(1, int(nseg))
+        if fps:
+            actual_s = total_frames / float(fps)
+    except Exception:
+        seg = _num(app, "seg", 2.5) or 2.5
+        if seconds is not None and seg > 0:
+            n_shots = max(1, int(seconds / seg + 0.9999))
 
     MAXSHOTS = 6                            # A19: keep the chain row within a narrow panel
     shown = min(n_shots, MAXSHOTS)
@@ -261,8 +275,15 @@ def _seconds(app):
 
     lines = [row]
     if seconds is not None:
-        lines.append(_c("dim", "  ↑ now ") + _c(ACCENT, "%.3gs" % seconds)
-                      + _c("dim", "  ≈ %d shot%s chained" % (n_shots, "" if n_shots == 1 else "s")))
+        # round EXACTLY like the QUEUE RUN plan line (round(_,1)) so the two never disagree by a digit
+        req_r = round(float(seconds), 1)
+        s_txt = _c(ACCENT, "%ss" % req_r)
+        if actual_s is not None:
+            act_r = round(float(actual_s), 1)
+            if abs(act_r - req_r) >= 0.05:       # frame-grid rounded the request -> show req → actual
+                s_txt = _c(ACCENT, "%ss" % req_r) + _c("dim", " → ") + _c(ACCENT, "%ss" % act_r)
+        lines.append(_c("dim", "  ↑ now ") + s_txt
+                      + _c("dim", "  ·  %d shot%s" % (n_shots, "" if n_shots == 1 else "s")))
     lines.append(_c("dim", "  each shot = one SEGMENT pass, glued at the tails"))
     lines.append(_c("dim", "  longer = more shots = more ") + _c(WARN, "TIME") + _c("dim", ", not more VRAM"))
     return "\n".join(lines)
