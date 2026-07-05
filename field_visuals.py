@@ -24,6 +24,8 @@ PALETTE (green-phosphor, matches studio.py's Rich markup tags):
   [#ffcf5c] warning/amber    [#ff6d6d] bad/fried/red   [dim] muted caption
 """
 
+import re
+
 # ---- palette handles (keep the hex in ONE place so a Sonnet-authored visual stays on-brand) ----
 ACCENT = "#6dffab"   # bright — highlights, current-value markers
 CLEAN  = "#9dffce"   # the "good / clean" end of a scale
@@ -233,8 +235,8 @@ def _backend(app):
     for key, name, tag, _pos, color in opts:
         tick = _c(ACCENT, "● ") if key == backend else "  "
         legend.append(tick + _c(color, name) + _c("dim", " (%s)" % tag))
-    lines.append("  " + "   ".join(legend[:2]))
-    lines.append("  " + legend[2])
+    for lg in legend:                       # A19: one item per line -> fits narrow panels
+        lines.append("  " + lg)
     return "\n".join(lines)
 
 
@@ -248,7 +250,7 @@ def _seconds(app):
     if seconds is not None and seg > 0:
         n_shots = max(1, int(seconds / seg + 0.9999))
 
-    MAXSHOTS = 8
+    MAXSHOTS = 6                            # A19: keep the chain row within a narrow panel
     shown = min(n_shots, MAXSHOTS)
     shots = []
     for i in range(shown):
@@ -360,8 +362,8 @@ def _cond_strength(app):
         else:
             bar.append(_c(CLEAN, "█"))
     bar_str = "".join(bar)
-    labels = _c(BAD, "drifts/changes freely") + "   " + _c(CLEAN, "sticks tight (can stall)")
-    scale = _c("dim", "0.0      0.4      0.6      0.8     1.0  (CONTINUITY)")
+    labels = _c(BAD, "drifts freely") + "   " + _c(CLEAN, "sticks tight (can stall)")
+    scale = _c("dim", "0.0      0.4      0.6      0.8     1.0  (0-1)")
 
     lines = ["  " + bar_str]
     val = _num(app, "cond_strength")
@@ -400,15 +402,15 @@ def _steadiness(app):
         marker[pos] = _c(ACCENT, "▲") if key == steadiness else _c(color, "·")
 
     lines = ["  " + bar, "  " + "".join(marker)]
-    ruler = _c("dim", "lots of motion" + " " * 12 + "gentle" + " " * 10 + "locked-off")
+    ruler = _c("dim", "lots of motion" + " " * 5 + "gentle" + " " * 8 + "locked-off")
     lines.append("  " + ruler)
 
     legend = []
     for key, name, tag, _pos, color in opts:
         tick = _c(ACCENT, "● ") if key == steadiness else "  "
         legend.append(tick + _c(color, name) + _c("dim", " (%s)" % tag))
-    lines.append("  " + legend[0])
-    lines.append("  " + legend[1] + "   " + legend[2])
+    for lg in legend:                       # A19: one item per line -> fits narrow panels
+        lines.append("  " + lg)
     return "\n".join(lines)
 
 
@@ -538,11 +540,84 @@ VISUALS = {
 }
 
 
-def render(field_id, app):
+# =====================================================================================
+# A19: markup-safe width fitting — word-wrap long PROSE caption lines so a schematic never
+# overflows its panel. Column-aligned art (bars / scale ticks / rulers / legends, which use
+# runs of >=3 spaces to line up) is left UNTOUCHED so wrapping can't break the alignment.
+# =====================================================================================
+# Match ONLY real color tags ([#rrggbb] / [dim] / their /closers). Literal brackets in the art
+# (the "[███]" shot boxes, "[◆]" chain nodes, "[?]") are NOT tags -> left as plain text.
+_TAGRE = re.compile(r"(\[/?(?:#[0-9A-Fa-f]{6}|[a-z][a-z0-9_]*)\])")
+# glyphs that mean "this line is column-aligned art" (bars, boxes, markers, chains) -> never wrap
+_ART = set("░▒▓█▉│└┌┐┘─▲▶◀◆◇◈○●↑[]")
+
+
+def _vis_runs(s):
+    """Resolve a Rich-markup string into visible (color|None, text) runs (color = active tag)."""
+    stack, out = [], []
+    for tok in _TAGRE.split(s):
+        if not tok:
+            continue
+        if tok[0] == "[" and tok[-1] == "]":
+            if tok[1:2] == "/":
+                if stack:
+                    stack.pop()
+            else:
+                stack.append(tok[1:-1])
+        else:
+            out.append((stack[-1] if stack else None, tok))
+    return out
+
+
+def _vis_len(s):
+    return sum(len(t) for _, t in _vis_runs(s))
+
+
+def _is_prose(s):
+    """Flowing prose (wrap-safe) vs column-aligned art. A run of 3+ spaces (scale ticks, rulers,
+    legends) OR any bar/box/marker glyph means it's alignment-locked art -> do not touch."""
+    plain = "".join(t for _, t in _vis_runs(s))
+    if "   " in plain:
+        return False
+    return not any(ch in _ART for ch in plain)
+
+
+def _fit_line(s, width):
+    """Word-wrap ONE prose line to <= `width` visible cols, markup-safe (color tags preserved,
+    reopened on each wrapped continuation which is indented 2). Aligned / short lines pass through."""
+    try:
+        if _vis_len(s) <= width or width < 12 or not _is_prose(s):
+            return s
+        toks = []
+        for color, text in _vis_runs(s):
+            for piece in re.split(r"(\s+)", text):
+                if piece:
+                    toks.append((color, piece))
+        out, cur, curlen = [], [], 0
+        for color, piece in toks:
+            if curlen == 0 and piece.isspace():
+                continue                                     # no leading space on a fresh line
+            if curlen + len(piece) > width and cur:
+                out.append("".join(_c(c, t) if c else t for c, t in cur))
+                cur, curlen = [(None, "  ")], 2              # 2-space continuation indent
+                if piece.isspace():
+                    continue
+            cur.append((color, piece))
+            curlen += len(piece)
+        if cur:
+            out.append("".join(_c(c, t) if c else t for c, t in cur))
+        return "\n".join(out)
+    except Exception:
+        return s
+
+
+def render(field_id, app, width=None):
     """Return the schematic STRING for `field_id`, or None if there is no visual (or it failed).
 
-    Defensive by contract: a render_fn that raises degrades to None (text-only help), so a bad
-    visual can never crash the NEW RUN form.
+    `width` = the panel's content width in cols (studio may pass its measurement); long prose
+    caption lines are word-wrapped to fit so they never overflow the panel. Defaults to 48 (the
+    module's documented target) when unknown. Defensive by contract: a render_fn that raises
+    degrades to None (text-only help), so a bad visual can never crash the NEW RUN form.
     """
     fn = VISUALS.get(field_id)
     if fn is None:
@@ -553,4 +628,9 @@ def render(field_id, app):
         return None
     if not out or not str(out).strip():
         return None
+    try:
+        w = int(width) if (width and int(width) >= 24) else 48
+        out = "\n".join(_fit_line(ln, w) for ln in out.split("\n"))
+    except Exception:
+        pass
     return out
