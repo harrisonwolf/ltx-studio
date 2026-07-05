@@ -150,6 +150,10 @@ try:
 except Exception:
     style_presets = None
 try:
+    import sounds   # event sound-effect harness (run_done, …) — additive, degrades to None
+except Exception:
+    sounds = None
+try:
     import readout   # T22: global READOUT meter strip — additive, degrades to None
 except Exception:
     readout = None
@@ -1395,15 +1399,16 @@ class ReplicateScreen(ModalScreen):
     """
     BINDINGS = [("escape", "close", "Close")]
 
-    def __init__(self, summary):
+    def __init__(self, summary, subtitle=None):
         super().__init__()
         self.summary = summary
+        self.subtitle = subtitle or (
+            f"re-run '{summary}' N times with random seeds — probes the seed noise floor.")
 
     def compose(self) -> ComposeResult:
         with Vertical(id="rebox"):
             yield Static("×N  REPLICATE RUN", id="retitle")
-            yield Static(f"re-run '{self.summary}' N times with random seeds — probes the seed noise floor.",
-                         id="resub")
+            yield Static(self.subtitle, id="resub")
             yield Input(placeholder="N (2-5, default 3)", id="re_n")
             with Horizontal(classes="crow"):
                 yield Button("×N REPLICATE", id="re_ok")
@@ -1612,6 +1617,9 @@ class Studio(App):
                         yield field("RESERVE (GB)", Select([("0.5 GB", "0.5"), ("1.0 GB (default)", "1.0"),
                                                              ("1.5 GB", "1.5"), ("2.0 GB", "2.0")],
                                                             value="1.0", id="vram_reserve", allow_blank=False), "vram_reserve")
+                        yield field("SOUND", Select([("on", "on"), ("off", "off")],
+                                                         value="on", id="sound_enabled", allow_blank=False), "sound_enabled")
+                        yield Button("▶ TEST SOUND", id="sndtestbtn")
                         yield Static("▌ ADVANCED", classes="sec")
                         yield field("GUIDANCE RESCALE", Select([("off", "off"), ("0.5", "0.5"), ("0.7", "0.7")],
                                                                value="off", id="cfg_rescale", allow_blank=False), "cfg_rescale")
@@ -1631,6 +1639,11 @@ class Studio(App):
                         yield Button("✎ CONSULT THE DIRECTOR", id="consultbtn")
                         yield Button("⌨ CHAT WITH THE MODEL", id="chatbtn")
                         yield Button("▶ QUEUE RUN", id="queuebtn")
+                        _rep = Button("×N REPLICATE", id="newreplbtn")
+                        _rep.tooltip = ("Queue this exact config N times (2-5) with different random seeds "
+                                        "— probes the seed noise floor. The runs group as a replicate set "
+                                        "in the QUEUE / ARCHIVE.")
+                        yield _rep
                         _bab = Button("⇄ BLIND A/B", id="blindabbtn")
                         _bab.tooltip = plain_help("blind_ab")
                         yield _bab
@@ -1658,7 +1671,7 @@ class Studio(App):
                                 yield Button("▶ RUN BLIND A/B", id="blind_run")
                                 yield Button("✕ CANCEL", id="blind_cancel")
             with TabPane("≡ QUEUE", id="tab-queue"):
-                yield DataTable(id="qtable", cursor_type="row")
+                yield DataTable(id="qtable", cursor_type="row", show_header=False)
                 with Horizontal(classes="actions"):
                     yield Button("▶ RESUME", id="qresumebtn")
                     yield Button("↑ PROMOTE", id="promotebtn")
@@ -1728,7 +1741,7 @@ class Studio(App):
         for t in EXTRA_THEMES:
             self.register_theme(t)
         self.theme = "pipboy"
-        self.query_one("#qtable", DataTable).add_columns("id", "title", "mode", "status")
+        self.query_one("#qtable", DataTable).add_column("queue", key="card")   # single card column (header hidden)
         self.query_one("#atable", DataTable).add_columns("id", "title", "status", "started", "finished", "gen", "dur")
         self.query_one("#reltable", DataTable).add_columns("id", "relation", "status", "output")
         self.query_one("#livelog", RichLog).border_title = "« RAW TERMINAL »"
@@ -1749,6 +1762,12 @@ class Studio(App):
             self.mgr.vram_reserve_gb = reserve
         except Exception:
             pass
+        try:      # sound/alert prefs: reflect the master toggle + load the stall threshold (default ON / 240s)
+            _snd = load_studio_config().get("sounds", {}) or {}
+            self.query_one("#sound_enabled", Select).value = "on" if _snd.get("enabled", True) else "off"
+            self._stall_secs = float(_snd.get("stall_secs", 240) or 240)
+        except Exception:
+            self._stall_secs = 240.0
         # T22: readout meter strip — exposed configs (studio_config.json), both default ON
         try:
             _rc = load_studio_config()
@@ -1874,6 +1893,16 @@ class Studio(App):
                 reserve = float(event.select.value)
                 self.mgr.vram_reserve_gb = reserve
                 save_studio_config({**load_studio_config(), "vram_reserve_gb": reserve})
+            except Exception:
+                pass
+        elif sid == "sound_enabled":   # persist the run-done sound toggle to studio_config.json "sounds"
+            try:
+                _cfg = load_studio_config()
+                _snd = dict(_cfg.get("sounds") or {})
+                _snd["enabled"] = (event.select.value == "on")
+                save_studio_config({**_cfg, "sounds": _snd})
+                self.query_one("#newinfo", Static).update(
+                    "[#9dffce]event sounds: %s[/#9dffce]" % event.select.value)
             except Exception:
                 pass
         self.update_est()
@@ -2129,6 +2158,71 @@ class Studio(App):
                 pass
         setattr(self, sig_attr, sig)
 
+    def _queue_card(self, job, status, status_col, w):
+        """One queued/suspended job as a decorated box-art card (rich markup, fixed 7-line height
+        incl a trailing gap so DataTable rows stay uniform). Purely cosmetic — selection + every
+        queue action still key off the ROW (job id), never this card text."""
+        p = job.params or {}
+        inner = max(20, w - 4)
+        def trunc(s, n):
+            s = str(s)
+            return s if len(s) <= n else (s[:max(0, n - 1)] + "…")
+        def pad(s, n):
+            s = trunc(s, n)
+            return s + " " * (n - len(s))
+        glyph, label = _run_kind(job)
+        badge = "%s %s" % (glyph, label.upper())
+        bcol = ("#ffcf5c" if (label == "replicate" or label.startswith("pair") or label == "blind pair")
+                else "#7fd0ff" if label == "enhance" else "#6dffab")
+        gap = max(1, inner - len(badge) - len(status))
+        header = "[%s]%s[/%s]%s[%s]%s[/%s]" % (bcol, badge, bcol, " " * gap, status_col, status, status_col)
+        title = job.title or p.get("prompt", "") or job.id
+        parms = "%s · %s×%s · %sst · cfg%s · %ss · seed %s" % (
+            p.get("backend", "ltx"), p.get("width", "?"), p.get("height", "?"),
+            p.get("steps", "?"), p.get("cfg", "?"), p.get("seconds", "?"),
+            trunc(p.get("seed", "") or "rnd", 11))
+        B = "#2fae5f"
+        top = "[%s]╭%s╮[/%s]" % (B, "─" * (w - 2), B)
+        bot = "[%s]╰%s╯[/%s]" % (B, "─" * (w - 2), B)
+        body = [
+            "[%s]│[/%s] %s [%s]│[/%s]" % (B, B, header, B, B),
+            "[%s]│[/%s] [#d7ffe8]%s[/#d7ffe8] [%s]│[/%s]" % (B, B, pad(title, inner), B, B),
+            "[%s]│[/%s] [#4a9d6e]%s[/#4a9d6e] [%s]│[/%s]" % (B, B, pad(job.id, inner), B, B),
+            "[%s]│[/%s] [#5bbf83]%s[/#5bbf83] [%s]│[/%s]" % (B, B, pad(parms, inner), B, B),
+        ]
+        return "\n".join([top] + body + [bot, ""])
+
+    def _sync_queue_cards(self):
+        """QUEUE rendered as decorated cards — rebuilt only when content changes (cursor preserved by
+        key). Cosmetic redesign of the old 4-column table; row keys stay job ids, so _selected + every
+        queue action + on_data_table_row_highlighted keep working unchanged."""
+        m = self.mgr
+        items = [(j, "QUEUED · #%d" % (i + 1), "#6dffab") for i, j in enumerate(m.queued())]
+        items += [(j, "SUSPENDED · shot %s/%s" % (j.seg, j.nseg), "#ffcf5c") for j in m.suspended()]
+        t = self.query_one("#qtable", DataTable)
+        try:
+            w = int(t.content_size.width) - 4      # leave room for the DataTable cell padding + scrollbar
+        except Exception:
+            w = 0
+        w = max(48, min(96, w)) if (w and w > 0) else 72
+        sig = (w,) + tuple((j.id, _run_kind(j), st, str(j.params)) for (j, st, _c) in items)
+        if sig == getattr(self, "_qsig", None):
+            return
+        sel = None
+        try:
+            sel = t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value
+        except Exception:
+            pass
+        t.clear()
+        for (j, st, scol) in items:
+            t.add_row(Text.from_markup(self._queue_card(j, st, scol, w)), height=7, key=j.id)
+        if sel is not None:
+            try:
+                t.move_cursor(row=t.get_row_index(sel), animate=False)
+            except Exception:
+                pass
+        self._qsig = sig
+
     # ---------- live polling ----------
     def _meter(self):
         """Compact whole-studio status for the top-right corner — render / queue / director-on-CPU at
@@ -2150,6 +2244,51 @@ class Studio(App):
             seg += "  [#ffcf5c]✎CPU[/#ffcf5c]"
         return seg
 
+    def _alerts(self):
+        """Event sounds + stall-sentry, driven PURELY by observed studio state (never the run's own
+        finish code). run_done fires iff a NEW row appears in the ARCHIVE with status 'done'. run_stall
+        fires if the ACTIVE run shows no observable progress (phase/seg/step, or a fresh preview) for
+        STALL_SECS. Sets self._stall_note (a status-bar marker, shown even when sound is off).
+        Best-effort — never raises into the tick loop."""
+        m = self.mgr
+        self._stall_note = ""
+        # --- run_done: a NEW archive row. Baseline on the first pass so existing history is silent. ---
+        try:
+            arch = {j.id: j.status for j in m.archived()}
+            seen = getattr(self, "_arch_seen", None)
+            self._arch_seen = arch
+            if seen is not None:
+                if sounds is not None and any(jid not in seen and st == "done" for jid, st in arch.items()):
+                    sounds.play("run_done", REPO)      # one chime even if several rows land together
+        except Exception:
+            pass
+        # --- stall-sentry: active run wedged (no phase/seg/step change AND no fresh preview write). ---
+        try:
+            job = m.active()
+            if job is None:
+                self._stall_state = None
+                return
+            sig = (job.id, job.phase, job.seg, job.step)
+            try:
+                pv = getattr(job, "preview", None)
+                pmt = os.path.getmtime(pv) if pv and os.path.exists(pv) else 0.0
+            except Exception:
+                pmt = 0.0
+            now = time.monotonic()
+            prev = getattr(self, "_stall_state", None)
+            if prev is None or prev["sig"] != sig or prev["pmt"] != pmt:
+                self._stall_state = {"sig": sig, "pmt": pmt, "since": now, "fired": False}
+                return
+            idle = now - prev["since"]
+            if idle >= getattr(self, "_stall_secs", 240.0):
+                self._stall_note = "    [#ff6d6d]⚠ STALL? no progress %dm[/#ff6d6d]" % int(idle // 60)
+                if not prev["fired"]:
+                    prev["fired"] = True
+                    if sounds is not None:
+                        sounds.play("run_stall", REPO)
+        except Exception:
+            pass
+
     def tick(self):
         m = self.mgr
         self._beat += 1
@@ -2164,21 +2303,15 @@ class Studio(App):
         if m.active() is not None and self.consult.alive() and not self.consult.cpu_mode:
             self.consult.kill()        # reclaim the GPU — but NOT a CPU-bound consult (it isn't on the GPU)
         q, a, d, s = m.counts()
+        self._alerts()      # run-done sound (archive-row-added) + stall-sentry; sets self._stall_note
         st = "PAUSED" if m.paused else ("RUNNING" if a else "idle")
         self.query_one("#status", Static).update(
-            f"  ▌ QUEUED {q}    ▶ {st}    ✓ DONE {d}    ▽ SUSP {s}     │     {self._gpu_str}")
+            f"  ▌ QUEUED {q}    ▶ {st}    ✓ DONE {d}    ▽ SUSP {s}     │     {self._gpu_str}{self._stall_note}")
         self.query_one("#statusmeter", Static).update(self._meter())
         # queue + archive tables — rebuilt only when content changes (cursor stays put; no rubber-band)
-        def _qkind(j):
-            g, lbl = _run_kind(j)
-            return f"{g} {lbl}"
-        qrows = [(j.id, j.id, (j.title or j.params.get("prompt", ""))[:34], _qkind(j), "[#6dffab]QUEUED[/#6dffab]")
-                 for j in m.queued()]
-        qrows += [(j.id, j.id, (j.title or j.params.get("prompt", ""))[:34], _qkind(j),
-                   f"[#ffcf5c]SUSPENDED[/#ffcf5c] @ shot {j.seg}/{j.nseg}") for j in m.suspended()]
         _dt = lambda ts: time.strftime("%m-%d %H:%M", time.localtime(ts)) if ts else "—"
         arows = [(j.id, j.id, (("▲ " if j.kind == "enhance" and not (j.title or "").startswith("▲") else "") + (j.title or ""))[:30], j.status, _dt(j.started), _dt(j.finished), fmt(j.elapsed()), _vidlen(j)) for j in m.archived()]
-        self._sync_table("#qtable", qrows, "_qsig")
+        self._sync_queue_cards()                     # QUEUE as decorated cards (replaces the old 4-column table)
         self._sync_table("#atable", arows, "_asig")
         # live
         job = m.active()
@@ -2617,7 +2750,13 @@ class Studio(App):
                     + (SEAM * nseam if director else 0))
             mode = "DIRECTOR" if director else ("auto-chained" if chain else "single clip")
             warn = "  [b]!! lower resolution[/b]" if seg_frames < 17 else ""
-            est.update(f"[#ffcf5c]plan: {nseg} shot(s) x {round(seg_frames / fps, 1)}s = {round(total_frames / fps, 1)}s  ::  {mode}  ::  ~{fmt(secs)}{warn}[/#ffcf5c]")
+            actual_s, seg_s = round(total_frames / fps, 1), round(seg_frames / fps, 1)
+            try:
+                req_s = round(float(self.v("seconds")), 1)
+            except Exception:
+                req_s = None
+            asked = f" (asked {req_s}s)" if (req_s is not None and abs(req_s - actual_s) >= 0.05) else ""
+            est.update(f"[#ffcf5c]plan: {nseg} shot(s) · {seg_s}s/seg · {actual_s}s{asked}  ::  {mode}  ::  ~{fmt(secs)}{warn}[/#ffcf5c]")
             self._update_readout(secs, (W, H, fps, total_frames, seg_frames, nseg, chain))   # T22
         except Exception:
             est.update("[dim]plan: enter numbers[/dim]")
@@ -2689,10 +2828,13 @@ class Studio(App):
         t = self.query_one(table_id, DataTable)
         if t.row_count == 0:
             return None
-        try:
-            return t.get_row_at(t.cursor_row)[0]
+        try:                                    # the row KEY is the job id — robust to single-cell card rows
+            return t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value
         except Exception:
-            return None
+            try:
+                return t.get_row_at(t.cursor_row)[0]
+            except Exception:
+                return None
 
     def _play_job(self, jid):
         """Open a job's output in the system player. Shared by ▶ PLAY (#atable) and
@@ -2711,9 +2853,11 @@ class Studio(App):
                 "[#ffcf5c]Couldn't open a player. Paste this into Explorer:[/#ffcf5c]\n  "
                 + self._winpath(abs_out))
 
-    def _queue_current_run(self, over=None):
-        """Build the NEW RUN form into a job and enqueue it. Shared by QUEUE RUN + RE-ROLL.
+    def _queue_current_run(self, over=None, skip_budget=False):
+        """Build the NEW RUN form into a job and enqueue it. Shared by QUEUE RUN + RE-ROLL + ×N REPLICATE.
         over: optional field-id snapshot (blind-pair) built WITHOUT mutating the live form.
+        skip_budget: skip the (nvidia-smi) GPU-budget probe — the ×N loop passes this on every run
+        AFTER the first so a burst of N enqueues fires ONE probe, not N, on this Blackwell-sensitive box.
         Returns the queued Job, or None if blocked (empty prompt / GPU budget)."""
         if not (self.v("prompt", over) or "").strip():
             self.query_one("#newinfo", Static).update("[#ffcf5c]Enter a PROMPT first.[/#ffcf5c]")
@@ -2726,7 +2870,7 @@ class Studio(App):
             return None
         # GPU-budget gate: budget_ok() runs nvidia-smi, so ONLY probe when the board is idle
         # (nvidia-smi during live CUDA crashes the WSL VM). An active run -> this just queues behind it.
-        if not self._cuda_busy():
+        if not skip_budget and not self._cuda_busy():
             cost = gpu_budget.GPU_COST.get(kind, 5500)
             ok, free = gpu_budget.budget_ok(cost)
             if not ok:
@@ -2739,6 +2883,46 @@ class Studio(App):
         self.query_one(TabbedContent).active = "tab-queue"
         self.query_one("#newinfo", Static).update(f"[#9dffce]Queued {j.id}[/#9dffce]\n{title}")
         return j
+
+    def _new_run_replicate(self):
+        """×N REPLICATE from the NEW RUN form: queue the CURRENT config N times (2-5), each with a fresh
+        random seed — probes the seed noise floor without needing a first run + ARCHIVE round-trip. Built
+        from a form snapshot via _queue_current_run(over=...) so the live widgets are never mutated; the
+        first run is the set source and the rest are tagged replicate_set_id=source.id, so they group in
+        the QUEUE/ARCHIVE exactly like the ARCHIVE ×N path (_related_jobs / _run_kind)."""
+        if not (self.v("prompt") or "").strip():
+            self.query_one("#newinfo", Static).update("[#ffcf5c]Enter a PROMPT first.[/#ffcf5c]")
+            return
+        base_cfg = self._current_form_config()
+
+        def _do(res):
+            if not res:
+                return
+            try:
+                n = max(2, min(5, int((res.get("n") or "3").strip() or "3")))
+            except Exception:
+                n = 3
+            set_id, queued = None, []
+            for _ in range(n):
+                over = dict(base_cfg)
+                over["seed"] = str(random.randint(1, 2**31 - 1))   # fresh seed per replicate
+                # one GPU-budget probe (nvidia-smi) for the whole set: the FIRST run probes, the rest skip
+                j = self._queue_current_run(over=over, skip_budget=(set_id is not None))
+                if not j:                       # blocked (empty prompt / GPU budget) -> stop; msg already shown
+                    break
+                if set_id is None:
+                    set_id = j.id               # first run is the set source (no replicate_set_id)
+                else:
+                    j.params["replicate_set_id"] = set_id
+                    j.save()
+                queued.append(j.id)
+            if queued:
+                self.query_one("#newinfo", Static).update(
+                    f"[#9dffce]×{len(queued)} replicate set queued (random seeds): {', '.join(queued)}.[/#9dffce]")
+
+        _summ = (base_cfg.get("prompt") or "this run")[:40]
+        self.push_screen(ReplicateScreen(
+            _summ, subtitle=f"queue '{_summ}' N times with different random seeds — probes the seed noise floor."), _do)
 
     # ---------- ⇄ BLIND A/B (fresh, blind, randomized variable-isolation pair) ----------
     # Every run-affecting field is varyable. 'checkpoint' is virtual (ltx_variant none<->distilled, LTX-only).
@@ -3091,6 +3275,11 @@ class Studio(App):
             return
         if b == "queuebtn":
             self._queue_current_run()
+        elif b == "newreplbtn":
+            self._new_run_replicate()
+        elif b == "sndtestbtn":     # preview the run-done sound — bypasses the SOUND toggle so it always plays
+            msg = sounds.preview("run_done", REPO) if sounds is not None else "sound module unavailable"
+            self.query_one("#newinfo", Static).update("[#9dffce]♪ %s[/#9dffce]" % msg)
         elif b == "blindabbtn":
             # TOGGLE the inline builder in the right region (no modal). Opening does NOT require a prompt
             # — 'prompt' is itself a varyable field, so the base prompt may legitimately be empty here;
