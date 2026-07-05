@@ -858,12 +858,17 @@ def main():
     if args.backend == "wan-turbo":
         # the distill runs few-step; clamp HERE so [[STEP]] totals, the decode-phase flip, and the
         # per-step preview gates (all driven by args.steps) agree with what gen() actually runs.
+        if args.steps > 8:   # A18: surface the override rather than silently swallowing it
+            print("note: wan-turbo is a 4-step distill -- clamping STEPS %d -> 8" % args.steps, flush=True)
         args.steps = min(args.steps, 8)
     if args.ltx_variant == "distilled":
         if args.backend != "ltx":
             print("note: --ltx_variant is LTX-only; ignored for backend=%s" % args.backend, flush=True)
         else:
             # same reasoning as wan-turbo above: CFG-distilled + few-step.
+            if args.steps > 8 or args.cfg != 1.0:   # A18: surface the override
+                print("note: --ltx_variant distilled is CFG-distilled few-step -- forcing STEPS<=8 "
+                      "(was %d) and CFG=1.0 (was %s)" % (args.steps, args.cfg), flush=True)
             args.steps = min(args.steps, 8)
             args.cfg = 1.0
     if (args.latent_adain > 0 or args.latent_fuse) and not args.latent_chain:

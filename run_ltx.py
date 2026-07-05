@@ -40,6 +40,9 @@ args = ap.parse_args()
 # per-step preview gates, and the decode-phase flip (all driven by args.steps) agree with what runs.
 _distilled = getattr(args, "ltx_variant", None) == "distilled"
 if _distilled:
+    if args.steps > 8 or args.cfg != 1.0:   # A18: surface the override rather than silently swallowing it
+        print("note: --ltx_variant distilled is CFG-distilled few-step -- forcing STEPS<=8 "
+              "(was %d) and CFG=1.0 (was %s)" % (args.steps, args.cfg), flush=True)
     args.steps = min(args.steps, 8)
     args.cfg = 1.0
 
