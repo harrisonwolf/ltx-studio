@@ -1,0 +1,33 @@
+# ── model weights & caches (external; never commit — multi-GB) ──
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.gguf
+hf_download/
+models/
+.cache/
+
+# ── runtime output & telemetry ──
+runs/
+outputs/
+*.mp4
+*.webm
+*.err
+consult_daemon.*
+
+# ── python ──
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+
+# ── editor / os ──
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

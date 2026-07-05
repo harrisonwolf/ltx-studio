@@ -1,0 +1,25 @@
+# LTX Studio dependencies.
+#
+# Targets Python 3.10 and open-weights video-diffusion backends running locally.
+# Model weights are NOT listed here — they are fetched on first run via huggingface_hub.
+
+# ── TUI + orchestration (the studio itself) ──
+textual>=0.80
+rich
+numpy
+Pillow
+
+# ── diffusion backends: LTX-Video 2B, Wan 2.1-VACE ──
+# NOTE: on Blackwell / RTX 50-series (sm_120) install a CUDA 12.8 torch build first:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+torch>=2.4
+diffusers>=0.34
+transformers>=4.44
+accelerate
+safetensors
+sentencepiece
+huggingface_hub
+imageio-ffmpeg          # mp4 export
+
+# ── optional: Qwen-VL sidecars for auto-prompting / shot planning ──
+qwen-vl-utils
