@@ -144,6 +144,11 @@ try:
     import field_visuals   # BF6-style visual tooltips for NEW RUN fields — additive, degrades to None
 except Exception:
     field_visuals = None
+
+try:
+    import style_presets   # T27: named ANCHOR-word style presets — additive, degrades to None
+except Exception:
+    style_presets = None
 try:
     import readout   # T22: global READOUT meter strip — additive, degrades to None
 except Exception:
@@ -1537,6 +1542,8 @@ class Studio(App):
     #livebar { height: 1; background: #0a1c10; color: #6dffab; content-align: left middle; padding: 0 1; }
     #inspectpanel { border: round #1c7a42; background: #08160d; height: 1fr; padding: 0 1; }
     #inspectinfo { color: #34d977; }
+    #qinspectpanel { border: round #1c7a42; background: #08160d; height: 1fr; padding: 0 1; }
+    #qinspect { color: #34d977; }
     #inspectlog { display: none; }
     #reltable { height: 8; margin-top: 1; display: none; }
     #playchildbtn { display: none; margin-top: 1; }
@@ -1568,6 +1575,10 @@ class Studio(App):
         self._asig = None
         self._insp_jid = None
         self._insp_view = "inspect"     # which archive view #inspectinfo shows
+        self._smart_step_wall = None    # T25: wall-clock the step counter last advanced
+        self._smart_step_key = None     # (job.id, seg, step) the wall-clock above belongs to
+        self._smart_max = 0             # T25: latched running max % (display monotonicity)
+        self._smart_max_id = None       # job.id the latched max belongs to
         self._beat = 0
         self._gpu_str = ""
         self.consult = ConsultDaemon()
@@ -1587,6 +1598,9 @@ class Studio(App):
                         yield Static("▌ CHAINING", classes="sec")
                         yield field("SEGMENT s", Input(value="3", id="seg"))
                         yield field("CONTINUITY", Input(value="1.0", id="cond_strength"))
+                        if style_presets is not None:   # T27: pick a preset -> its words APPEND to ANCHORS below
+                            yield field("STYLE", Select([(n, n) for n in style_presets.load_presets(REPO)],
+                                                        id="style_preset", prompt="+ add a style…", allow_blank=True))
                         yield field("ANCHORS", TextArea("", id="anchors", soft_wrap=True, tab_behavior="focus", classes="ta"))
                         yield Static("▌ DIRECTOR", classes="sec")
                         yield field("DIRECTIVE", TextArea("", id="directive", soft_wrap=True, tab_behavior="focus", classes="ta"))
@@ -1648,7 +1662,11 @@ class Studio(App):
                 with Horizontal(classes="actions"):
                     yield Button("▶ RESUME", id="qresumebtn")
                     yield Button("↑ PROMOTE", id="promotebtn")
+                    yield Button("» INSPECT", id="qinspectbtn")
+                    yield Button("⧉ CLONE", id="qclonebtn")
                     yield Button("× REMOVE SELECTED", id="removebtn")
+                with VerticalScroll(id="qinspectpanel"):
+                    yield Static("[dim]Select a queued run above to see its full config.[/dim]", id="qinspect")
             with TabPane("▶ LIVE", id="tab-live"):
                 yield Static("no active run", id="livehdr")
                 yield Static("", id="livephase")
@@ -1716,6 +1734,7 @@ class Studio(App):
         self.query_one("#livelog", RichLog).border_title = "« RAW TERMINAL »"
         self.query_one("#inspectlog", RichLog).border_title = "« RAW TERMINAL »"
         self.query_one("#inspectpanel").border_title = "« RUN DETAILS »"
+        self.query_one("#qinspectpanel").border_title = "« QUEUED RUN DETAILS »"
         self.query_one("#preview", Static).border_title = "« LAST FRAME »"
         self.query_one("#dirnotes", RichLog).border_title = "« DIRECTOR'S NOTES »"
         self.query_one("#pacestrip").border_title = "« PACE »"
@@ -1836,6 +1855,18 @@ class Studio(App):
             self._blind_render_clones(None if val in (None, Select.BLANK) else val)
             self.query_one("#blindmsg", Static).update("")
             return
+        if sid == "style_preset":   # T27: APPEND the picked preset's words to ANCHORS, then reset the picker
+            if style_presets is None or event.value in (None, Select.BLANK):
+                return                                       # BLANK reset fires this again -> ignored (no loop)
+            try:
+                words = style_presets.load_presets(REPO).get(event.value, [])
+                ta = self.query_one("#anchors", TextArea)
+                ta.load_text(style_presets.apply_preset(ta.text, words))
+                event.select.value = Select.BLANK            # act as an "add" picker, not a persistent choice
+                self.query_one("#newinfo", Static).update("[#9dffce]+ style: %s[/#9dffce]" % event.value)
+            except Exception:
+                pass
+            return
         if sid == "backend":   # ONLY a backend change may retune cfg/steps;
             self._sync_cfg_default()                         # RES/MODE/etc must never clobber tuned dials
         elif sid == "vram_reserve":   # T14: persist immediately + apply to the NEXT run this manager launches
@@ -1948,6 +1979,134 @@ class Studio(App):
             return f"Painting shot {job.seg} of {nseg} — step {job.step} of {nstep}." + ("  Almost done with this shot." if near_end else "")
         return "Working…"
 
+    # ---------- T25: unified smart progress (expected-wall-time model) ----------
+    # Ordered meta-phases the bar sweeps through, in order. Each raw engine phase maps to one.
+    _SMART_PHASES = ("load", "warm", "gen", "decode", "save")
+    _PHASE_MAP = {"importing": "load", "loading": "load", "offload": "load", "loading_vlm": "load",
+                  "warmup": "warm", "redirecting": "gen", "generating": "gen",
+                  "decoding": "decode", "saving": "save"}
+
+    def _run_budget(self, job):
+        """Estimated wall-seconds for THIS run's config, split per meta-phase for the WHOLE run.
+        Mirrors update_est's per-phase terms (LOAD/WARM/gen-per-step/DECODE) so the bar can be
+        allocated by expected duration. Reads job.params (fixed at build) -> no form dependency.
+        Fully guarded; returns a positive-total dict on any failure so callers never divide by 0."""
+        try:
+            p = job.params or {}
+            backend = (p.get("backend") or "ltx")
+            W, H = RES.get(res_key(p.get("res")), (704, 480))
+            steps = int(float(p.get("steps") or job.nstep or 20))
+            if backend == "wan-turbo":
+                steps = min(steps, 8)
+            nseg = int(job.nseg or int(p.get("nseg") or 1) or 1)
+            seg_frames = int(float(p.get("seg_frames") or 0) or 0)
+            px = (W * H) / (512 * 320)
+            director = (p.get("mode") or job.kind) == "director"
+            if backend in ("wan", "wan-turbo"):
+                LOAD, COEF, WARM, DECODE, SEAM, SEG_REF = 40, 4.8, 220, 38, 90, 29
+            else:
+                LOAD, COEF, WARM, DECODE, SEAM, SEG_REF = 150, 1.5, 70, 20, 90, 49
+            ff = (seg_frames / SEG_REF) if seg_frames else 1.0
+            nseam = max(0, nseg - 1)
+            if director and (p.get("steadiness") or "hold") != "evolve":
+                nseam = -(-nseam // 3)
+            gen = steps * COEF * px * ff * nseg + (SEAM * nseam if director else 0)
+            decode = DECODE * ff * nseg
+            b = {"load": float(LOAD), "warm": float(WARM) * nseg, "gen": float(gen),
+                 "decode": float(decode), "save": max(6.0, 0.15 * decode)}
+        except Exception:
+            b = {"load": 60.0, "warm": 30.0, "gen": 120.0, "decode": 30.0, "save": 8.0}
+        for k in self._SMART_PHASES:
+            if not b.get(k) or b[k] <= 0:
+                b[k] = 1.0
+        return b
+
+    def _smart_pct(self, job):
+        """Expected-wall-time overall %: (est-time of completed meta-phases + current-phase
+        fraction * current-phase est) / total-est. WITHIN gen it advances by (step+intra)/nstep
+        using the measured step rate; WITHIN decode/save it creeps by elapsed/est. Capped < 100
+        until the run is actually done (status done/archived) -> then 100. tick() also latches the
+        running max so display is monotonic. Returns int in [0, 100]."""
+        try:
+            status = getattr(job, "status", "") or ""
+            if status in ("done", "archived", "finished", "complete"):
+                return 100
+            budget = self._run_budget(job)
+            total = sum(budget[k] for k in self._SMART_PHASES) or 1.0
+            raw_phase = getattr(job, "phase", "") or ""
+            meta = self._PHASE_MAP.get(raw_phase, "")
+            # No phase marker yet -> fall back to load (pure startup) or gen (steps seen).
+            if not meta:
+                meta = "gen" if (job.nstep and getattr(job, "saw_step", False)) else "load"
+            # cumulative est of the meta-phases strictly BEFORE the current one
+            before = 0.0
+            for k in self._SMART_PHASES:
+                if k == meta:
+                    break
+                before += budget[k]
+            frac = max(0.0, min(0.98, self._phase_fraction(job, meta, budget)))
+            pct = 100.0 * (before + frac * budget[meta]) / total
+            return int(max(0.0, min(99.0, pct)))   # never reach/exceed 100 until truly complete
+        except Exception:
+            try:
+                return int(job.pct())
+            except Exception:
+                return 0
+
+    def _avg_step_seconds(self, job):
+        """seconds/step from the EXISTING measured step rate (inverse of the PACE 'rate steps/s':
+        timed_steps / elapsed_since_first_step). Falls back to the config estimate (gen budget /
+        total steps) when no step has been timed yet. Returns a positive float, or None."""
+        try:
+            first_ts = getattr(job, "first_step_ts", None)
+            nstep = job.nstep or 0
+            if first_ts and (job.step or 0) > 0 and nstep:
+                base = getattr(job, "first_step_seg", 1) or 1
+                timed = (job.seg - base) * nstep + job.step
+                if timed > 0:
+                    return (time.time() - first_ts) / timed
+            # fallback: gen-phase estimate / total steps
+            if nstep:
+                b = self._run_budget(job)
+                nseg = max(job.nseg or 1, job.seg or 1)
+                tot = nseg * nstep
+                if tot > 0 and b.get("gen"):
+                    return b["gen"] / tot
+        except Exception:
+            return None
+        return None
+
+    def _phase_fraction(self, job, meta, budget):
+        """Fraction in [0, ~0.98] of the current meta-phase completed."""
+        now = time.time()
+        if meta == "gen":
+            nstep = job.nstep or 0
+            nseg = max(job.nseg or 1, job.seg or 1)
+            if not nstep or not nseg:
+                return 0.0
+            steps_done = (max(0, (job.seg or 1) - 1)) * nstep + (job.step or 0)
+            steps_total = nseg * nstep
+            # intra_step = clamp((now - last_step_ts) / avg_step_seconds, 0, 1), where
+            # avg_step_seconds = 1/rate (the SAME PACE "rate steps/s" calc). last_step_ts is the
+            # wall-clock the step counter last advanced (latched in tick as _smart_step_wall);
+            # if the rate isn't known yet, intra stays 0.
+            intra = 0.0
+            try:
+                avg = self._avg_step_seconds(job)               # seconds/step, or None
+                last = getattr(self, "_smart_step_wall", None)
+                if avg and avg > 0 and last:
+                    intra = (now - last) / avg
+            except Exception:
+                intra = 0.0
+            intra = max(0.0, min(1.0, intra))
+            return min(0.98, (steps_done + intra) / max(1, steps_total))
+        # load / warm / decode / save: no sub-steps -> creep by elapsed / est
+        t0 = getattr(job, "phase_started", None)
+        if not t0:
+            return 0.0
+        est = budget.get(meta, 1.0) or 1.0
+        return max(0.0, min(0.98, (now - t0) / est))
+
     def _sync_table(self, table_id, rows, sig_attr):
         """Rebuild a DataTable only when its content changed -> the cursor stays put (no rubber-band)
         and no wasted work every tick. rows = list of tuples (key, *cells)."""
@@ -2045,20 +2204,42 @@ class Studio(App):
             if self._live_id is not None:
                 self._live_id = None
                 self._preview_id = None
+            self._smart_step_wall = self._smart_step_key = None   # T25: reset smart-bar latches
+            self._smart_max, self._smart_max_id = 0, None
             return
         tag = "‖ PAUSED" if m.paused else "▶ RUNNING"
         kglyph, klabel = _run_kind(job)
         hdr.update(f"[b]{tag}[/b]   [#9dffce]{kglyph} {klabel}[/#9dffce]   {(job.title or job.params.get('prompt', ''))[:48]}")
         loading = job.is_loading() if hasattr(job, "is_loading") else False
+        # T25: latch the wall-clock the step counter last advanced (for intra-step interpolation),
+        # keyed to (job, seg, step) so it only updates on a real step change — never every tick.
+        try:
+            skey = (job.id, getattr(job, "seg", 0), getattr(job, "step", 0))
+            if skey != self._smart_step_key:
+                self._smart_step_key = skey
+                self._smart_step_wall = time.time()
+        except Exception:
+            pass
         if loading:
             over.update(total=max(1, getattr(job, "load_total", 0) or 1),
                         progress=getattr(job, "load_step", 0))
             self.query_one("#progtext", Static).update(
                 f"{getattr(job, 'load_step', 0)}/{getattr(job, 'load_total', 0)}   ·   {getattr(job, 'load_msg', '')}")
         else:
-            over.update(total=100, progress=job.pct())
+            # T25: expected-wall-time overall %, latched monotonic per run so it never steps back.
+            try:
+                sp = self._smart_pct(job)
+                if self._smart_max_id != job.id:
+                    self._smart_max, self._smart_max_id = 0, job.id
+                sp = self._smart_max = max(self._smart_max, sp)
+            except Exception:
+                sp = job.pct()
+            over.update(total=100, progress=sp)
+            # keep the "shot X of N · step Y of Z" text; overall % now reflects wall-time progress
+            _phase_hint = {"decoding": "  ·  decoding…", "saving": "  ·  saving…"}.get(
+                getattr(job, "phase", ""), "")
             self.query_one("#progtext", Static).update(
-                f"shot {job.seg} of {job.nseg}   ·   step {job.step} of {job.nstep}   ·   {job.pct()}% overall")
+                f"shot {job.seg} of {job.nseg}   ·   step {job.step} of {job.nstep}   ·   {sp}% overall{_phase_hint}")
         self.query_one("#livephase", Static).update(self._phase(job, m.paused))
         now_painting = job.director or job.params.get("prompt", "")
         self.query_one("#director", Static).update(
@@ -2960,6 +3141,35 @@ class Studio(App):
             jid = self._selected("#qtable")
             if jid:
                 self.mgr.promote(jid)
+        elif b == "qinspectbtn":
+            self._render_qinspect()
+        elif b == "qclonebtn":
+            # CLONE a queued run -> NEW RUN form, reusing the EXACT archive-clone path
+            # (_clone_config -> _apply_config -> switch to NEW RUN). Read-only on the
+            # queued run's fixed config; no dirty read, RESUME/PROMOTE/REMOVE untouched.
+            jid = self._selected("#qtable")
+            if not jid:
+                return
+            job = self.mgr.jobs.get(jid)
+            if not job:
+                return
+            if (job.params.get("mode") or job.kind) == "enhance":
+                self.query_one("#qinspect", Static).update(
+                    "[#ffcf5c]Enhance runs can't be cloned — they're a post-process of another run.[/#ffcf5c]")
+                return
+            try:
+                cfg = self._clone_config(job)
+                self._apply_config(cfg)
+                self.query_one(TabbedContent).active = "tab-new"
+                try:
+                    self.query_one("#prompt").focus()
+                except Exception:
+                    pass
+                self.query_one("#newinfo", Static).update(
+                    f"[#9dffce]Cloned queued {job.id} — tweak anything, then QUEUE RUN. "
+                    f"Seed {cfg.get('seed', '0')} kept; NAME left blank so it auto-timestamps.[/#9dffce]")
+            except Exception:
+                pass
         elif b == "pausebtn":
             self.mgr.pause()
         elif b == "resumebtn":
@@ -3356,6 +3566,51 @@ class Studio(App):
             self.push_screen(ConfirmDeleteScreen(summary), _do_delete)
 
     # ---------- inspect details + terminal toggles ----------
+    def on_data_table_row_highlighted(self, event):
+        """T24: keep the inline QUEUE details panel in sync with the highlighted row -> a live,
+        read-only view (mirrors how ARCHIVE refreshes its inspect on selection). Only the qtable
+        drives this; everything else is a no-op. Fully guarded — must never break the app."""
+        try:
+            if getattr(event, "data_table", None) is None or event.data_table.id != "qtable":
+                return
+        except Exception:
+            return
+        try:
+            self._render_qinspect()
+        except Exception:
+            pass
+
+    def _render_qinspect(self):
+        """T24: inline read-only details for the selected QUEUE row. Reuses the EXISTING
+        _fmt_inspect(job) (config shown, results empty for a not-yet-run job). Guarded so it
+        never breaks the tick loop / RowHighlighted. Adds a small 'queued — not run yet' note
+        for queued (not suspended) jobs, without rewriting _fmt_inspect."""
+        try:
+            panel = self.query_one("#qinspect", Static)
+        except Exception:
+            return
+        jid = self._selected("#qtable")
+        job = self.mgr.jobs.get(jid) if jid else None
+        if job is None:
+            panel.update("[dim]Select a queued run above to see its full config.[/dim]")
+            return
+        try:
+            body = self._fmt_inspect(job)
+        except Exception:
+            panel.update("[dim]could not read this run's config[/dim]")
+            return
+        note = ""
+        try:
+            if getattr(job, "status", "") == "queued":
+                note = "[#ffcf5c]≡ queued — not run yet (config below; no results until it renders)[/#ffcf5c]\n\n"
+            elif getattr(job, "status", "") == "suspended":
+                note = ("[#ffcf5c]▽ suspended @ shot %s/%s — will resume from its checkpoint[/#ffcf5c]\n\n"
+                        % (getattr(job, "seg", "?"), getattr(job, "nseg", "?")))
+        except Exception:
+            note = ""
+        # _fmt_inspect returns a str -> safe to prepend the note.
+        panel.update(note + body if isinstance(body, str) else body)
+
     def _render_inspect(self):
         """Repaint #inspectinfo with whichever archive view is active (inspect | timing)."""
         job = self.mgr.jobs.get(self._insp_jid)
