@@ -338,6 +338,15 @@ class VideoBackend:
                 if ct is not None:
                     state["step"] += 1
                 state["t"] = ct
+            # The pre-loop / no-real-step-yet read (step still the -1 sentinel) is the ONE read the
+            # pipeline uses to decide whether to BUILD negative_prompt_embeds. Return the real base gate
+            # there (True, since cfg>1 was checked above) so negatives are ALWAYS built; the interval mask
+            # gates only the in-loop uncond FORWARD (step>=0). Returning _is_on(-1) here made a range/every
+            # spec read False pre-loop -> negatives never built -> Wan transformer type_as(None) crash on
+            # the first ON-step (and a batch-size mismatch on LTX). Per-shot _reset_cfg_state rewinds to -1,
+            # so shot 2+ re-build negatives too. cfg<=1/turbo already returned False above (bit-identical).
+            if state["step"] < 0:
+                return base
             return _is_on(state["step"])
         # Instance-level property override via a one-off subclass (leaves other pipelines untouched).
         if not getattr(cls, "_q4_gated_subclass", False):
