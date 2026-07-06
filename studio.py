@@ -1972,6 +1972,7 @@ class Studio(App):
                     yield Button("■ CANCEL", id="cancelbtn")
                     yield Button("» TERMINAL", id="livetermbtn")
                     yield Button("» DIR RAW", id="dirnotebtn")
+                    yield Button("▤ FRAMES", id="liveframesbtn")
                 yield RichLog(id="livelog", highlight=True, markup=False, wrap=True)
                 yield Static("", id="livebar")
             with TabPane("✓ ARCHIVE", id="tab-arch"):
@@ -2403,6 +2404,25 @@ class Studio(App):
             if not b.get(k) or b[k] <= 0:
                 b[k] = 1.0
         return b
+
+    def _live_frames(self, job):
+        """Every frame the ACTIVE run has rendered SO FAR, oldest->newest. Source of truth is the
+        checkpoint's frames/ dir (write_checkpoint persists ALL accumulated frames atomically after
+        every completed shot); falls back to the final frames_dir (save phase), then to the single
+        live-preview PNG. Single-shot runs have no checkpoint -> frames only exist after save."""
+        ck = getattr(job, "ckpt_dir", None) or ""
+        for d in ((os.path.join(ck, "frames") if ck else ""), (job.params or {}).get("frames_dir") or ""):
+            if not d:
+                continue
+            dabs = d if os.path.isabs(d) else os.path.join(REPO, d)
+            try:      # 4-digit pattern skips write_checkpoint's atomic *.png.tmp files
+                fs = sorted(glob.glob(os.path.join(dabs, "[0-9][0-9][0-9][0-9].png")))
+            except Exception:
+                fs = []
+            if fs:
+                return fs
+        pv = getattr(job, "preview", None)
+        return [pv] if pv and os.path.exists(pv) else []
 
     def _time_left(self, job):
         """Seconds left on the ACTIVE run — the ONE source of truth for the livebar ETA, the PACE
@@ -3764,6 +3784,18 @@ class Studio(App):
             self._queue_current_run()
         elif b == "newreplbtn":
             self._new_run_replicate()
+        elif b == "liveframesbtn":  # step through everything the ACTIVE run has rendered so far
+            job = self.mgr.active()
+            if job is None:
+                return
+            frames = self._live_frames(job)
+            if not frames:
+                self.notify("No frames on disk yet — they land after the first completed shot "
+                            "(single-shot runs: only at save).", severity="warning", timeout=6)
+                return
+            scr = FrameScrollScreen(frames, "%s — %d so far" % (job.id, len(frames)))
+            scr.i = len(frames) - 1     # open on the NEWEST frame (the live edge), step back from there
+            self.push_screen(scr)
         elif b == "sndtestbtn":     # preview the run-done sound — bypasses the SOUND toggle so it always plays
             msg = sounds.preview("run_done", REPO) if sounds is not None else "sound module unavailable"
             self.query_one("#newinfo", Static).update("[#9dffce]♪ %s[/#9dffce]" % msg)
