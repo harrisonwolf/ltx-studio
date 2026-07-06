@@ -34,6 +34,44 @@ DIM    = "#1f9a52"   # muted / low end
 WARN   = "#ffcf5c"   # caution — getting too far
 BAD    = "#ff6d6d"   # the "fried / broken" end (over-cooked, too high, too few)
 
+# ---- theme hook -------------------------------------------------------------------------------
+# semantic key (studio theme dict) -> module color global it drives
+_SEMANTIC_TO_CONST = {
+    "accent":     "ACCENT",   # #6dffab bright highlight / current-value markers
+    "success":    "CLEAN",    # #9dffce the "good / clean" end of a scale
+    "foreground": "MID",      # #34d977 neutral mid green
+    "secondary":  "DIM",      # #1f9a52 muted / low end
+    "warning":    "WARN",     # #ffcf5c caution
+    "error":      "BAD",      # #ff6d6d fried / broken end
+}
+
+# the built-in pipboy palette, keyed semantically (pass to set_palette() to reset)
+DEFAULT_PALETTE = {
+    "accent":     "#6dffab",
+    "success":    "#9dffce",
+    "foreground": "#34d977",
+    "secondary":  "#1f9a52",
+    "warning":    "#ffcf5c",
+    "error":      "#ff6d6d",
+}
+
+
+def set_palette(colors=None):
+    """Rebind the module color globals from a semantic theme dict.
+
+    `colors` maps semantic keys ("accent", "success", "foreground", "secondary", "warning",
+    "error") to "#rrggbb" strings. Missing/blank keys keep their CURRENT values; unknown keys
+    (e.g. "primary", "text_bright", "border" — no constant here uses them) are ignored.
+    Defaults stay pipboy until the studio calls this; set_palette(DEFAULT_PALETTE) resets.
+    """
+    if not colors:
+        return
+    g = globals()
+    for sem, const in _SEMANTIC_TO_CONST.items():
+        val = colors.get(sem)
+        if val:
+            g[const] = str(val)
+
 
 def _c(color, text):
     """Wrap `text` in a Rich color tag."""
@@ -57,8 +95,10 @@ def _num(app, field_id, default=None):
         return default
 
 
-def _marker_row(pos, width, color=ACCENT, glyph="▲"):
+def _marker_row(pos, width, color=None, glyph="▲"):
     """A row with a single marker glyph at column `pos` (clamped into 0..width-1)."""
+    if color is None:
+        color = ACCENT          # late-bound so set_palette() retints the default marker too
     pos = 0 if pos < 0 else (width - 1 if pos > width - 1 else pos)
     return " " * pos + _c(color, glyph)
 

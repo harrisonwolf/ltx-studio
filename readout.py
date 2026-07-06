@@ -21,12 +21,35 @@ FIT_CACHE = "runs/readout_fit.json"       # relative to the FramePack repo root
 EXPERIMENTS = "runs/experiments.jsonl"
 
 # ---- palette (green-phosphor, matches studio.py + field_visuals.py Rich markup tags) ----
+# Defaults = pipboy. Theme switching rebinds these via set_palette(); render functions read
+# them at call time, so a rebind takes effect on the next render. (The inline "dim" markup
+# tag elsewhere in this file is Rich's built-in dim style, not a palette color.)
 ACCENT = "#6dffab"   # bright accent / headers
 CLEAN = "#9dffce"    # the good / clean end
 MID = "#34d977"      # neutral mid green
 DIM = "#1f9a52"      # muted / low
 WARN = "#ffcf5c"     # caution
 BAD = "#ff6d6d"      # danger / red zone
+
+# constant -> semantic palette key (the dict studio.py hands to set_palette on theme change)
+_PALETTE_KEYS = {
+    "ACCENT": "accent",
+    "CLEAN": "success",
+    "MID": "foreground",
+    "DIM": "secondary",
+    "WARN": "warning",
+    "BAD": "error",
+}
+
+
+def set_palette(colors):
+    """Rebind the module color constants from a semantic palette dict. Missing keys keep the
+    current value. Called by studio.py on theme change; defaults = pipboy (unchanged)."""
+    g = globals()
+    for const, key in _PALETTE_KEYS.items():
+        val = (colors or {}).get(key)
+        if val:
+            g[const] = val
 
 W_BAR = 16           # bar cell count — keeps every line well under the ~48-col panel wrap
 
