@@ -10,6 +10,26 @@ It was built under a hard constraint — an RTX 5070 Laptop (Blackwell, `sm_120`
 
 ---
 
+## What it looks like
+
+**Job control** — the NEW RUN screen, with the self-calibrating READOUT meters (VRAM headroom, clip budget, time estimate, predicted quality, drift risk):
+
+![NEW RUN screen with READOUT meters](media/tui-job-control.png)
+
+**A live render** — the worker subprocess streaming progress and a last-frame preview into the LIVE tab, with per-phase timing (load → warm → gen → decode → save):
+
+![LIVE render view with last-frame preview](media/tui-live-render.png)
+
+**Sample output** — generated locally on the 8 GB laptop GPU:
+
+| | |
+|---|---|
+| ![Fireflies drifting over a glowing forest stream](media/job_105358-5.gif) | ![Bioluminescent forest at night](media/job_232906-2.gif) |
+
+*Left: fireflies over a glowing forest stream. Right: "bioluminescent forest at night — glowing moths, luminescent moss, a stream lit from within" (the run shown in the LIVE screenshot above). Full-quality clips: [job_105358-5.mp4](media/job_105358-5.mp4) · [job_232906-2.mp4](media/job_232906-2.mp4).*
+
+---
+
 ## Why it looks the way it does
 
 Three principles drove almost every design decision.
