@@ -140,14 +140,17 @@ PIPBOY_MIDNIGHT = Theme(
 # dial (warm yellow-green lume on almost-black).
 PIPBOY_VAULT = Theme(
     name="pipboy-vault",
+    # TERMINAL-BLACK RULE (2026-07-05, user): the CANVAS stays near-black like a real terminal —
+    # identity lives in text/borders/accents, never in background fills. v1 of this theme washed
+    # the whole screen navy (bg #071120 / panel #0d1f3c); the wash-guard test now enforces the rule.
     primary="#2b6cb0", secondary="#1f4f8a", accent="#ffd24a",
-    foreground="#7fa8d9", background="#071120", surface="#0a1830", panel="#0d1f3c",
+    foreground="#8fb3dd", background="#05080f", surface="#070b14", panel="#0a101c",
     success="#a8d1ff", warning="#ffcf5c", error="#ff6d6d", dark=True,
     variables={
-        "block-cursor-foreground": "#071120", "block-cursor-background": "#ffd24a",
-        "footer-key-foreground": "#ffd24a", "footer-description-foreground": "#7fa8d9",
-        "border": "#1c477a", "border-strong": "#12305a",
-        "surface-deep": "#050c18", "text-bright": "#9cc3f2",
+        "block-cursor-foreground": "#05080f", "block-cursor-background": "#ffd24a",
+        "footer-key-foreground": "#ffd24a", "footer-description-foreground": "#8fb3dd",
+        "border": "#1c477a", "border-strong": "#122a48",
+        "surface-deep": "#030509", "text-bright": "#a9cdf6",
         "accent-2": "#ff8c42", "tertiary": "#5a86b8",    # hazard orange · suit-steel blue
     },
 )
@@ -249,6 +252,13 @@ def tmark(key, text):
     """Wrap `text` in the CURRENT theme's color for semantic `key` (balanced Rich tag)."""
     c = SPAL.get(key) or "#34d977"
     return "[%s]%s[/%s]" % (c, text, c)
+
+
+def _demark(s):
+    """Neutralize [brackets] in USER text (prompts/titles) before it lands in Rich MARKUP strings —
+    a prompt containing tag-like sequences would otherwise raise at render and panic the app.
+    Substitutes visually-equal-width parens, so card/panel width math stays exact."""
+    return str(s).replace("[", "(").replace("]", ")")
 
 FP_PY = sys.executable
 AD_REPO = "/home/wolve/video_gen/AnimateDiff"
@@ -1724,6 +1734,10 @@ class Studio(App):
     Tabs { background: $panel; }
     Tab { color: $secondary; }
     Tab.-active { color: $success; text-style: bold; }
+    /* When the tab bar has FOCUS, Textual paints the active tab on $block-cursor-background —
+       our Tab.-active color (app-tier CSS) was overriding its readable pairing, which turned the
+       label invisible on themes where success ~= accent (ice/white/tube). Restore the pair. */
+    Tabs:focus Tab.-active { color: $block-cursor-foreground; }
     TabbedContent { height: 1fr; }
     TabbedContent > Tabs { dock: top; }
     .sec { color: $accent; text-style: bold; border-bottom: dashed $border; margin: 1 0 0 0; }
@@ -1762,7 +1776,9 @@ class Studio(App):
     #runest { padding: 1 0 0 0; }
     Button { border: tall $border; background: $panel; color: $text-bright; }
     Button:hover { background: $border-strong; }
-    #queuebtn, #consultbtn { margin-top: 1; }
+    #queuebtn { margin-top: 1; }
+    #consultbtn { margin-top: 1; }
+    #chatbtn { margin-bottom: 1; }
     DataTable { background: $surface-deep; color: $foreground; border: round $border; height: 1fr; }
     DataTable > .datatable--cursor { background: $border-strong; color: $success; }
     DataTable > .datatable--header { background: $panel; color: $accent; }
@@ -1840,28 +1856,30 @@ class Studio(App):
                     with VerticalScroll(id="form"):
                         yield Static("▌ SHOT", classes="sec")
                         yield field("MODE", Select([("single clip", "single"), ("DIRECTOR (long)", "director")], value="single", id="mode", allow_blank=False))
+                        yield Button("✎ CONSULT THE DIRECTOR", id="consultbtn")
+                        yield Button("» CHAT WITH THE MODEL", id="chatbtn")
                         yield field("PROMPT", TextArea("", id="prompt", soft_wrap=True, tab_behavior="focus", classes="ta"))
                         yield field("IMAGE", Input(placeholder="input/start.png (optional)", id="image"))
-                        yield Static("▌ CHAINING", classes="sec")
-                        yield field("SEGMENT s", Input(value="3", id="seg"))
-                        yield field("CONTINUITY", Input(value="1.0", id="cond_strength"))
+                        yield field("LENGTH s", Input(value="4", id="seconds"))
+                        yield Static("▌ QUALITY", classes="sec")
+                        yield field("BACKEND", Select([("LTX-2B (fast)", "ltx"), ("Wan-VACE-1.3B (nicer, slower)", "wan"), ("Wan turbo (4-step distill)", "wan-turbo")], value="ltx", id="backend", allow_blank=False))
+                        yield field("RES", Select([(k, k) for k in RES], value="704 x 480  balanced", id="res", allow_blank=False))
+                        yield field("STEPS", Input(value="40", id="steps"))
+                        yield field("GUIDANCE", Input(value="3.0", id="cfg"))
+                        yield field("SEED", Input(value="", id="seed", placeholder="blank = random (default)"))
+                        yield field("FPS", Input(value="24", id="fps"))
+                        yield Static("▌ STYLE", classes="sec")
                         if style_presets is not None:   # T27: pick a preset -> its words APPEND to ANCHORS below
                             yield field("STYLE", Select([(n, n) for n in style_presets.load_presets(REPO)],
                                                         id="style_preset", prompt="+ add a style…", allow_blank=True))
                         yield field("ANCHORS", TextArea("", id="anchors", soft_wrap=True, tab_behavior="focus", classes="ta"))
+                        yield field("NEG", TextArea(NEG, id="n_prompt", soft_wrap=True, tab_behavior="focus", classes="ta"))
+                        yield Static("▌ CHAINING", classes="sec")
+                        yield field("SEGMENT s", Input(value="3", id="seg"))
+                        yield field("CONTINUITY", Input(value="1.0", id="cond_strength"))
                         yield Static("▌ DIRECTOR", classes="sec")
                         yield field("DIRECTIVE", TextArea("", id="directive", soft_wrap=True, tab_behavior="focus", classes="ta"))
                         yield field("STEADINESS", Select([("Hold (faithful)", "hold"), ("Balanced", "balanced"), ("Evolve (journey)", "evolve")], value="hold", id="steadiness", allow_blank=False))
-                        yield Static("▌ QUALITY", classes="sec")
-                        yield field("BACKEND", Select([("LTX-2B (fast)", "ltx"), ("Wan-VACE-1.3B (nicer, slower)", "wan"), ("Wan turbo (4-step distill)", "wan-turbo")], value="ltx", id="backend", allow_blank=False))
-                        yield field("RES", Select([(k, k) for k in RES], value="704 x 480  balanced", id="res", allow_blank=False))
-                        yield Static("▌ GPU", classes="sec")
-                        yield field("RESERVE (GB)", Select([("0.5 GB", "0.5"), ("1.0 GB (default)", "1.0"),
-                                                             ("1.5 GB", "1.5"), ("2.0 GB", "2.0")],
-                                                            value="1.0", id="vram_reserve", allow_blank=False), "vram_reserve")
-                        yield field("SOUND", Select([("on", "on"), ("off", "off")],
-                                                         value="on", id="sound_enabled", allow_blank=False), "sound_enabled")
-                        yield Button("▶ TEST SOUND", id="sndtestbtn")
                         yield Static("▌ ADVANCED", classes="sec")
                         yield field("GUIDANCE RESCALE", Select([("off", "off"), ("0.5", "0.5"), ("0.7", "0.7")],
                                                                value="off", id="cfg_rescale", allow_blank=False), "cfg_rescale")
@@ -1869,17 +1887,16 @@ class Studio(App):
                                                                 value="off", id="cfg_interval", allow_blank=False), "cfg_interval")
                         yield field("IDENTITY ANCHOR", Select([("off", "off"), ("on (Wan only)", "on")],
                                                               value="off", id="wan_ref_anchor", allow_blank=False), "wan_ref_anchor")
-                        yield field("LENGTH s", Input(value="4", id="seconds"))
-                        yield field("STEPS", Input(value="40", id="steps"))
-                        yield field("GUIDANCE", Input(value="3.0", id="cfg"))
-                        yield field("NEG", TextArea(NEG, id="n_prompt", soft_wrap=True, tab_behavior="focus", classes="ta"))
-                        yield field("SEED", Input(value="", id="seed", placeholder="blank = random (default)"))
-                        yield field("FPS", Input(value="24", id="fps"))
+                        yield Static("▌ STUDIO", classes="sec")
+                        yield field("RESERVE (GB)", Select([("0.5 GB", "0.5"), ("1.0 GB (default)", "1.0"),
+                                                             ("1.5 GB", "1.5"), ("2.0 GB", "2.0")],
+                                                            value="1.0", id="vram_reserve", allow_blank=False), "vram_reserve")
+                        yield field("SOUND", Select([("on", "on"), ("off", "off")],
+                                                         value="on", id="sound_enabled", allow_blank=False), "sound_enabled")
+                        yield Button("▶ TEST SOUND", id="sndtestbtn")
                         yield Static("▌ OUTPUT", classes="sec")
                         yield field("NAME", Input(placeholder="optional — file name (else job_HHMMSS)", id="name"))
                         yield Static("", id="runest")
-                        yield Button("✎ CONSULT THE DIRECTOR", id="consultbtn")
-                        yield Button("» CHAT WITH THE MODEL", id="chatbtn")
                         yield Button("▶ QUEUE RUN", id="queuebtn")
                         _rep = Button("×N REPLICATE", id="newreplbtn")
                         _rep.tooltip = ("Queue this exact config N times (2-5) with different random seeds "
@@ -1998,6 +2015,24 @@ class Studio(App):
         v.setdefault("text-bright", v.get("success", "#9dffce"))
         return v
 
+    # Fields the launched command LITERALLY ignores outside director mode (verified against
+    # build() + _plan()): --directive/--steadiness are appended only under `if director:`, and
+    # _plan() reads the SEG field only in its director branch (single/auto-chain segment size
+    # comes from the SAFE_PX cap). Values are preserved while disabled — v() still reads them.
+    _DIRECTOR_ONLY = ("directive", "steadiness", "seg")
+
+    def _sync_mode_disable(self):
+        """Gray out (disable) the director-only dials when MODE != director."""
+        try:
+            director = (self.v("mode") == "director")
+        except Exception:
+            return
+        for wid in self._DIRECTOR_ONLY:
+            try:
+                self.query_one("#" + wid).disabled = not director
+            except Exception:
+                pass
+
     def _on_theme_changed(self, theme):
         """T20: re-tint every INLINE-markup surface from the new theme — studio SPAL (cards/meter/
         status/plan) + the readout and field_visuals module palettes — then invalidate the cached
@@ -2059,14 +2094,18 @@ class Studio(App):
             self.theme_changed_signal.subscribe(self, self._on_theme_changed)
         except Exception:
             pass
+        self._sync_mode_disable()     # initial MODE=single -> director-only dials start grayed
         try:      # sound/alert prefs: master toggle + stall threshold/action/grace (defaults ON / 240s / suspend / 180s)
             _snd = load_studio_config().get("sounds", {}) or {}
             self.query_one("#sound_enabled", Select).value = "on" if _snd.get("enabled", True) else "off"
             self._stall_secs = float(_snd.get("stall_secs", 240) or 240)
             self._stall_action = str(_snd.get("stall_action", "suspend"))     # "suspend" | "alert"
             self._stall_grace = float(_snd.get("stall_grace_secs", 180) or 180)
+            self._stall_decode_secs = float(_snd.get("stall_decode_secs", 600) or 600)   # warmup/decode/save fuse
+            self._stall_max_secs = float(_snd.get("stall_max_secs", 7200) or 7200)       # any-phase catch-all
         except Exception:
             self._stall_secs, self._stall_action, self._stall_grace = 240.0, "suspend", 180.0
+            self._stall_decode_secs, self._stall_max_secs = 600.0, 7200.0
         # T22: readout meter strip — exposed configs (studio_config.json), both default ON
         try:
             _rc = load_studio_config()
@@ -2185,6 +2224,8 @@ class Studio(App):
             except Exception:
                 pass
             return
+        if sid == "mode":      # gray out the dials the launched command literally ignores in this mode
+            self._sync_mode_disable()
         if sid == "backend":   # ONLY a backend change may retune cfg/steps;
             self._sync_cfg_default()                         # RES/MODE/etc must never clobber tuned dials
         elif sid == "vram_reserve":   # T14: persist immediately + apply to the NEXT run this manager launches
@@ -2490,7 +2531,7 @@ class Studio(App):
                 else SPAL["accent2"] if label == "enhance" else SPAL["accent"])
         gap = max(1, inner - len(badge) - len(status))
         header = "[%s]%s[/%s]%s[%s]%s[/%s]" % (bcol, badge, bcol, " " * gap, status_col, status, status_col)
-        title = job.title or p.get("prompt", "") or job.id
+        title = _demark(job.title or p.get("prompt", "") or job.id)
         parms = "%s · %s×%s · %sst · cfg%s · %ss · seed %s" % (
             p.get("backend", "ltx"), p.get("width", "?"), p.get("height", "?"),
             p.get("steps", "?"), p.get("cfg", "?"), p.get("seconds", "?"),
@@ -2618,32 +2659,50 @@ class Studio(App):
                 self._stall_state = {"sig": sig, "pmt": pmt, "since": now, "fired": False,
                                      "susp": False, "killed": False}
                 return
+            # PER-PHASE fuses. Only `generating` has step-granular markers, so only IT gets the
+            # tight fuse. warmup (Wan averages 220s/shot with ZERO markers on this box's own refit)
+            # and decode/save (a real multi-hour decode exists in experiments.jsonl) share the long
+            # fuse, so an overnight batch never murders a slow-but-alive run.
+            slow = job.phase in ("warmup", "decoding", "saving")
+            fire_at = (getattr(self, "_stall_decode_secs", 600.0) if slow
+                       else getattr(self, "_stall_secs", 240.0))
+            grace = (getattr(self, "_stall_decode_secs", 600.0) if slow
+                     else getattr(self, "_stall_grace", 180.0))
             idle = now - prev["since"]
-            if idle < getattr(self, "_stall_secs", 240.0):
+            act_suspend = getattr(self, "_stall_action", "suspend") == "suspend"
+            # CATCH-ALL: no phase may sit at zero progress for stall_max_secs (default 2h) — a
+            # wedge in loading/importing previously blocked the queue ALL NIGHT with banner-only.
+            if act_suspend and idle >= getattr(self, "_stall_max_secs", 7200.0) and not prev["killed"]:
+                prev["killed"] = True
+                m.hard_interrupt()
+                self._stall_note = "    " + tmark(
+                    "error", "!! DEAD %dm — killed (catch-all), queue continues" % int(idle // 60))
+                return
+            if idle < fire_at:
                 return
             mins = int(idle // 60)
             if not prev["fired"]:
                 prev["fired"] = True
                 if sounds is not None:
                     sounds.play("run_stall", REPO)
-            escalate = (getattr(self, "_stall_action", "suspend") == "suspend"
-                        and job.phase in ("warmup", "generating", "decoding", "saving"))
+            escalate = act_suspend and job.phase in ("warmup", "generating", "decoding", "saving")
             if not escalate:      # "alert" mode, or a load/download phase (legitimately silent-slow)
                 self._stall_note = "    " + tmark("error", "!! STALL? no progress %dm" % mins)
                 return
-            if not prev["susp"]:
+            # DELAYED graceful suspend (fire + grace/2): SIGUSR1 is irreversible once delivered —
+            # the engine exits "suspended" at the next shot boundary even if the stall RECOVERS.
+            # Latching later means a transient 3am hiccup no longer silently truncates a run.
+            if idle >= fire_at + grace * 0.5 and not prev["susp"]:
                 prev["susp"] = True
-                m.suspend()       # graceful first: checkpoint at the next boundary (no-op single-shot)
-            if idle >= getattr(self, "_stall_secs", 240.0) + getattr(self, "_stall_grace", 180.0) \
-                    and not prev["killed"]:
+                m.suspend()       # graceful: checkpoint at the next boundary (no-op single-shot)
+            if idle >= fire_at + grace and not prev["killed"]:
                 prev["killed"] = True
                 m.hard_interrupt()   # ckpt-preserving kill -> suspended (resumable) / interrupted; queue moves on
                 self._stall_note = "    " + tmark("error", "!! STALLED %dm — killed, queue continues" % mins)
                 return
             self._stall_note = "    " + tmark(
                 "error", "!! STALL %dm — suspending… (kill in %ds)"
-                % (mins, max(0, int(getattr(self, "_stall_secs", 240.0)
-                                    + getattr(self, "_stall_grace", 180.0) - idle))))
+                % (mins, max(0, int(fire_at + grace - idle))))
         except Exception:
             pass
 
@@ -2709,7 +2768,8 @@ class Studio(App):
             return
         tag = "‖ PAUSED" if m.paused else "▶ RUNNING"
         kglyph, klabel = _run_kind(job)
-        hdr.update(f"[b]{tag}[/b]   [#9dffce]{kglyph} {klabel}[/#9dffce]   {(job.title or job.params.get('prompt', ''))[:48]}")
+        _ttl = _demark((job.title or job.params.get('prompt', ''))[:48])
+        hdr.update(f"[b]{tag}[/b]   [#9dffce]{kglyph} {klabel}[/#9dffce]   {_ttl}")
         loading = job.is_loading() if hasattr(job, "is_loading") else False
         # T25: latch the wall-clock the step counter last advanced (for intra-step interpolation),
         # keyed to (job, seg, step) so it only updates on a real step change — never every tick.
