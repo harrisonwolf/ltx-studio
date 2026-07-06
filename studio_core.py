@@ -163,6 +163,7 @@ class JobManager:
         self._suspend_req = False
         self._interrupt_req = False   # stall-sentry hard-kill -> land 'interrupted' (ckpt kept), not 'cancelled'
         self._cancel_req = False      # set ONLY by an explicit user cancel()
+        self._wake_proc = None        # Windows-side Modern-Standby wake lock (held while rendering)
         self.vram_reserve_gb = 1.0   # T14: GB of the 8GB card to leave for the desktop; studio.py loads/persists this
         for p in glob.glob(os.path.join(RUNS_DIR, "*.json")):
             try:
@@ -337,6 +338,7 @@ class JobManager:
         multi-segment run recovers to 'suspended' from its last checkpoint (only the in-flight shot lost)."""
         self._stop = True
         self.cancel()
+        self._release_wakelock()
 
     def hard_interrupt(self):
         """Stall-sentry escalation: kill the active run but land it 'interrupted' (checkpoint KEPT)
@@ -378,6 +380,39 @@ class JobManager:
             job.save()
 
     # ---- runner ----
+    # ---- Modern-Standby wake lock (Windows/WSL) -------------------------------------------------
+    # 2026-07-06 root cause of the frozen overnight batch: on S0 (Modern Standby) laptops the
+    # display going dark IS standby entry — Kernel-Power logged "entering Modern Standby" 3 min
+    # after the user pressed screen-off, and Windows froze the whole WSL VM for 8.5 hours. Idle
+    # timeouts don't govern this. The documented fix: hold an ES_CONTINUOUS|ES_SYSTEM_REQUIRED
+    # execution request while work is running — background compute stays alive, screen stays dark.
+    # The request lives in a tiny Windows-side powershell that we kill when the queue drains, so
+    # an idle studio never blocks the laptop from sleeping. No-op outside Windows/WSL.
+    def _ensure_wakelock(self):
+        if self._wake_proc is not None and self._wake_proc.poll() is None:
+            return
+        exe = shutil.which("powershell.exe")
+        if not exe:
+            return
+        ps = ("Add-Type -Name P -Namespace W -MemberDefinition "
+              "'[DllImport(\"kernel32.dll\")] public static extern uint SetThreadExecutionState(uint f);';"
+              "[W.P]::SetThreadExecutionState(2147483649) | Out-Null;"    # 0x80000001 = CONTINUOUS|SYSTEM_REQUIRED
+              "while ($true) { Start-Sleep 60 }")
+        try:
+            self._wake_proc = subprocess.Popen([exe, "-NoProfile", "-Command", ps],
+                                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                               stdin=subprocess.DEVNULL)
+        except Exception:
+            self._wake_proc = None
+
+    def _release_wakelock(self):
+        p, self._wake_proc = self._wake_proc, None
+        if p is not None:
+            try:
+                p.kill()
+            except Exception:
+                pass
+
     def _loop(self):
         # The runner THREAD must survive anything — if it dies, the TUI keeps ticking but the
         # queue silently freezes forever (worst possible overnight failure).
@@ -387,7 +422,9 @@ class JobManager:
             except RuntimeError:      # jobs dict mutated by the UI thread mid-iteration -> just retry
                 time.sleep(0.05); continue
             if nxt is None:
+                self._release_wakelock()      # idle queue must never block the laptop from sleeping
                 time.sleep(0.4); continue
+            self._ensure_wakelock()
             try:
                 self._run(nxt)
             except Exception as e:    # ENOSPC / FS hiccup in the pre-Popen setup etc: fail THIS job, move on
