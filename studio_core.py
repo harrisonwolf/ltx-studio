@@ -21,12 +21,13 @@ _VRAM = re.compile(r"\[\[VRAM\s+(\d+)\]\]")                       # per-shot pea
 _SEAMMSE = re.compile(r"\[\[SEAMMSE\s+(\d+)\s+(-?\d+)\]\]")       # seam continuity: [seg, mse*100] (Q3)
 _DRIFT = re.compile(r"\[\[DRIFT\s+(\d+)\s+(-?\d+)\s+(-?\d+)\]\]") # drift vs anchor: [seg, pre*100, post*100] (Q3)
 _TOKENS = re.compile(r"\[\[TOKENS\s+(\d+)\s+(\d+)\]\]")           # prompt token count: [seg, n] (Q3)
+_DCFG = re.compile(r"\[\[DCFG\s+(.*?)\]\]")                       # director as-RUN config "k=v k=v" (audit #8)
 _FIELDS = ["id", "title", "kind", "cmd", "params", "status", "seg", "nseg", "step", "nstep",
            "out", "error", "director", "created", "started", "finished",
            "phase", "load_step", "load_total", "load_msg", "saw_step", "first_step_ts", "first_step_seg",
            "ckpt_dir", "resumes", "last_ckpt_seg", "preview", "plans", "dir_ms",
            "phase_started", "phase_secs", "seg_started", "seg_secs", "peak_vram",
-           "seam_mse", "drift", "tok_counts"]
+           "seam_mse", "drift", "tok_counts", "dcfg"]
 # Blind A/B pair state (pair_id, pair_variant, pair_blind, pair_varied_dial, pair_revealed) lives INSIDE
 # each job's `params` dict, which is itself in _FIELDS above and round-trips through save()/load() -- so
 # pair_revealed already survives an app restart with no extra top-level field needed.
@@ -59,6 +60,7 @@ class Job:
         self.preview = os.path.join(RUNS_DIR, f"{self.id}_preview.png")  # live frame preview
         self.plans = []             # [[seg, plan, prompt], ...] director reasoning history
         self.dir_ms = {}            # {seg:int -> [load_ms, infer_ms]} per-seam director cost
+        self.dcfg = {}              # director as-RUN config from [[DCFG]] (steadiness may be downgraded)
         # ---- telemetry: phase + per-shot timing ----
         self.phase_started = None   # wall-clock the current phase began
         self.phase_secs = {}        # {phase: cumulative seconds}
@@ -451,6 +453,7 @@ class JobManager:
         job.phase_started, job.phase_secs = None, {}
         job.seg_started, job.seg_secs = None, []
         job.dir_ms = {}
+        job.dcfg = {}
         job.seam_mse, job.drift, job.tok_counts = [], [], []
         job.save()
         self.current, self.paused = job.id, False
@@ -504,6 +507,10 @@ class JobManager:
                     tk = _TOKENS.search(line)
                     if tk:
                         job.tok_counts.append([int(tk.group(1)), int(tk.group(2))])   # noise -> no transition
+                    dc = _DCFG.search(line)
+                    if dc:   # director as-RUN provenance: steadiness may have been DOWNGRADED by the engine
+                        job.dcfg = dict(kv.split("=", 1) for kv in dc.group(1).split() if "=" in kv)
+                        transition = True
                     d = _DIRX.search(line)
                     if d:
                         job.director = d.group(1)

@@ -99,6 +99,7 @@ def build_record(job):
         "phase_secs": dict(getattr(job, "phase_secs", {}) or {}),   # {load,warmup,generating,decoding,...}
         "seg_secs": list(getattr(job, "seg_secs", []) or []),       # seconds per shot
         "dir_ms": {str(k): v for k, v in (getattr(job, "dir_ms", {}) or {}).items()},  # per-seam director cost
+        "dcfg": dict(getattr(job, "dcfg", {}) or {}),   # director as-RUN config ([[DCFG]]: steadiness post-downgrade)
         "seam_mse": list(getattr(job, "seam_mse", []) or []),        # [[seg, mse*100], ...] (Q3)
         "drift": list(getattr(job, "drift", []) or []),              # [[seg, pre*100, post*100], ...] (Q3)
         "tok_counts": list(getattr(job, "tok_counts", []) or []),    # [[seg, n_tokens], ...] (Q3)

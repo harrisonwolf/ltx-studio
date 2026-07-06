@@ -2377,7 +2377,12 @@ class Studio(App):
                 LOAD, COEF, WARM, DECODE, SEAM, SEG_REF = 150, 1.5, 70, 20, 90, 49
             ff = (seg_frames / SEG_REF) if seg_frames else 1.0
             nseam = max(0, nseg - 1)
-            if director and (p.get("steadiness") or "hold") != "evolve":
+            _steady = (p.get("steadiness") or "hold")
+            if director and _steady == "evolve":   # mirror the engine's blank/echo-directive downgrade
+                _dv = (p.get("directive") or "").strip()
+                if not _dv or _dv == (p.get("prompt") or "").strip():
+                    _steady = "hold"
+            if director and _steady != "evolve":
                 nseam = -(-nseam // 3)
             gen = steps * COEF * px * ff * nseg + (SEAM * nseam if director else 0)
             decode = DECODE * ff * nseg
@@ -3173,7 +3178,12 @@ class Studio(App):
                 LOAD, COEF, WARM, DECODE, SEAM, SEG_REF = 150, 1.5, 70, 20, 90, 49
             ff = seg_frames / SEG_REF              # per-shot gen + decode scale with frame count -> fps/seg now move the ETA
             nseam = max(0, nseg - 1)
-            if director and (self.v("steadiness") or "hold") != "evolve":
+            _steady = (self.v("steadiness") or "hold")
+            if director and _steady == "evolve":   # ETA follows the ENGINE's downgrade rule (audit #5):
+                _dv = (self.v("directive") or "").strip()
+                if not _dv or _dv == (self.v("prompt") or "").strip():
+                    _steady = "hold"               # blank/echo directive -> engine runs hold
+            if director and _steady != "evolve":
                 nseam = -(-nseam // 3)             # hold/balanced redirect every 3rd seam (director.py cadence)
             secs = (LOAD + nseg * (steps * COEF * px * ff + WARM + DECODE * ff)
                     + (SEAM * nseam if director else 0))
@@ -3291,6 +3301,18 @@ class Studio(App):
         if not (self.v("prompt", over) or "").strip():
             self.query_one("#newinfo", Static).update("[#ffcf5c]Enter a PROMPT first.[/#ffcf5c]")
             return None
+        # HONEST GATE (director audit #1): the engine silently runs HOLD when the directive is blank or
+        # echoes the prompt — queuing "evolve" like that would record a steadiness that never executed
+        # (and a hold-vs-evolve blind A/B would compare two identical runs). Refuse with the reason.
+        if (self.v("mode", over) == "director"
+                and (self.v("steadiness", over) or "hold") == "evolve"):
+            _d = (self.v("directive", over) or "").strip()
+            if not _d or _d == (self.v("prompt", over) or "").strip():
+                self.query_one("#newinfo", Static).update(
+                    "[#ffcf5c]EVOLVE needs a DIRECTIVE distinct from the PROMPT — the engine would "
+                    "silently run HOLD (and record it as evolve). Write a directive (the arc to move "
+                    "toward), or switch STEADINESS to hold/balanced.[/#ffcf5c]")
+                return None
         try:
             title, kind, cmd, params = self.build(over)
         except Exception as ex:   # bad numbers must never crash the app (a crash kills a live render)
