@@ -996,7 +996,10 @@ def main():
     # every 3rd seam (faithful modes barely change the prompt) and pass --fit_check so the director answers
     # KEEP unless the frame has visibly drifted -> ~1/3 the director reloads, prompt changes only on real drift.
     redirect_every = 1 if args.steadiness == "evolve" else 3
-    fit_check = args.steadiness != "evolve"
+    # hold: fit_check ON -> the director answers KEEP unless the frame drifted (pure repair mode).
+    # balanced: fit_check OFF (user decision 2026-07-06) -> every 3rd-seam check ACTUALLY rewrites
+    # with gentle variation; the old KEEP gate pinned balanced into hold-with-extra-latency.
+    fit_check = args.steadiness == "hold"
     if director:
         print(f"director cadence: steadiness={args.steadiness}, redirect_every={redirect_every}, fit_check={fit_check}", flush=True)
         # as-run provenance marker (audit #8): what ACTUALLY runs, incl. the downgrade — so the

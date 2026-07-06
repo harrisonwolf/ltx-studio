@@ -1789,13 +1789,18 @@ class Studio(App):
     #livehdr { color: $accent; text-style: bold; padding: 1 1 1 1; border-bottom: dashed $border-strong; }
     #livephase { color: $success; padding: 0 1; height: 1; }
     #progtext { color: $foreground; padding: 0 1; height: 1; }
-    #livemid { height: 1fr; min-height: 14; margin: 1 0 0 0; }
+    #livemid { height: 1fr; min-height: 8; margin: 1 0 0 0; }
     #preview { width: 50; height: 1fr; border: round $border; background: $surface-deep; content-align: center middle; }
     #notescol { width: 1fr; height: 1fr; }
     #director { color: $warning; padding: 0 1; height: auto; max-height: 4; }
     #dirnotes { border: round $border; background: $surface-deep; color: $foreground; height: 1fr; }
     .strip { height: 2; margin: 0; padding: 0 1; border-top: dashed $border-strong; }
     .strip Static { width: 1fr; height: 1; color: $foreground; content-align: left middle; }
+    /* SHORT terminals (16" portable monitor etc): the LIVE tab's fixed stack used to overflow and
+       push the PAUSE/CANCEL row off-screen. -short (set in on_resize, height < 38) sheds the info
+       strips and shrinks the preview so the CONTROLS always stay reachable. */
+    Screen.-short .strip { display: none; }
+    Screen.-short #livemid { min-height: 6; }
     #ph_timeline { width: 1fr; }
     #livelog { display: none; height: 8; }
     #livebar { height: 1; background: $panel; color: $accent; content-align: left middle; padding: 0 1; }
@@ -2201,6 +2206,10 @@ class Studio(App):
         try:
             rc = self.query_one("#rightcol")
             (rc.add_class if rc.content_size.width < 76 else rc.remove_class)("-narrow")
+        except Exception:
+            pass
+        try:      # short terminal (portable monitor): shed LIVE info strips so controls stay visible
+            (self.screen.add_class if self.size.height < 38 else self.screen.remove_class)("-short")
         except Exception:
             pass
         self.update_est()
