@@ -2404,6 +2404,31 @@ class Studio(App):
                 b[k] = 1.0
         return b
 
+    def _time_left(self, job):
+        """Seconds left on the ACTIVE run — the ONE source of truth for the livebar ETA, the PACE
+        'left' cell, and the queue ETA (audit 2026-07-06). Measured-first: once a shot has completed,
+        use THIS run's mean shot time including the in-progress shot's remainder — the old
+        mean*(nseg-seg) formula read "~0s" for the whole final shot. Before any shot completes, fall
+        back to the T25 smart budget (charges warmup/decode, which the old step-rate ETA ignored)."""
+        try:
+            ssecs = getattr(job, "seg_secs", []) or []
+            if ssecs:
+                mean = sum(ssecs) / len(ssecs)
+                seg, nseg = int(getattr(job, "seg", 0) or 0), int(getattr(job, "nseg", 1) or 1)
+                left = mean * max(0, nseg - seg)
+                if seg >= 1:                       # the shot in flight: its remainder, not zero
+                    t0 = getattr(job, "seg_started", None)
+                    left += min(mean, max(0.0, mean - (time.time() - t0))) if t0 else mean
+                return max(0, int(left))
+            budget = self._run_budget(job)
+            total = sum(budget.values())
+            sp = self._smart_pct(job)
+            if total > 0 and sp is not None:
+                return max(0, int(total * (100.0 - float(sp)) / 100.0))
+        except Exception:
+            pass
+        return None
+
     def _queue_eta(self):
         """Estimated wall-seconds until the QUEUE is empty: time left on the active run + the full budget
         of every queued job. Recomputed each tick, so it tracks jobs finishing / being added / progressing."""
@@ -2412,7 +2437,9 @@ class Studio(App):
             total = 0.0
             act = m.active()
             if act is not None:
-                total += max(0.0, sum(self._run_budget(act).values()) - max(0.0, act.elapsed()))
+                tl = self._time_left(act)          # same estimator the LIVE tab shows (consistency)
+                total += tl if tl is not None else \
+                    max(0.0, sum(self._run_budget(act).values()) - max(0.0, act.elapsed()))
             for j in m.queued():
                 total += sum(self._run_budget(j).values())
             return total
@@ -2785,6 +2812,10 @@ class Studio(App):
         _ttl = _demark((job.title or job.params.get('prompt', ''))[:48])
         hdr.update(f"[b]{tag}[/b]   [#9dffce]{kglyph} {klabel}[/#9dffce]   {_ttl}")
         loading = job.is_loading() if hasattr(job, "is_loading") else False
+        # The big load-bar takeover is for the INITIAL load only: is_loading() includes "warmup", so
+        # every later shot's warmup used to flip the header back to "5/5 · warming up" + a dead
+        # "loading..." ETA twenty minutes into a render. Later warmups ride the smart bar instead.
+        initial_load = loading and int(getattr(job, "seg", 0) or 0) <= 1 and not getattr(job, "saw_step", False)
         # T25: latch the wall-clock the step counter last advanced (for intra-step interpolation),
         # keyed to (job, seg, step) so it only updates on a real step change — never every tick.
         try:
@@ -2794,7 +2825,7 @@ class Studio(App):
                 self._smart_step_wall = time.time()
         except Exception:
             pass
-        if loading:
+        if initial_load:
             over.update(total=max(1, getattr(job, "load_total", 0) or 1),
                         progress=getattr(job, "load_step", 0))
             self.query_one("#progtext", Static).update(
@@ -2852,16 +2883,14 @@ class Studio(App):
                     notes.write(f"   [dim]raw ▾[/dim] {r['raw'].strip()[:1200]}")
         self._notes_n = len(plans)
         el = job.elapsed()
-        # step-rate ETA that excludes load time
-        first_ts = getattr(job, "first_step_ts", None)
-        if first_ts and job.step > 0 and job.nstep:
-            base_seg = getattr(job, "first_step_seg", 1) or 1
-            timed = (job.seg - base_seg) * job.nstep + job.step   # steps actually timed in THIS process
-            steps_done = (job.seg - 1) * job.nstep + job.step
-            steps_total = job.nseg * job.nstep
-            rate = (time.time() - first_ts) / max(1, timed)
-            eta_secs = int(rate * max(0, steps_total - steps_done))
-            eta = f"~{fmt(eta_secs)} left"
+        first_ts = getattr(job, "first_step_ts", None)   # the PACE rate line below still needs this
+        # UNIFIED remaining-time estimate (audit 2026-07-06): _time_left() is the ONE source of truth
+        # for the livebar ETA, the PACE "left" cell, and the queue ETA. The old trio disagreed: the
+        # step-rate ETA ignored warmup/decode, PACE's mean*(nseg-seg) read "~0s" for the ENTIRE final
+        # shot, and "loading..." suppressed the estimate during every later shot's warmup.
+        _left = self._time_left(job)
+        if _left is not None:
+            eta = f"~{fmt(_left)} left"
         elif loading:
             eta = "loading..."
         else:
@@ -2883,13 +2912,11 @@ class Studio(App):
         if ssecs:
             mean = sum(ssecs) / len(ssecs)
             self.query_one("#pace_shot", Static).update(f"[dim]per shot[/dim] {fmt(int(mean))} avg")
-            self.query_one("#pace_eta", Static).update(f"[dim]left[/dim] ~{fmt(int(mean * max(0, job.nseg - job.seg)))}")
-        elif seg_t0 and not loading:   # no completed shot yet -> show the current shot ticking
+        elif seg_t0:                   # no completed shot yet -> show the current shot ticking (warmup too)
             self.query_one("#pace_shot", Static).update(f"[dim]this shot[/dim] {fmt(int(time.time() - seg_t0))}")
-            self.query_one("#pace_eta", Static).update(f"[dim]left[/dim] {eta.removesuffix(' left')}")
         else:
             self.query_one("#pace_shot", Static).update("[dim]per shot[/dim] ~measuring")
-            self.query_one("#pace_eta", Static).update(f"[dim]left[/dim] {eta.removesuffix(' left')}")
+        self.query_one("#pace_eta", Static).update(f"[dim]left[/dim] {eta.removesuffix(' left')}")
         sf = int(p.get("seg_frames") or 0)
         tf = int(p.get("total_frames") or (sf * job.nseg if sf else 0))
         if sf and tf and nstp:
