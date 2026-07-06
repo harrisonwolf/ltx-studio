@@ -20,6 +20,10 @@ It was built under a hard constraint — an RTX 5070 Laptop (Blackwell, `sm_120`
 
 ![LIVE render view with last-frame preview](media/tui-live-render.png)
 
+**The archive** — every run is a first-class record: status, per-run timing, favorites, and a lineage panel (here: a replicate source and its enhanced output) so provenance survives re-rolls, replicates, and enhancement passes. REVEAL / RATE PAIR / PAIR A/B are the blind-comparison harness:
+
+![ARCHIVE view with run lineage panel and blind A/B controls](media/tui-archive.png)
+
 **Sample output** — generated locally on the 8 GB laptop GPU:
 
 | | |
