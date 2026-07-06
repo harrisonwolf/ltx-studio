@@ -40,6 +40,9 @@ PIPBOY = Theme(
         "footer-key-foreground": "#9dffce",
         "footer-description-foreground": "#34d977",
         "border": "#1c7a42",
+        "border-strong": "#134a2a",     # focus/hover/cursor fill (the CSS references these three
+        "surface-deep": "#050d08",      # custom vars, so every theme must define them)
+        "text-bright": "#7dffb8",
     },
 )
 
@@ -53,7 +56,8 @@ PIPBOY_AMBER = Theme(
     variables={
         "block-cursor-foreground": "#140d02", "block-cursor-background": "#ffcf5c",
         "footer-key-foreground": "#ffe29a", "footer-description-foreground": "#e0a83e",
-        "border": "#7a5310",
+        "border": "#7a5310", "border-strong": "#4a3208",
+        "surface-deep": "#0f0a02", "text-bright": "#f2c569",
     },
 )
 PIPBOY_BLUE = Theme(
@@ -64,7 +68,8 @@ PIPBOY_BLUE = Theme(
     variables={
         "block-cursor-foreground": "#06111c", "block-cursor-background": "#6dd8ff",
         "footer-key-foreground": "#9de4ff", "footer-description-foreground": "#34b0d9",
-        "border": "#1c5a7a",
+        "border": "#1c5a7a", "border-strong": "#0f3a52",
+        "surface-deep": "#040d15", "text-bright": "#7dd0f0",
     },
 )
 PIPBOY_RED = Theme(
@@ -75,10 +80,154 @@ PIPBOY_RED = Theme(
     variables={
         "block-cursor-foreground": "#120606", "block-cursor-background": "#ff6d6d",
         "footer-key-foreground": "#ffb3b3", "footer-description-foreground": "#d93434",
-        "border": "#7a1c1c",
+        "border": "#7a1c1c", "border-strong": "#4a0f0f",
+        "surface-deep": "#0d0404", "text-bright": "#f08585",
     },
 )
-EXTRA_THEMES = (PIPBOY, PIPBOY_AMBER, PIPBOY_BLUE, PIPBOY_RED)
+# More CRT moods, same variable shape. white = P4 white-phosphor mono; plasma = the orange gas-plasma
+# of a GRiD/Toshiba luggable; vfd = hi-fi/VCR vacuum-fluorescent cyan; gameboy = DMG pea-soup LCD;
+# midnight = ultra-dim low-glare green for late-night render-watching.
+PIPBOY_WHITE = Theme(
+    name="pipboy-white",
+    primary="#9fb8ac", secondary="#7d968a", accent="#ffffff",
+    foreground="#d6e8dc", background="#0b0d0c", surface="#101413", panel="#161a19",
+    success="#eafff4", warning="#ffcf5c", error="#ff6d6d", dark=True,
+    variables={
+        "block-cursor-foreground": "#0b0d0c", "block-cursor-background": "#ffffff",
+        "footer-key-foreground": "#eafff4", "footer-description-foreground": "#d6e8dc",
+        "border": "#55695f", "border-strong": "#333f39",
+        "surface-deep": "#070908", "text-bright": "#e8f8ee",
+    },
+)
+PIPBOY_PLASMA = Theme(
+    name="pipboy-plasma",
+    primary="#e06a1f", secondary="#b85417", accent="#ffb37a",
+    foreground="#ff9a5c", background="#170803", surface="#1e0b04", panel="#251006",
+    success="#ffd9b8", warning="#ffe29a", error="#ff6d6d", dark=True,
+    variables={
+        "block-cursor-foreground": "#170803", "block-cursor-background": "#ffb37a",
+        "footer-key-foreground": "#ffd9b8", "footer-description-foreground": "#ff9a5c",
+        "border": "#7a3d10", "border-strong": "#46220a",
+        "surface-deep": "#100502", "text-bright": "#ffb98a",
+    },
+)
+PIPBOY_VFD = Theme(
+    name="pipboy-vfd",
+    primary="#17ae94", secondary="#0f9a82", accent="#6dffe8",
+    foreground="#3fe0c8", background="#03110f", surface="#051814", panel="#071e19",
+    success="#b8fff2", warning="#ffcf5c", error="#ff6d6d", dark=True,
+    variables={
+        "block-cursor-foreground": "#03110f", "block-cursor-background": "#6dffe8",
+        "footer-key-foreground": "#b8fff2", "footer-description-foreground": "#3fe0c8",
+        "border": "#0f7a66", "border-strong": "#0a4a3e",
+        "surface-deep": "#020b0a", "text-bright": "#7df0dc",
+    },
+)
+PIPBOY_GAMEBOY = Theme(
+    name="pipboy-gameboy",
+    primary="#6f9a1f", secondary="#306230", accent="#9bbc0f",
+    foreground="#8bac0f", background="#0f2410", surface="#132c14", panel="#173418",
+    success="#cadd6f", warning="#ffcf5c", error="#ff6d6d", dark=True,
+    variables={
+        "block-cursor-foreground": "#0f2410", "block-cursor-background": "#9bbc0f",
+        "footer-key-foreground": "#cadd6f", "footer-description-foreground": "#8bac0f",
+        "border": "#306230", "border-strong": "#1d421d",
+        "surface-deep": "#0a1c0b", "text-bright": "#a3c322",
+    },
+)
+PIPBOY_MIDNIGHT = Theme(
+    name="pipboy-midnight",
+    primary="#17693a", secondary="#115530", accent="#2fae5f",
+    foreground="#1f8a4c", background="#010503", surface="#020a06", panel="#041009",
+    success="#4cc07a", warning="#a8873a", error="#a84848", dark=True,
+    variables={
+        "block-cursor-foreground": "#010503", "block-cursor-background": "#2fae5f",
+        "footer-key-foreground": "#4cc07a", "footer-description-foreground": "#1f8a4c",
+        "border": "#0d3d22", "border-strong": "#082816",
+        "surface-deep": "#010302", "text-bright": "#27a35c",
+    },
+)
+# Round 2 — themes with a REFERENCE OBJECT, not a hue swap:
+# vault = Vault-Tec suit (vault yellow accents on utility navy); wasteland = sun-bleached field
+# manual (dust sepia, burnt-orange warnings); ice = arctic glass HUD (near-white cyan, pale + high
+# contrast, unlike blue/vfd); violet = blacklight UV lab phosphor; radium = 1940s radium watch
+# dial (warm yellow-green lume on almost-black).
+PIPBOY_VAULT = Theme(
+    name="pipboy-vault",
+    primary="#2b6cb0", secondary="#1f4f8a", accent="#ffd24a",
+    foreground="#7fa8d9", background="#071120", surface="#0a1830", panel="#0d1f3c",
+    success="#a8d1ff", warning="#ffcf5c", error="#ff6d6d", dark=True,
+    variables={
+        "block-cursor-foreground": "#071120", "block-cursor-background": "#ffd24a",
+        "footer-key-foreground": "#ffd24a", "footer-description-foreground": "#7fa8d9",
+        "border": "#1c477a", "border-strong": "#12305a",
+        "surface-deep": "#050c18", "text-bright": "#9cc3f2",
+    },
+)
+PIPBOY_WASTELAND = Theme(
+    name="pipboy-wasteland",
+    primary="#a8863c", secondary="#8a6f2f", accent="#ffe8b0",
+    foreground="#d9c084", background="#161004", surface="#1d1606", panel="#241b08",
+    success="#f2ddad", warning="#ff9a3c", error="#e05252", dark=True,
+    variables={
+        "block-cursor-foreground": "#161004", "block-cursor-background": "#ffe8b0",
+        "footer-key-foreground": "#f2ddad", "footer-description-foreground": "#d9c084",
+        "border": "#6f5a26", "border-strong": "#453816",
+        "surface-deep": "#100b03", "text-bright": "#ecd9a0",
+    },
+)
+PIPBOY_ICE = Theme(
+    name="pipboy-ice",
+    primary="#4aa3c0", secondary="#33809a", accent="#e8faff",
+    foreground="#a8d8e8", background="#060e14", surface="#0a151d", panel="#0e1c26",
+    success="#c9f2ff", warning="#ffd280", error="#ff7d7d", dark=True,
+    variables={
+        "block-cursor-foreground": "#060e14", "block-cursor-background": "#e8faff",
+        "footer-key-foreground": "#c9f2ff", "footer-description-foreground": "#a8d8e8",
+        "border": "#2a607a", "border-strong": "#1a3f52",
+        "surface-deep": "#04090e", "text-bright": "#d1f0fa",
+    },
+)
+PIPBOY_VIOLET = Theme(
+    name="pipboy-violet",
+    primary="#8a4fc0", secondary="#6f3da0", accent="#e3c3ff",
+    foreground="#b98ae0", background="#0e0616", surface="#140a1e", panel="#1a0e28",
+    success="#d9b8ff", warning="#ffcf5c", error="#ff6d8a", dark=True,
+    variables={
+        "block-cursor-foreground": "#0e0616", "block-cursor-background": "#e3c3ff",
+        "footer-key-foreground": "#d9b8ff", "footer-description-foreground": "#b98ae0",
+        "border": "#5a3380", "border-strong": "#3a2054",
+        "surface-deep": "#090310", "text-bright": "#d0a8f0",
+    },
+)
+PIPBOY_RADIUM = Theme(
+    name="pipboy-radium",
+    primary="#9ab83c", secondary="#7d9a2e", accent="#eeff9a",
+    foreground="#c9d96f", background="#0c0d04", surface="#121306", panel="#171908",
+    success="#e3f2b8", warning="#ffb347", error="#ff6d6d", dark=True,
+    variables={
+        "block-cursor-foreground": "#0c0d04", "block-cursor-background": "#eeff9a",
+        "footer-key-foreground": "#e3f2b8", "footer-description-foreground": "#c9d96f",
+        "border": "#5f6f22", "border-strong": "#3d4a14",
+        "surface-deep": "#080902", "text-bright": "#dcea8a",
+    },
+)
+EXTRA_THEMES = (PIPBOY, PIPBOY_AMBER, PIPBOY_BLUE, PIPBOY_RED,
+                PIPBOY_WHITE, PIPBOY_PLASMA, PIPBOY_VFD, PIPBOY_GAMEBOY, PIPBOY_MIDNIGHT,
+                PIPBOY_VAULT, PIPBOY_WASTELAND, PIPBOY_ICE, PIPBOY_VIOLET, PIPBOY_RADIUM)
+
+# T20: studio-side semantic palette for INLINE Rich markup in dynamic content (queue cards, the
+# status meter, plan line, stall banner). CSS covers the shell via $vars; these cover the strings.
+# Rebound by _on_theme_changed; defaults = pipboy, so the default look is unchanged.
+SPAL = {"accent": "#6dffab", "success": "#9dffce", "foreground": "#34d977", "secondary": "#1f9a52",
+        "primary": "#2fae5f", "warning": "#ffcf5c", "error": "#ff6d6d", "text_bright": "#7dffb8",
+        "border": "#1c7a42", "title": "#d7ffe8", "muted": "#4a9d6e", "soft": "#5bbf83"}
+
+
+def tmark(key, text):
+    """Wrap `text` in the CURRENT theme's color for semantic `key` (balanced Rich tag)."""
+    c = SPAL.get(key) or "#34d977"
+    return "[%s]%s[/%s]" % (c, text, c)
 
 FP_PY = sys.executable
 AD_REPO = "/home/wolve/video_gen/AnimateDiff"
@@ -359,6 +508,63 @@ def render_preview(path, cols=48):
         return Text()
 
 
+class FrameScrollScreen(ModalScreen):
+    """Scroll through a finished run's saved output frames as terminal art (reuses render_preview).
+    ←/→ (or h/l) step one frame, PgUp/PgDn jump 10, Home/End first/last, Esc closes."""
+    DEFAULT_CSS = """
+    FrameScrollScreen { align: center middle; background: $background 90%; }
+    #fsbox { width: auto; height: auto; border: round $primary; background: $surface-deep; padding: 1 2; }
+    #fsart { width: auto; height: auto; content-align: center middle; }
+    #fshelp { color: $secondary; height: 1; margin-top: 1; }
+    """
+    BINDINGS = [
+        ("escape", "close", "Close"),
+        ("left", "prev", "Prev"), ("h", "prev", ""),
+        ("right", "next", "Next"), ("l", "next", ""),
+        ("home", "first", "First"), ("end", "last", "Last"),
+        ("pageup", "back10", "-10"), ("pagedown", "fwd10", "+10"),
+    ]
+
+    def __init__(self, frames, title):
+        super().__init__()
+        self.frames = list(frames)        # sorted absolute frame paths
+        self.ftitle = title
+        self.i = 0
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="fsbox"):
+            yield Static("", id="fsart")
+            yield Static("", id="fshelp")
+
+    def on_mount(self):
+        self.query_one("#fsbox").border_title = "« FRAMES — %s »" % self.ftitle
+        self._paint()
+
+    # NB: named _paint, NOT _render — Widget._render() is a Textual-internal method that must return
+    # a Visual; shadowing it with a None-returning helper crashes the compositor at first paint.
+    def _paint(self):
+        n = len(self.frames)
+        art, help_ = self.query_one("#fsart", Static), self.query_one("#fshelp", Static)
+        if not n:
+            art.update("[dim]no frames saved for this run.[/dim]")
+            help_.update("[dim]Esc to close[/dim]")
+            return
+        self.i = max(0, min(self.i, n - 1))
+        cols = max(48, min(140, (getattr(self.app.size, "width", 0) or 120) - 8))
+        art.styles.width = cols + 2
+        art.update(render_preview(self.frames[self.i], cols=cols))
+        help_.update("[#6dffab]frame %d / %d[/#6dffab]   [dim]←/→ step · PgUp/PgDn ±10 · Home/End · Esc[/dim]"
+                     % (self.i + 1, n))
+
+    def action_prev(self):  self.i -= 1;  self._paint()
+    def action_next(self):  self.i += 1;  self._paint()
+    def action_first(self): self.i = 0;   self._paint()
+    def action_last(self):  self.i = len(self.frames) - 1; self._paint()
+    def action_back10(self): self.i -= 10; self._paint()
+    def action_fwd10(self):  self.i += 10; self._paint()
+    def action_close(self): self.dismiss(None)
+
+
 def _status_glyph(status):
     return {"done": "[#9dffce]✓[/#9dffce]", "failed": "[#ff6d6d]✕[/#ff6d6d]",
             "cancelled": "[dim]■[/dim]", "interrupted": "[#ffcf5c]‖[/#ffcf5c]",
@@ -611,20 +817,20 @@ class ConsultScreen(ModalScreen):
     Qwen2.5-VL-7B daemon (vlm_planner.py) in the isolated venv; killed on close."""
     DEFAULT_CSS = """
     ConsultScreen { align: center middle; background: $background 80%; }
-    #consultbox { width: 86%; height: 88%; border: round #2fae5f; background: #06120b; padding: 1 2; }
-    #consulttitle { color: #6dffab; text-style: bold; height: 1; }
-    #consultsub { color: #1f9a52; height: 1; margin: 0 0 1 0; }
-    #chatlog { height: 1fr; border: round #1c7a42; background: #050d08; color: #34d977; }
-    #cfgpreview { height: auto; min-height: 5; max-height: 7; color: #ffcf5c; border: round #1c7a42; background: #08160d; padding: 0 1; margin: 1 0; }
-    #consultstatus { height: 1; color: #9dffce; }
-    #streampreview { height: auto; max-height: 8; color: #7dffb8; background: #04100a; border: round #134a2a; padding: 0 1; margin: 0 0 1 0; display: none; }
-    #chatimg { border: tall #134a2a; background: #06120b; color: #7dffb8; }
-    #chatimg:focus { border: tall #6dffab; }
-    #chatmsg { height: 4; border: tall #134a2a; background: #06120b; color: #7dffb8; }
-    #chatmsg:focus { border: tall #6dffab; }
+    #consultbox { width: 86%; height: 88%; border: round $primary; background: $background; padding: 1 2; }
+    #consulttitle { color: $accent; text-style: bold; height: 1; }
+    #consultsub { color: $secondary; height: 1; margin: 0 0 1 0; }
+    #chatlog { height: 1fr; border: round $border; background: $surface-deep; color: $foreground; }
+    #cfgpreview { height: auto; min-height: 5; max-height: 7; color: $warning; border: round $border; background: $surface; padding: 0 1; margin: 1 0; }
+    #consultstatus { height: 1; color: $success; }
+    #streampreview { height: auto; max-height: 8; color: $text-bright; background: $surface-deep; border: round $border-strong; padding: 0 1; margin: 0 0 1 0; display: none; }
+    #chatimg { border: tall $border-strong; background: $background; color: $text-bright; }
+    #chatimg:focus { border: tall $accent; }
+    #chatmsg { height: 4; border: tall $border-strong; background: $background; color: $text-bright; }
+    #chatmsg:focus { border: tall $accent; }
     .crow { height: 3; margin-top: 1; }
     .crow Button { margin-right: 2; }
-    #applybtn { background: #134a2a; color: #9dffce; text-style: bold; }
+    #applybtn { background: $border-strong; color: $success; text-style: bold; }
     """
     BINDINGS = [("escape", "close", "Close"), ("ctrl+y", "copy", "Copy chat"), ("ctrl+r", "reset", "Reset chat"), Binding("ctrl+enter", "send", "Send", priority=True)]
 
@@ -835,16 +1041,16 @@ class ChatScreen(ModalScreen):
     (raw=True); the model's VRAM is freed on close, same as consult."""
     DEFAULT_CSS = """
     ChatScreen { align: center middle; background: $background 80%; }
-    #chatbox { width: 86%; height: 88%; border: round #2fae5f; background: #06120b; padding: 1 2; }
-    #chattitle { color: #6dffab; text-style: bold; height: 1; }
-    #chatsub { color: #1f9a52; height: 1; margin: 0 0 1 0; }
-    #rawlog { height: 1fr; border: round #1c7a42; background: #050d08; color: #34d977; }
-    #rawstatus { height: 1; color: #9dffce; }
-    #rawstream { height: auto; max-height: 8; color: #7dffb8; background: #04100a; border: round #134a2a; padding: 0 1; margin: 0 0 1 0; display: none; }
-    #rawimg { border: tall #134a2a; background: #06120b; color: #7dffb8; }
-    #rawimg:focus { border: tall #6dffab; }
-    #rawmsg { height: 4; border: tall #134a2a; background: #06120b; color: #7dffb8; }
-    #rawmsg:focus { border: tall #6dffab; }
+    #chatbox { width: 86%; height: 88%; border: round $primary; background: $background; padding: 1 2; }
+    #chattitle { color: $accent; text-style: bold; height: 1; }
+    #chatsub { color: $secondary; height: 1; margin: 0 0 1 0; }
+    #rawlog { height: 1fr; border: round $border; background: $surface-deep; color: $foreground; }
+    #rawstatus { height: 1; color: $success; }
+    #rawstream { height: auto; max-height: 8; color: $text-bright; background: $surface-deep; border: round $border-strong; padding: 0 1; margin: 0 0 1 0; display: none; }
+    #rawimg { border: tall $border-strong; background: $background; color: $text-bright; }
+    #rawimg:focus { border: tall $accent; }
+    #rawmsg { height: 4; border: tall $border-strong; background: $background; color: $text-bright; }
+    #rawmsg:focus { border: tall $accent; }
     .crow { height: 3; margin-top: 1; }
     .crow Button { margin-right: 2; }
     """
@@ -862,7 +1068,7 @@ class ChatScreen(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="chatbox"):
-            yield Static("⌨  CHAT WITH THE MODEL  (Qwen2.5-VL, raw)", id="chattitle")
+            yield Static("»  CHAT WITH THE MODEL  (Qwen2.5-VL, raw)", id="chattitle")
             yield Static("a direct conversation with the language/vision model — not the director. attach an image path to discuss it.", id="chatsub")
             yield RichLog(id="rawlog", markup=True, wrap=True)
             yield Static("", id="rawstream")
@@ -1011,16 +1217,16 @@ class EnhanceOptsScreen(ModalScreen):
     """Per-pass enhance options with a live resolution guard. dismiss(dict) runs, dismiss(None) cancels."""
     DEFAULT_CSS = """
     EnhanceOptsScreen { align: center middle; background: $background 80%; }
-    #eoptbox { width: 66; height: auto; border: round #2fae5f; background: #06120b; padding: 1 2; }
-    #eopttitle { color: #6dffab; text-style: bold; height: 1; }
-    #eoptsub { color: #1f9a52; height: auto; margin: 0 0 1 0; }
-    #eopt_warn { height: auto; min-height: 1; color: #9dffce; margin: 1 0; }
+    #eoptbox { width: 66; height: auto; border: round $primary; background: $background; padding: 1 2; }
+    #eopttitle { color: $accent; text-style: bold; height: 1; }
+    #eoptsub { color: $secondary; height: auto; margin: 0 0 1 0; }
+    #eopt_warn { height: auto; min-height: 1; color: $success; margin: 1 0; }
     .crow { height: 3; margin-top: 1; }
     .crow Button { margin-right: 2; }
-    #eopt_run { background: #134a2a; color: #9dffce; text-style: bold; }
-    .infobtn { width: 3; min-width: 3; border: none; background: #0a1c10; color: #6dffab; }
-    .infobtn:hover { background: #134a2a; color: #9dffce; }
-    #eopt_help { display: none; border: round #1c7a42; background: #08160d; color: #9dffce; padding: 0 1; margin: 1 0 0 0; height: auto; }
+    #eopt_run { background: $border-strong; color: $success; text-style: bold; }
+    .infobtn { width: 3; min-width: 3; border: none; background: $panel; color: $accent; }
+    .infobtn:hover { background: $border-strong; color: $success; }
+    #eopt_help { display: none; border: round $border; background: $surface; color: $success; padding: 0 1; margin: 1 0 0 0; height: auto; }
     """
     BINDINGS = [("escape", "close", "Close")]
 
@@ -1098,7 +1304,7 @@ class EnhanceOptsScreen(ModalScreen):
             warn.update(f"[#ff6d6d]⛔ {msg} — over your {self.ram_gb:.0f} GB; this WILL OOM-crash. "
                         f"Lower INTERP, or turn UPSCALE/FACE off.[/#ff6d6d]")
         elif self.ram_gb and peak_gb > 0.45 * self.ram_gb:
-            warn.update(f"[#ffcf5c]⚠ {msg} — heavy (of {self.ram_gb:.0f} GB), close to the limit.[/#ffcf5c]")
+            warn.update(f"[#ffcf5c]!! {msg} — heavy (of {self.ram_gb:.0f} GB), close to the limit.[/#ffcf5c]")
         elif out_w:
             warn.update(f"[#9dffce]{msg}[/#9dffce]")
         else:
@@ -1152,12 +1358,12 @@ class ConfirmDeleteScreen(ModalScreen):
     """Confirm a permanent delete. dismiss(True) deletes, dismiss(False)/escape cancels."""
     DEFAULT_CSS = """
     ConfirmDeleteScreen { align: center middle; background: $background 80%; }
-    #delbox { width: 70; height: auto; border: round #ff6d6d; background: #120606; padding: 1 2; }
-    #deltitle { color: #ff6d6d; text-style: bold; height: 1; }
-    #delbody { height: auto; color: #ffb3b3; margin: 1 0; }
+    #delbox { width: 70; height: auto; border: round $error; background: $background; padding: 1 2; }
+    #deltitle { color: $error; text-style: bold; height: 1; }
+    #delbody { height: auto; color: $error; margin: 1 0; }
     .crow { height: 3; margin-top: 1; }
     .crow Button { margin-right: 2; }
-    #del_yes { background: #5a1212; color: #ffd6d6; text-style: bold; }
+    #del_yes { background: $background; color: $error; text-style: bold; }
     """
     BINDINGS = [("escape", "close", "Close")]
 
@@ -1191,10 +1397,10 @@ class ThemePickerScreen(ModalScreen):
     cleanest way to get a true live preview in this version."""
     DEFAULT_CSS = """
     ThemePickerScreen { align: center middle; background: $background 80%; }
-    #thbox { width: 50; height: auto; max-height: 80%; border: round #2fae5f; background: #06120b; padding: 1 2; }
-    #thtitle { color: #6dffab; text-style: bold; height: 1; }
-    #thsub { color: #1f9a52; height: auto; margin: 0 0 1 0; }
-    #thlist { height: auto; max-height: 20; border: round #1c7a42; background: #050d08; }
+    #thbox { width: 50; height: auto; max-height: 80%; border: round $primary; background: $background; padding: 1 2; }
+    #thtitle { color: $accent; text-style: bold; height: 1; }
+    #thsub { color: $secondary; height: auto; margin: 0 0 1 0; }
+    #thlist { height: auto; max-height: 20; border: round $border; background: $surface-deep; }
     """
     BINDINGS = [("escape", "cancel", "Revert + close")]
 
@@ -1243,12 +1449,12 @@ class RenameScreen(ModalScreen):
     """Prefilled Input; dismiss(str) renames, dismiss(None)/escape cancels."""
     DEFAULT_CSS = """
     RenameScreen { align: center middle; background: $background 80%; }
-    #renbox { width: 64; height: auto; border: round #2fae5f; background: #06120b; padding: 1 2; }
-    #rentitle { color: #6dffab; text-style: bold; height: 1; }
-    #rensub { color: #1f9a52; height: auto; margin: 0 0 1 0; }
+    #renbox { width: 64; height: auto; border: round $primary; background: $background; padding: 1 2; }
+    #rentitle { color: $accent; text-style: bold; height: 1; }
+    #rensub { color: $secondary; height: auto; margin: 0 0 1 0; }
     .crow { height: 3; margin-top: 1; }
     .crow Button { margin-right: 2; }
-    #ren_ok { background: #134a2a; color: #9dffce; text-style: bold; }
+    #ren_ok { background: $border-strong; color: $success; text-style: bold; }
     """
     BINDINGS = [("escape", "close", "Close")]
 
@@ -1290,12 +1496,12 @@ class RerollScreen(ModalScreen):
     (empty/invalid seed -> randomize); dismiss(None)/escape cancels."""
     DEFAULT_CSS = """
     RerollScreen { align: center middle; background: $background 80%; }
-    #rrbox { width: 64; height: auto; border: round #2fae5f; background: #06120b; padding: 1 2; }
-    #rrtitle { color: #6dffab; text-style: bold; height: 1; }
-    #rrsub { color: #1f9a52; height: auto; margin: 0 0 1 0; }
+    #rrbox { width: 64; height: auto; border: round $primary; background: $background; padding: 1 2; }
+    #rrtitle { color: $accent; text-style: bold; height: 1; }
+    #rrsub { color: $secondary; height: auto; margin: 0 0 1 0; }
     .crow { height: 3; margin-top: 1; }
     .crow Button { margin-right: 2; }
-    #rr_ok { background: #134a2a; color: #9dffce; text-style: bold; }
+    #rr_ok { background: $border-strong; color: $success; text-style: bold; }
     """
     BINDINGS = [("escape", "close", "Close")]
 
@@ -1339,12 +1545,12 @@ class PairScreen(ModalScreen):
     dismiss({"dial": str, "value": str}) confirms; dismiss(None)/escape cancels."""
     DEFAULT_CSS = """
     PairScreen { align: center middle; background: $background 80%; }
-    #pabox { width: 64; height: auto; border: round #2fae5f; background: #06120b; padding: 1 2; }
-    #patitle { color: #6dffab; text-style: bold; height: 1; }
-    #pasub { color: #1f9a52; height: auto; margin: 0 0 1 0; }
+    #pabox { width: 64; height: auto; border: round $primary; background: $background; padding: 1 2; }
+    #patitle { color: $accent; text-style: bold; height: 1; }
+    #pasub { color: $secondary; height: auto; margin: 0 0 1 0; }
     .crow { height: 3; margin-top: 1; }
     .crow Button { margin-right: 2; }
-    #pa_ok { background: #134a2a; color: #9dffce; text-style: bold; }
+    #pa_ok { background: $border-strong; color: $success; text-style: bold; }
     """
     DIALS = ("steps", "cfg", "res", "seg", "cond_strength", "steadiness", "backend", "fps")
     BINDINGS = [("escape", "close", "Close")]
@@ -1390,12 +1596,12 @@ class ReplicateScreen(ModalScreen):
     dismiss({"n": str}) confirms (blank/invalid -> 3, clamped 2-5); dismiss(None)/escape cancels."""
     DEFAULT_CSS = """
     ReplicateScreen { align: center middle; background: $background 80%; }
-    #rebox { width: 64; height: auto; border: round #2fae5f; background: #06120b; padding: 1 2; }
-    #retitle { color: #6dffab; text-style: bold; height: 1; }
-    #resub { color: #1f9a52; height: auto; margin: 0 0 1 0; }
+    #rebox { width: 64; height: auto; border: round $primary; background: $background; padding: 1 2; }
+    #retitle { color: $accent; text-style: bold; height: 1; }
+    #resub { color: $secondary; height: auto; margin: 0 0 1 0; }
     .crow { height: 3; margin-top: 1; }
     .crow Button { margin-right: 2; }
-    #re_ok { background: #134a2a; color: #9dffce; text-style: bold; }
+    #re_ok { background: $border-strong; color: $success; text-style: bold; }
     """
     BINDINGS = [("escape", "close", "Close")]
 
@@ -1435,14 +1641,14 @@ class ReplicateScreen(ModalScreen):
 
 
 class RatePairScreen(ModalScreen):
-    """⚖ RATE PAIR (Q3): blind pair rating -- shows two output paths as '1'/'2' in random order (no
+    """≷ RATE PAIR (Q3): blind pair rating -- shows two output paths as '1'/'2' in random order (no
     metadata that could bias the vote). dismiss("1"|"2"|"tie") records the verdict; dismiss(None)/
     escape cancels."""
     DEFAULT_CSS = """
     RatePairScreen { align: center middle; background: $background 80%; }
-    #rpbox { width: 74; height: auto; border: round #2fae5f; background: #06120b; padding: 1 2; }
-    #rptitle { color: #6dffab; text-style: bold; height: 1; }
-    #rpsub { color: #1f9a52; height: auto; margin: 0 0 1 0; }
+    #rpbox { width: 74; height: auto; border: round $primary; background: $background; padding: 1 2; }
+    #rptitle { color: $accent; text-style: bold; height: 1; }
+    #rpsub { color: $secondary; height: auto; margin: 0 0 1 0; }
     .crow { height: 3; margin-top: 1; }
     .crow Button { margin-right: 2; }
     """
@@ -1454,7 +1660,7 @@ class RatePairScreen(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="rpbox"):
-            yield Static("⚖  RATE PAIR (blind)", id="rptitle")
+            yield Static("≷  RATE PAIR (blind)", id="rptitle")
             yield Static(f"1: {self.path1}\n2: {self.path2}\n\nplay both yourself, then pick.", id="rpsub")
             with Horizontal(classes="crow"):
                 yield Button("1 BETTER", id="rp_1")
@@ -1478,83 +1684,91 @@ class RatePairScreen(ModalScreen):
 
 class Studio(App):
     TITLE = "LTX STUDIO"
+    # Every color below is a THEME VARIABLE (Ctrl+K themes restyle the whole shell). The pipboy
+    # theme's values equal the old literals, so the default look is unchanged. border/border-strong/
+    # surface-deep/text-bright are custom vars every theme in EXTRA_THEMES must define. Inline Rich
+    # markup in dynamic content (readout bars, cards, schematics) is still pipboy-green -> T20.
     CSS = """
-    Screen { background: #06120b; color: #34d977; }
-    #topbar { dock: top; height: 1; background: #0a1c10; }
-    #topbartitle { width: 1fr; color: #6dffab; content-align: center middle; text-style: bold; }
-    #statusmeter { width: 22; content-align: right middle; text-style: bold; padding: 0 1 0 0; }
-    Tabs { background: #0a1c10; }
-    Tab { color: #1f9a52; }
-    Tab.-active { color: #9dffce; text-style: bold; }
+    Screen { background: $background; color: $foreground; }
+    #topbar { dock: top; height: 1; background: $panel; }
+    #topbartitle { width: 1fr; color: $accent; content-align: center middle; text-style: bold; }
+    #statusmeter { width: auto; min-width: 24; content-align: right middle; text-style: bold; padding: 0 1 0 0; }
+    Tabs { background: $panel; }
+    Tab { color: $secondary; }
+    Tab.-active { color: $success; text-style: bold; }
     TabbedContent { height: 1fr; }
     TabbedContent > Tabs { dock: top; }
-    .sec { color: #6dffab; text-style: bold; border-bottom: dashed #1c7a42; margin: 1 0 0 0; }
-    .lbl { width: 13; color: #34d977; content-align: left middle; }
+    .sec { color: $accent; text-style: bold; border-bottom: dashed $border; margin: 1 0 0 0; }
+    .lbl { width: 13; color: $foreground; content-align: left middle; }
     .row { width: 1fr; height: 3; }
     .row Input, .row Select { width: 1fr; }
     .row.tarow { height: 5; }
     .row.tarow .lbl { content-align: left top; }
-    TextArea.ta { width: 1fr; height: 5; border: tall #134a2a; background: #06120b; color: #7dffb8; }
-    TextArea.ta:focus { border: tall #6dffab; }
-    Input { border: tall #134a2a; background: #06120b; color: #7dffb8; }
-    Input:focus { border: tall #6dffab; }
-    Select, Switch { background: #06120b; }
+    TextArea.ta { width: 1fr; height: 5; border: tall $border-strong; background: $background; color: $text-bright; }
+    TextArea.ta:focus { border: tall $accent; }
+    Input { border: tall $border-strong; background: $background; color: $text-bright; }
+    Input:focus { border: tall $accent; }
+    Select, Switch { background: $background; }
     #form { width: 52; padding: 0 2 0 1; }
     #rightcol { width: 1fr; height: 100%; margin: 0 1 0 2; overflow-y: auto; }
     #rctop { width: 1fr; height: auto; }
     #rightcol.-narrow #rctop { layout: vertical; }
-    #fieldvisual { width: 1fr; border: round #2fae5f; background: #08160d; padding: 0 1; margin: 0 1 1 0; height: auto; display: none; }
+    #fieldvisual { width: 1fr; border: round $primary; background: $surface; padding: 0 1; margin: 0 1 1 0; height: auto; display: none; }
     #fieldvisual.-active { display: block; }
-    #newinfo { width: 1fr; border: round #1c7a42; background: #08160d; padding: 0 1; margin: 0 0 1 0; height: auto; }
-    #blindpanel { width: 1fr; border: round #2fae5f; background: #08160d; padding: 0 1; margin: 0 0 1 0; height: auto; display: none; }
+    #newinfo { width: 1fr; border: round $border; background: $surface; padding: 0 1; margin: 0 0 1 0; height: auto; }
+    #blindpanel { width: 1fr; border: round $primary; background: $surface; padding: 0 1; margin: 0 0 1 0; height: auto; display: none; }
     #blindpanel.-active { display: block; }
-    #readout { width: 1fr; border: round #1c7a42; background: #08160d;
+    #readout { width: 1fr; border: round $border; background: $surface;
                padding: 0 1; margin: 0 0 1 0; height: auto; display: none; }
     #readout.-active { display: block; }
-    #blindtitle { color: #6dffab; text-style: bold; height: 1; margin: 1 0 0 0; }
-    #blindsub { color: #1f9a52; height: auto; margin: 0 0 1 0; }
+    #blindtitle { color: $accent; text-style: bold; height: 1; margin: 1 0 0 0; }
+    #blindsub { color: $secondary; height: auto; margin: 0 0 1 0; }
     #blindvarrow { height: 3; }
     #blindvarrow .lbl { width: 15; }
     .blindab { height: auto; }
     .blindab .lbl { width: 15; }
-    #blindmsg { color: #ffcf5c; height: auto; margin: 1 0 0 0; }
+    #blindmsg { color: $warning; height: auto; margin: 1 0 0 0; }
     #blindbtns { height: 3; margin-top: 1; }
     #blindbtns Button { margin-right: 2; }
-    #blind_run { background: #134a2a; color: #9dffce; text-style: bold; }
+    #blind_run { background: $border-strong; color: $success; text-style: bold; }
     #runest { padding: 1 0 0 0; }
-    Button { border: tall #1c7a42; background: #0a1c10; color: #7dffb8; }
-    Button:hover { background: #134a2a; }
+    Button { border: tall $border; background: $panel; color: $text-bright; }
+    Button:hover { background: $border-strong; }
     #queuebtn, #consultbtn { margin-top: 1; }
-    DataTable { background: #050d08; color: #34d977; border: round #1c7a42; height: 1fr; }
-    DataTable > .datatable--cursor { background: #134a2a; color: #9dffce; }
-    DataTable > .datatable--header { background: #0a1c10; color: #6dffab; }
+    DataTable { background: $surface-deep; color: $foreground; border: round $border; height: 1fr; }
+    DataTable > .datatable--cursor { background: $border-strong; color: $success; }
+    DataTable > .datatable--header { background: $panel; color: $accent; }
     ProgressBar { margin: 1 1; }
-    Bar > .bar--bar { color: #2fae5f; }
-    Bar > .bar--complete { color: #9dffce; }
-    RichLog { border: round #1c7a42; background: #050d08; color: #34d977; height: 1fr; }
-    #livehdr { color: #6dffab; text-style: bold; padding: 1 1 1 1; border-bottom: dashed #134a2a; }
-    #livephase { color: #9dffce; padding: 0 1; height: 1; }
-    #progtext { color: #34d977; padding: 0 1; height: 1; }
+    Bar > .bar--bar { color: $primary; }
+    Bar > .bar--complete { color: $success; }
+    RichLog { border: round $border; background: $surface-deep; color: $foreground; height: 1fr; }
+    #livehdr { color: $accent; text-style: bold; padding: 1 1 1 1; border-bottom: dashed $border-strong; }
+    #livephase { color: $success; padding: 0 1; height: 1; }
+    #progtext { color: $foreground; padding: 0 1; height: 1; }
     #livemid { height: 1fr; min-height: 14; margin: 1 0 0 0; }
-    #preview { width: 50; height: 1fr; border: round #1c7a42; background: #050d08; content-align: center middle; }
+    #preview { width: 50; height: 1fr; border: round $border; background: $surface-deep; content-align: center middle; }
     #notescol { width: 1fr; height: 1fr; }
-    #director { color: #ffcf5c; padding: 0 1; height: auto; max-height: 4; }
-    #dirnotes { border: round #1c7a42; background: #050d08; color: #34d977; height: 1fr; }
-    .strip { height: 2; margin: 0; padding: 0 1; border-top: dashed #134a2a; }
-    .strip Static { width: 1fr; height: 1; color: #34d977; content-align: left middle; }
+    #director { color: $warning; padding: 0 1; height: auto; max-height: 4; }
+    #dirnotes { border: round $border; background: $surface-deep; color: $foreground; height: 1fr; }
+    .strip { height: 2; margin: 0; padding: 0 1; border-top: dashed $border-strong; }
+    .strip Static { width: 1fr; height: 1; color: $foreground; content-align: left middle; }
     #ph_timeline { width: 1fr; }
     #livelog { display: none; height: 8; }
-    #livebar { height: 1; background: #0a1c10; color: #6dffab; content-align: left middle; padding: 0 1; }
-    #inspectpanel { border: round #1c7a42; background: #08160d; height: 1fr; padding: 0 1; }
-    #inspectinfo { color: #34d977; }
-    #qinspectpanel { border: round #1c7a42; background: #08160d; height: 1fr; padding: 0 1; }
-    #qinspect { color: #34d977; }
+    #livebar { height: 1; background: $panel; color: $accent; content-align: left middle; padding: 0 1; }
+    #inspectpanel { border: round $border; background: $surface; height: 1fr; padding: 0 1; }
+    #inspectinfo { color: $foreground; }
+    #qinspectpanel { border: round $border; background: $surface; height: 1fr; padding: 0 1; }
+    #qinspect { color: $foreground; }
     #inspectlog { display: none; }
     #reltable { height: 8; margin-top: 1; display: none; }
     #playchildbtn { display: none; margin-top: 1; }
-    #status { height: 2; border-top: solid #1c7a42; background: #0a1c10; color: #6dffab; content-align: left middle; }
+    #status { height: 2; border-top: solid $border; background: $panel; color: $accent; content-align: left middle; }
     .actions { height: 3; }
     .actions Button { margin-right: 1; }
+    .arcrow Button { min-width: 0; }
+    .arcsep { width: 1; height: 3; color: $border; content-align: center middle; margin: 0 1; }
+    .arcflex { width: 1fr; height: 1; }
+    Button.-active { background: $border-strong; color: $success; border: tall $accent; }
     """
     BINDINGS = [("ctrl+c", "quit", "Quit"), ("t", "toggle_term", "Terminal"),
                 ("d", "toggle_dirraw", "Dir raw"),
@@ -1631,13 +1845,13 @@ class Studio(App):
                         yield field("STEPS", Input(value="40", id="steps"))
                         yield field("GUIDANCE", Input(value="3.0", id="cfg"))
                         yield field("NEG", TextArea(NEG, id="n_prompt", soft_wrap=True, tab_behavior="focus", classes="ta"))
-                        yield field("SEED", Input(value="0", id="seed", placeholder="leave blank for random"))
+                        yield field("SEED", Input(value="", id="seed", placeholder="blank = random (default)"))
                         yield field("FPS", Input(value="24", id="fps"))
                         yield Static("▌ OUTPUT", classes="sec")
                         yield field("NAME", Input(placeholder="optional — file name (else job_HHMMSS)", id="name"))
                         yield Static("", id="runest")
                         yield Button("✎ CONSULT THE DIRECTOR", id="consultbtn")
-                        yield Button("⌨ CHAT WITH THE MODEL", id="chatbtn")
+                        yield Button("» CHAT WITH THE MODEL", id="chatbtn")
                         yield Button("▶ QUEUE RUN", id="queuebtn")
                         _rep = Button("×N REPLICATE", id="newreplbtn")
                         _rep.tooltip = ("Queue this exact config N times (2-5) with different random seeds "
@@ -1659,7 +1873,7 @@ class Studio(App):
                         with Vertical(id="blindpanel"):
                             yield Static("⇄  BLIND A/B RUN", id="blindtitle")
                             yield Static("Two runs from the CURRENT form, identical except ONE field — shared "
-                                         "seed, randomized + blind until ⚡ REVEAL. Pick a field, set A and B.",
+                                         "seed, randomized + blind until ↯ REVEAL. Pick a field, set A and B.",
                                          id="blindsub")
                             with Horizontal(id="blindvarrow", classes="row"):
                                 yield Label("Field to vary", classes="lbl")
@@ -1677,7 +1891,7 @@ class Studio(App):
                     yield Button("↑ PROMOTE", id="promotebtn")
                     yield Button("» INSPECT", id="qinspectbtn")
                     yield Button("⧉ CLONE", id="qclonebtn")
-                    yield Button("× REMOVE SELECTED", id="removebtn")
+                    yield Button("✕ REMOVE SELECTED", id="removebtn")
                 with VerticalScroll(id="qinspectpanel"):
                     yield Static("[dim]Select a queued run above to see its full config.[/dim]", id="qinspect")
             with TabPane("▶ LIVE", id="tab-live"):
@@ -1712,21 +1926,29 @@ class Studio(App):
                 yield Static("", id="livebar")
             with TabPane("✓ ARCHIVE", id="tab-arch"):
                 yield DataTable(id="atable", cursor_type="row")
-                with Horizontal(classes="actions"):
+                # actions in two GROUPED rows (compact .arcrow buttons, │ separators):
+                #   row 1: view/inspect │ blind-pair verdicts │ favorite
+                #   row 2: derive-a-new-run … [gap] … destructive (rename/delete pushed right)
+                with Horizontal(classes="actions arcrow"):
                     yield Button("▶ PLAY", id="playbtn")
+                    yield Button("▤ FRAMES", id="framesbtn")
                     yield Button("» INSPECT", id="inspectbtn")
-                    yield Button("⏱ TIMING", id="timingbtn")
+                    yield Button("◷ TIMING", id="timingbtn")
                     yield Button("» TERMINAL", id="arctermbtn")
-                    _rvl = Button("⚡ REVEAL", id="revealbtn")
+                    yield Static("│", classes="arcsep")
+                    _rvl = Button("↯ REVEAL", id="revealbtn")
                     _rvl.tooltip = plain_help("blind_ab")
                     yield _rvl
-                with Horizontal(classes="actions"):
+                    yield Button("≷ RATE PAIR", id="ratepairbtn")
+                    yield Static("│", classes="arcsep")
+                    yield Button("★ FAVORITE", id="favbtn")
+                with Horizontal(classes="actions arcrow"):
                     yield Button("⧉ CLONE", id="clonebtn")
                     yield Button("⟲ RE-ROLL", id="rerollbtn")
                     yield Button("⇄ PAIR A/B", id="pairbtn")
                     yield Button("×N REPLICATE", id="replbtn")
-                    yield Button("⚖ RATE PAIR", id="ratepairbtn")
                     yield Button("▲ ENHANCE", id="enhancebtn")
+                    yield Static(classes="arcflex")
                     yield Button("✎ RENAME", id="renamebtn")
                     yield Button("✕ DELETE", id="deletebtn")
                 with VerticalScroll(id="inspectpanel"):
@@ -1736,6 +1958,42 @@ class Studio(App):
                 yield RichLog(id="inspectlog", highlight=True, markup=False, wrap=True)
         yield Static("", id="status")
         yield Footer()
+
+    def get_css_variables(self):
+        """The stylesheet references four CUSTOM vars (border/border-strong/surface-deep/text-bright)
+        that only the pipboy-family themes define. Fill safe fallbacks so picking a BUILTIN textual
+        theme in the Ctrl+K picker restyles the app instead of crashing the stylesheet."""
+        v = super().get_css_variables()
+        v.setdefault("border", v.get("secondary", "#1f9a52"))
+        v.setdefault("border-strong", v.get("panel", "#134a2a"))
+        v.setdefault("surface-deep", v.get("background", "#06120b"))
+        v.setdefault("text-bright", v.get("success", "#9dffce"))
+        return v
+
+    def _on_theme_changed(self, theme):
+        """T20: re-tint every INLINE-markup surface from the new theme — studio SPAL (cards/meter/
+        status/plan) + the readout and field_visuals module palettes — then invalidate the cached
+        renders. Best-effort: a malformed theme leaves the previous palette."""
+        try:
+            v = dict(getattr(theme, "variables", None) or {})
+            pal = {"accent": theme.accent or "#6dffab", "success": theme.success or "#9dffce",
+                   "foreground": theme.foreground or "#34d977", "warning": theme.warning or "#ffcf5c",
+                   "error": theme.error or "#ff6d6d", "primary": theme.primary or "#2fae5f",
+                   "secondary": theme.secondary or "#1f9a52"}
+            pal["text_bright"] = v.get("text-bright") or pal["success"]
+            pal["border"] = v.get("border") or pal["secondary"]
+            SPAL.update(pal)
+            SPAL["title"] = pal["text_bright"]
+            SPAL["muted"] = pal["secondary"]
+            SPAL["soft"] = pal["primary"]
+            if field_visuals is not None:
+                field_visuals.set_palette(pal)
+            if readout is not None:
+                readout.set_palette(pal)
+            self._qsig = None            # queue cards re-render in the new palette next tick
+            self.update_est()            # plan line + readout strip refresh now
+        except Exception:
+            pass
 
     def on_mount(self):
         for t in EXTRA_THEMES:
@@ -1762,12 +2020,18 @@ class Studio(App):
             self.mgr.vram_reserve_gb = reserve
         except Exception:
             pass
-        try:      # sound/alert prefs: reflect the master toggle + load the stall threshold (default ON / 240s)
+        try:      # T20: inline-markup palettes follow the theme (CSS $vars already do)
+            self.theme_changed_signal.subscribe(self, self._on_theme_changed)
+        except Exception:
+            pass
+        try:      # sound/alert prefs: master toggle + stall threshold/action/grace (defaults ON / 240s / suspend / 180s)
             _snd = load_studio_config().get("sounds", {}) or {}
             self.query_one("#sound_enabled", Select).value = "on" if _snd.get("enabled", True) else "off"
             self._stall_secs = float(_snd.get("stall_secs", 240) or 240)
+            self._stall_action = str(_snd.get("stall_action", "suspend"))     # "suspend" | "alert"
+            self._stall_grace = float(_snd.get("stall_grace_secs", 180) or 180)
         except Exception:
-            self._stall_secs = 240.0
+            self._stall_secs, self._stall_action, self._stall_grace = 240.0, "suspend", 180.0
         # T22: readout meter strip — exposed configs (studio_config.json), both default ON
         try:
             _rc = load_studio_config()
@@ -2050,6 +2314,21 @@ class Studio(App):
                 b[k] = 1.0
         return b
 
+    def _queue_eta(self):
+        """Estimated wall-seconds until the QUEUE is empty: time left on the active run + the full budget
+        of every queued job. Recomputed each tick, so it tracks jobs finishing / being added / progressing."""
+        try:
+            m = self.mgr
+            total = 0.0
+            act = m.active()
+            if act is not None:
+                total += max(0.0, sum(self._run_budget(act).values()) - max(0.0, act.elapsed()))
+            for j in m.queued():
+                total += sum(self._run_budget(j).values())
+            return total
+        except Exception:
+            return 0.0
+
     def _smart_pct(self, job):
         """Expected-wall-time overall %: (est-time of completed meta-phases + current-phase
         fraction * current-phase est) / total-est. WITHIN gen it advances by (step+intra)/nstep
@@ -2172,8 +2451,8 @@ class Studio(App):
             return s + " " * (n - len(s))
         glyph, label = _run_kind(job)
         badge = "%s %s" % (glyph, label.upper())
-        bcol = ("#ffcf5c" if (label == "replicate" or label.startswith("pair") or label == "blind pair")
-                else "#7fd0ff" if label == "enhance" else "#6dffab")
+        bcol = (SPAL["warning"] if (label == "replicate" or label.startswith("pair") or label == "blind pair")
+                else "#7fd0ff" if label == "enhance" else SPAL["accent"])
         gap = max(1, inner - len(badge) - len(status))
         header = "[%s]%s[/%s]%s[%s]%s[/%s]" % (bcol, badge, bcol, " " * gap, status_col, status, status_col)
         title = job.title or p.get("prompt", "") or job.id
@@ -2181,14 +2460,15 @@ class Studio(App):
             p.get("backend", "ltx"), p.get("width", "?"), p.get("height", "?"),
             p.get("steps", "?"), p.get("cfg", "?"), p.get("seconds", "?"),
             trunc(p.get("seed", "") or "rnd", 11))
-        B = "#2fae5f"
+        B = SPAL["primary"]
         top = "[%s]╭%s╮[/%s]" % (B, "─" * (w - 2), B)
         bot = "[%s]╰%s╯[/%s]" % (B, "─" * (w - 2), B)
+        T, M, S = SPAL["title"], SPAL["muted"], SPAL["soft"]
         body = [
             "[%s]│[/%s] %s [%s]│[/%s]" % (B, B, header, B, B),
-            "[%s]│[/%s] [#d7ffe8]%s[/#d7ffe8] [%s]│[/%s]" % (B, B, pad(title, inner), B, B),
-            "[%s]│[/%s] [#4a9d6e]%s[/#4a9d6e] [%s]│[/%s]" % (B, B, pad(job.id, inner), B, B),
-            "[%s]│[/%s] [#5bbf83]%s[/#5bbf83] [%s]│[/%s]" % (B, B, pad(parms, inner), B, B),
+            "[%s]│[/%s] [%s]%s[/%s] [%s]│[/%s]" % (B, B, T, pad(title, inner), T, B, B),
+            "[%s]│[/%s] [%s]%s[/%s] [%s]│[/%s]" % (B, B, M, pad(job.id, inner), M, B, B),
+            "[%s]│[/%s] [%s]%s[/%s] [%s]│[/%s]" % (B, B, S, pad(parms, inner), S, B, B),
         ]
         return "\n".join([top] + body + [bot, ""])
 
@@ -2197,14 +2477,23 @@ class Studio(App):
         key). Cosmetic redesign of the old 4-column table; row keys stay job ids, so _selected + every
         queue action + on_data_table_row_highlighted keep working unchanged."""
         m = self.mgr
-        items = [(j, "QUEUED · #%d" % (i + 1), "#6dffab") for i, j in enumerate(m.queued())]
-        items += [(j, "SUSPENDED · shot %s/%s" % (j.seg, j.nseg), "#ffcf5c") for j in m.suspended()]
+        items = [(j, "QUEUED · #%d" % (i + 1), SPAL["accent"]) for i, j in enumerate(m.queued())]
+        items += [(j, "SUSPENDED · shot %s/%s" % (j.seg, j.nseg), SPAL["warning"]) for j in m.suspended()]
         t = self.query_one("#qtable", DataTable)
         try:
             w = int(t.content_size.width) - 4      # leave room for the DataTable cell padding + scrollbar
         except Exception:
             w = 0
         w = max(48, min(96, w)) if (w and w > 0) else 72
+        if not items:                        # empty state: one dim hint card; all actions no-op on its key
+            if getattr(self, "_qsig", None) == ("empty", w):
+                return
+            t.clear()
+            t.add_row(Text.from_markup(
+                "[dim]≡ queue empty — fill the NEW RUN form and ▶ QUEUE RUN (^⏎)[/dim]"),
+                height=3, key="__empty__")
+            self._qsig = ("empty", w)
+            return
         sig = (w,) + tuple((j.id, _run_kind(j), st, str(j.params)) for (j, st, _c) in items)
         if sig == getattr(self, "_qsig", None):
             return
@@ -2231,18 +2520,28 @@ class Studio(App):
         m, c = self.mgr, self.consult
         nq = len(m.queued())
         on_cpu = c.alive() and getattr(c, "cpu_mode", False)
-        if m.active() is not None:
-            seg = ("[#ffcf5c]‖ PAUSED[/#ffcf5c]" if m.paused
-                   else "[#9dffce]%s RENDER[/#9dffce]" % self.SPIN[self._beat % len(self.SPIN)])
-        elif c.alive() and not on_cpu:
-            seg = "[#ffcf5c]✎ DIRECTOR[/#ffcf5c]"
-        else:
-            seg = "[#2fae5f]○ idle[/#2fae5f]"
-        if nq:
-            seg += "  [#6dffab]≡%d[/#6dffab]" % nq
-        if on_cpu:
-            seg += "  [#ffcf5c]✎CPU[/#ffcf5c]"
-        return seg
+        act = m.active()
+        blink = (self._beat % 2 == 0)
+
+        def led(on, label, key, pulse=False):
+            """One motherboard LED cell: ▮ lit (theme color; `pulse` alternates bright/dim on the
+            tick beat) / ▯ unlit-dim. Several can be lit at once (e.g. REN + QUE)."""
+            if not on:
+                return "[dim]▯%s[/dim]" % label
+            col = SPAL.get(key) or "#34d977"
+            if pulse and not blink:
+                col = SPAL.get("secondary") or col
+            return "[%s]▮%s[/%s]" % (col, label, col)
+
+        return "  ".join([
+            led(act is None and not c.alive(), "IDL", "primary"),
+            led(act is not None and not m.paused, "REN", "success", pulse=True),
+            led(nq > 0, "QUE", "accent"),
+            led(act is not None and m.paused, "PAU", "warning"),
+            led(bool(m.suspended()), "SUS", "warning"),
+            led(c.alive(), "DIR", "warning") + ("[dim]·cpu[/dim]" if on_cpu else ""),
+            led(bool(getattr(self, "_stall_note", "")), "STL", "error", pulse=True),
+        ])
 
     def _alerts(self):
         """Event sounds + stall-sentry, driven PURELY by observed studio state (never the run's own
@@ -2262,13 +2561,17 @@ class Studio(App):
                     sounds.play("run_done", REPO)      # one chime even if several rows land together
         except Exception:
             pass
-        # --- stall-sentry: active run wedged (no phase/seg/step change AND no fresh preview write). ---
+        # --- stall-sentry: active run wedged (no phase/seg/step change AND no fresh preview write).
+        #     stall_action="suspend" (default) ESCALATES so the queue unblocks: graceful suspend at
+        #     the threshold (SIGUSR1 -> checkpoint at the next shot boundary; no-op for single-shot),
+        #     then hard_interrupt() after a grace window (ckpt kept -> lands resumable). "alert" =
+        #     banner+sound only. Never escalates a PAUSED run or the load/download phases. ---
         try:
             job = m.active()
-            if job is None:
+            if job is None or m.paused:
                 self._stall_state = None
                 return
-            sig = (job.id, job.phase, job.seg, job.step)
+            sig = (job.id, job.phase, job.seg, job.step, getattr(job, "load_step", 0))
             try:
                 pv = getattr(job, "preview", None)
                 pmt = os.path.getmtime(pv) if pv and os.path.exists(pv) else 0.0
@@ -2277,15 +2580,35 @@ class Studio(App):
             now = time.monotonic()
             prev = getattr(self, "_stall_state", None)
             if prev is None or prev["sig"] != sig or prev["pmt"] != pmt:
-                self._stall_state = {"sig": sig, "pmt": pmt, "since": now, "fired": False}
+                self._stall_state = {"sig": sig, "pmt": pmt, "since": now, "fired": False,
+                                     "susp": False, "killed": False}
                 return
             idle = now - prev["since"]
-            if idle >= getattr(self, "_stall_secs", 240.0):
-                self._stall_note = "    [#ff6d6d]⚠ STALL? no progress %dm[/#ff6d6d]" % int(idle // 60)
-                if not prev["fired"]:
-                    prev["fired"] = True
-                    if sounds is not None:
-                        sounds.play("run_stall", REPO)
+            if idle < getattr(self, "_stall_secs", 240.0):
+                return
+            mins = int(idle // 60)
+            if not prev["fired"]:
+                prev["fired"] = True
+                if sounds is not None:
+                    sounds.play("run_stall", REPO)
+            escalate = (getattr(self, "_stall_action", "suspend") == "suspend"
+                        and job.phase in ("warmup", "generating", "decoding", "saving"))
+            if not escalate:      # "alert" mode, or a load/download phase (legitimately silent-slow)
+                self._stall_note = "    " + tmark("error", "!! STALL? no progress %dm" % mins)
+                return
+            if not prev["susp"]:
+                prev["susp"] = True
+                m.suspend()       # graceful first: checkpoint at the next boundary (no-op single-shot)
+            if idle >= getattr(self, "_stall_secs", 240.0) + getattr(self, "_stall_grace", 180.0) \
+                    and not prev["killed"]:
+                prev["killed"] = True
+                m.hard_interrupt()   # ckpt-preserving kill -> suspended (resumable) / interrupted; queue moves on
+                self._stall_note = "    " + tmark("error", "!! STALLED %dm — killed, queue continues" % mins)
+                return
+            self._stall_note = "    " + tmark(
+                "error", "!! STALL %dm — suspending… (kill in %ds)"
+                % (mins, max(0, int(getattr(self, "_stall_secs", 240.0)
+                                    + getattr(self, "_stall_grace", 180.0) - idle))))
         except Exception:
             pass
 
@@ -2296,8 +2619,8 @@ class Studio(App):
         # in this WSL2 (RTX 5070 Blackwell + driver 591.74) destabilizes the dxg passthrough and
         # restarts the WHOLE VM after ~30 calls, EVEN WITH NO CUDA RUNNING. So there is no live VRAM%
         # meter — we show working/idle from whether a run or the consult daemon is up.
-        self._gpu_str = ("[#ffcf5c]GPU ● working[/#ffcf5c]" if self._cuda_busy()
-                         else "[#2fae5f]GPU ○ idle[/#2fae5f]")
+        self._gpu_str = (tmark("warning", "GPU ● working") if self._cuda_busy()
+                         else tmark("primary", "GPU ○ idle"))
         # CONSULT daemon is loaded only while its screen is open (it warms/frees itself there).
         # Here we just reclaim the GPU from it the moment a run starts.
         if m.active() is not None and self.consult.alive() and not self.consult.cpu_mode:
@@ -2305,12 +2628,21 @@ class Studio(App):
         q, a, d, s = m.counts()
         self._alerts()      # run-done sound (archive-row-added) + stall-sentry; sets self._stall_note
         st = "PAUSED" if m.paused else ("RUNNING" if a else "idle")
+        _eta = self._queue_eta()
+        _etastr = ("  " + tmark("accent", "(~%s to empty)" % fmt(_eta))) if _eta > 1 else ""
         self.query_one("#status", Static).update(
-            f"  ▌ QUEUED {q}    ▶ {st}    ✓ DONE {d}    ▽ SUSP {s}     │     {self._gpu_str}{self._stall_note}")
+            f"  ▌ QUEUED {q}{_etastr}    ▶ {st}    ✓ DONE {d}    ▽ SUSP {s}     │     {self._gpu_str}{self._stall_note}")
         self.query_one("#statusmeter", Static).update(self._meter())
         # queue + archive tables — rebuilt only when content changes (cursor stays put; no rubber-band)
         _dt = lambda ts: time.strftime("%m-%d %H:%M", time.localtime(ts)) if ts else "—"
-        arows = [(j.id, j.id, (("▲ " if j.kind == "enhance" and not (j.title or "").startswith("▲") else "") + (j.title or ""))[:30], j.status, _dt(j.started), _dt(j.finished), fmt(j.elapsed()), _vidlen(j)) for j in m.archived()]
+        def _atitle(j):
+            pre = ("★ " if (j.params or {}).get("favorite") else "") + \
+                  ("▲ " if (j.kind == "enhance" and not (j.title or "").startswith("▲")) else "")
+            return (pre + (j.title or ""))[:30]
+        arows = [(j.id, j.id, _atitle(j), j.status, _dt(j.started), _dt(j.finished), fmt(j.elapsed()), _vidlen(j)) for j in m.archived()]
+        if not arows:                                # empty state hint row (every action no-ops on its key)
+            arows = [("__empty__", "", Text.from_markup("[dim]no finished runs yet — outputs land here[/dim]"),
+                      "", "", "", "", "")]
         self._sync_queue_cards()                     # QUEUE as decorated cards (replaces the old 4-column table)
         self._sync_table("#atable", arows, "_asig")
         # live
@@ -2445,10 +2777,10 @@ class Studio(App):
             self.query_one("#pace_eta", Static).update(f"[dim]left[/dim] ~{fmt(int(mean * max(0, job.nseg - job.seg)))}")
         elif seg_t0 and not loading:   # no completed shot yet -> show the current shot ticking
             self.query_one("#pace_shot", Static).update(f"[dim]this shot[/dim] {fmt(int(time.time() - seg_t0))}")
-            self.query_one("#pace_eta", Static).update(f"[dim]left[/dim] {eta}")
+            self.query_one("#pace_eta", Static).update(f"[dim]left[/dim] {eta.removesuffix(' left')}")
         else:
             self.query_one("#pace_shot", Static).update("[dim]per shot[/dim] ~measuring")
-            self.query_one("#pace_eta", Static).update(f"[dim]left[/dim] {eta}")
+            self.query_one("#pace_eta", Static).update(f"[dim]left[/dim] {eta.removesuffix(' left')}")
         sf = int(p.get("seg_frames") or 0)
         tf = int(p.get("total_frames") or (sf * job.nseg if sf else 0))
         if sf and tf and nstp:
@@ -2591,7 +2923,9 @@ class Studio(App):
                 steps_s = str(min(int(float(steps_s)), 8))   # [[STEP]] totals / previews / ETA all stay honest
             except Exception:
                 steps_s = "6"
-        common = ["--steps", steps_s, "--cfg", V("cfg"), "--seed", V("seed"),
+        _sv = (V("seed") or "").strip()                  # blank/invalid SEED -> a concrete random seed (recorded)
+        seed_s = _sv if (_sv and _sv.lstrip("-").isdigit()) else str(random.randint(1, 2**31 - 1))
+        common = ["--steps", steps_s, "--cfg", V("cfg"), "--seed", seed_s,
                   "--width", str(W), "--height", str(H), "--fps", str(fps), "--out", out, "--frames_dir", fdir]
         # Q4/Q5 opt-in advanced levers. Every one DEFAULTS OFF -> when untouched, `common` is byte-identical
         # to before. Backend scope mirrors director.py's own no-op gating; we also skip appending on the
@@ -2643,7 +2977,7 @@ class Studio(App):
             title = prompt[:40]
         kind = "director" if director else ("chained" if chain else "single")
         params = dict(
-            mode=kind, prompt=prompt, steps=steps_s, cfg=V("cfg"), seed=V("seed"),
+            mode=kind, prompt=prompt, steps=steps_s, cfg=V("cfg"), seed=seed_s,
             fps=str(fps), seconds=V("seconds"), seg_sec=(seg_sec if (chain or director) else ""),
             res=V("res"), width=W, height=H, nseg=nseg, seg_frames=seg_frames, total_frames=total_frames,
             directive=(V("directive") if director else ""), anchors=(V("anchors") or ""),
@@ -2756,7 +3090,7 @@ class Studio(App):
             except Exception:
                 req_s = None
             asked = f" (asked {req_s}s)" if (req_s is not None and abs(req_s - actual_s) >= 0.05) else ""
-            est.update(f"[#ffcf5c]plan: {nseg} shot(s) · {seg_s}s/seg · {actual_s}s{asked}  ::  {mode}  ::  ~{fmt(secs)}{warn}[/#ffcf5c]")
+            est.update(tmark("warning", f"plan: {nseg} shot(s) · {seg_s}s/seg · {actual_s}s{asked}  ::  {mode}  ::  ~{fmt(secs)}{warn}"))
             self._update_readout(secs, (W, H, fps, total_frames, seg_frames, nseg, chain))   # T22
         except Exception:
             est.update("[dim]plan: enter numbers[/dim]")
@@ -3223,7 +3557,7 @@ class Studio(App):
         self.query_one(TabbedContent).active = "tab-queue"
         self.query_one("#newinfo", Static).update(
             f"[#9dffce]Queued BLIND A/B pair {pair_id} — two runs, seed {seed}, varying "
-            f"'{var}' (blind). Rate with ⚖ RATE PAIR, then ⚡ REVEAL in ARCHIVE.[/#9dffce]"
+            f"'{var}' (blind). Rate with ≷ RATE PAIR, then ↯ REVEAL in ARCHIVE.[/#9dffce]"
             + _turbo_note)
 
     def _open_blind_panel(self):
@@ -3569,6 +3903,33 @@ class Studio(App):
                     self.query_one("#inspectinfo", Static).update(
                         f"[#9dffce]Replicated {job.id} ×{len(queued)}: {', '.join(queued)}.[/#9dffce]")
             self.push_screen(ReplicateScreen((job.title or job.id)[:40]), _do_replicate)
+        elif b == "favbtn":         # toggle ★ favorite on the selected ARCHIVE run (persisted in job.params)
+            jid = self._selected("#atable")
+            job = self.mgr.jobs.get(jid) if jid else None
+            if job:
+                p = job.params or {}
+                fav = not bool(p.get("favorite"))
+                p["favorite"] = fav
+                job.params = p
+                job.save()
+                self.query_one("#inspectinfo", Static).update(
+                    ("[#ffcf5c]★ favorited[/#ffcf5c]" if fav else "[dim]☆ unfavorited[/dim]") + "  " + job.id)
+        elif b == "framesbtn":      # scroll a finished run's saved output frames as terminal art
+            jid = self._selected("#atable")
+            job = self.mgr.jobs.get(jid) if jid else None
+            if not job:
+                return
+            fd = (job.params or {}).get("frames_dir") or ""
+            fdabs = fd if os.path.isabs(fd) else os.path.join(REPO, fd)
+            try:
+                frames = sorted(os.path.join(fdabs, f) for f in os.listdir(fdabs) if f.lower().endswith(".png"))
+            except Exception:
+                frames = []
+            if not frames:
+                self.query_one("#inspectinfo", Static).update(
+                    "[#ffcf5c]No saved frames for this run (frames_dir empty or cleaned up).[/#ffcf5c]")
+                return
+            self.push_screen(FrameScrollScreen(frames, job.id))
         elif b == "ratepairbtn":
             jid = self._selected("#atable")
             if not jid:
@@ -3742,7 +4103,7 @@ class Studio(App):
                        "Removes the mp4, its frames, the log, preview and checkpoint. "
                        "[b]Cannot be undone.[/b]")
             if kids:
-                summary += f"\n\n[#ffcf5c]⚠ {len(kids)} enhanced version(s) from this run will be KEPT.[/#ffcf5c]"
+                summary += f"\n\n[#ffcf5c]!! {len(kids)} enhanced version(s) from this run will be KEPT.[/#ffcf5c]"
 
             def _do_delete(ok, jid=jid):
                 if not ok:
@@ -3915,7 +4276,7 @@ class Studio(App):
         if _blind:
             L += ["", "[#6dffab]BLIND A/B[/#6dffab]",
                   row("status", "blind — variant + varied value hidden"),
-                  row("varied", "[hidden] — press ⚡ REVEAL (below) once both runs finish")]
+                  row("varied", "[hidden] — press ↯ REVEAL (below) once both runs finish")]
         elif p.get("pair_blind") and p.get("pair_revealed") and p.get("pair_id"):
             bl = self._blind_lookup(p.get("pair_id"))
             _pv = p.get("pair_variant", "?")
@@ -3931,7 +4292,7 @@ class Studio(App):
             # sees plainly which CONFIG the video they preferred was, without hopping slot->job->variant.
             rt = self._pair_rating(p.get("pair_id"))
             if rt is None:
-                L.append(row("your pick", "not rated yet — use ⚖ RATE PAIR, then this shows your winner"))
+                L.append(row("your pick", "not rated yet — use ≷ RATE PAIR, then this shows your winner"))
             elif rt.get("winner") == "tie":
                 L.append(row("your pick", "you rated it a TIE (no preferred config)"))
             else:
@@ -4028,7 +4389,7 @@ class Studio(App):
         if rel:
             L += ["", "[#6dffab]RELATED RUNS[/#6dffab]",
                   "  [dim]see the table below -- select one + ▶ PLAY SELECTED CHILD RUN.[/dim]"]
-        L += ["", "[dim]⏱ TIMING for provenance · » TERMINAL (or 't') for the raw log.[/dim]"]
+        L += ["", "[dim]◷ TIMING for provenance · » TERMINAL (or 't') for the raw log.[/dim]"]
         return "\n".join(L)
 
     def _related_jobs(self, job):
@@ -4120,7 +4481,9 @@ class Studio(App):
     def _toggle_live_term(self):
         w = self.query_one("#livelog")
         w.display = not w.display
-        self.query_one("#livetermbtn", Button).label = "» HIDE TERM" if w.display else "» TERMINAL"
+        # constant label + lit -active style while open (a self-relabeling button reads as two
+        # different controls; the lit state says "this is on" without renaming it)
+        self.query_one("#livetermbtn", Button).set_class(w.display, "-active")
 
     def _toggle_arc_term(self):
         log = self.query_one("#inspectlog", RichLog)
@@ -4128,7 +4491,7 @@ class Studio(App):
         show = not log.display
         log.display = show
         panel.display = not show
-        self.query_one("#arctermbtn", Button).label = "» DETAILS" if show else "» TERMINAL"
+        self.query_one("#arctermbtn", Button).set_class(show, "-active")
         if show:
             log.clear()
             job = self.mgr.jobs.get(self._insp_jid)
