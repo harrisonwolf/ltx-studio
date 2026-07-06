@@ -100,12 +100,18 @@ SYSTEM_FOOT = (
 def system_text():
     base = SYSTEM_PRE + SYSTEM_BODY.get(args.steadiness, SYSTEM_BODY["hold"])
     if args.fit_check:
+        # NB: the footer must NOT say "respond in EXACTLY this format and nothing else" here — that
+        # contradicted the KEEP instruction and pushed the model into hybrids like "PROMPT: KEEP"
+        # (audit F1), which used to ship the literal word KEEP as the next shot's prompt.
         base += (
             "FIT CHECK FIRST: look hard at the last frame. If it STILL clearly shows the intended scene, "
             "subject, and style (anchors) and looks coherent (no broken anatomy, no lost subject), the current "
-            "prompt is working — reply with EXACTLY one word on its own line: KEEP. ONLY if the shot has "
+            "prompt is working — your ENTIRE reply is then exactly one word: KEEP. ONLY if the shot has "
             "visibly DRIFTED (wrong or missing subject, the scene fell apart, broken anatomy, style lost) "
-            "should you instead give a corrected shot in the format below.\n\n")
+            "should you instead give a corrected shot, responding in exactly this format:\n"
+            "PLAN: <one sentence - what this next shot shows / what changes>\n"
+            "PROMPT: <the corrected prompt: vivid, in the established medium/style, under 35 words>")
+        return base
     return base + SYSTEM_FOOT
 
 
@@ -236,15 +242,33 @@ def run_once(model, proc, dev):
     if str(dev).startswith("cuda"):
         torch.cuda.synchronize()                            # generate() is async; sync before timing infer
     infer_ms = int((time.perf_counter() - _t1) * 1000)
+    _new_tok = int(gen.shape[1] - inputs.input_ids.shape[1])
     resp = proc.batch_decode(gen[:, inputs.input_ids.shape[1]:], skip_special_tokens=True)[0]
     out, plan_txt = extract_prompt(resp)
-    if args.fit_check and re.match(r"\s*KEEP\b", resp, re.I):   # director judged the frame still fits
-        out = (args.prev or out).strip()                       # -> reuse the previous prompt verbatim
+    # KEEP detection hardened (audit F1): accept KEEP at response start, as any standalone line, or as
+    # "PROMPT: KEEP" — a 4B model at temp 0.7 emits all three shapes, and a missed KEEP used to ship
+    # prose (or the literal word KEEP) as the next shot's prompt for the following 3 shots.
+    kept = bool(args.fit_check) and (
+        re.match(r"\s*KEEP\b", resp, re.I) is not None
+        or any(re.match(r"\s*KEEP\s*[.!]?\s*$", ln, re.I) for ln in resp.splitlines())
+        or re.search(r"PROMPT:\s*KEEP\s*[.!]?\s*$", resp, re.I | re.M) is not None)
+    if kept:
+        out = (args.prev or out).strip()                    # reuse the previous prompt (anchors may re-append)
         plan_txt = "frame still fits the scene — keeping the current prompt (no change)"
-    if args.anchors:                                        # soft safety: only if style is wholly lost
+    if not out.strip():                                     # audit F2b: an empty rewrite must never ship
+        out = (args.prev or args.orig_prompt or "").strip()
+        plan_txt = plan_txt or "(model returned no prompt — keeping the previous one)"
+    if not kept:
+        if _new_tok >= args.max_new_tokens:                 # audit N5: no-EOS = truncated mid-clause
+            out = re.sub(r"\s+\S*$", "", out) if len(out.split()) > 6 else out
+        words = out.split()                                 # the "under 35 words" ask is advisory to the
+        if len(words) > 45:                                 # model; this is the hard backstop
+            out = " ".join(words[:45]).rstrip(",;: ")
+    if args.anchors:                                        # audit F3: re-append EVERY missing anchor
         anchs = [a.strip() for a in args.anchors.split(",") if a.strip()]
-        if anchs and not any(a.lower() in out.lower() for a in anchs):
-            out = out.rstrip(". ") + ", " + ", ".join(anchs[:2])
+        missing = [a for a in anchs if a.lower() not in out.lower()]
+        if missing:
+            out = out.rstrip(". ") + ", " + ", ".join(missing)
     return {"seg": args.seg, "raw": resp, "plan": plan_txt, "prompt": out,
             "infer_ms": infer_ms, "system": system_text(), "user": user_text()}
 
@@ -286,9 +310,10 @@ def daemon():
         for k in ("image", "prev", "history", "orig_prompt", "directive", "anchors", "steadiness"):
             if k in req:
                 setattr(args, k, req[k])
-        args.seg = int(req.get("seg", args.seg))
-        args.total = int(req.get("total", args.total))
         try:
+            # audit N7: int() inside the try — a junk seg/total must return an error, not kill the daemon
+            args.seg = int(req.get("seg", args.seg))
+            args.total = int(req.get("total", args.total))
             r = run_once(model, proc, dev)
             r["load_ms"] = 0
             print(json.dumps(r, ensure_ascii=True), flush=True)

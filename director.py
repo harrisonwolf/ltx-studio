@@ -956,9 +956,15 @@ def main():
     # --- optional closed-loop director (Qwen3-VL sidecar in an isolated venv) ---
     director = bool(args.vlm)
     directive = args.directive or args.prompt
-    # faithful default: an empty/echoing directive can never invent a story, regardless of the flag
+    # faithful default: an empty/echoing directive can never invent a story, regardless of the flag.
+    # DISCLOSED (audit 2026-07-06): this used to be silent while every record still said "evolve" —
+    # the studio passes --directive (directive or prompt), so a BLANK directive always echo-trips this.
+    _steady_req = args.steadiness
     if (not args.directive) or args.directive.strip() == args.prompt.strip():
         args.steadiness = "hold"
+        if director and _steady_req != "hold":
+            print("note: DIRECTIVE is blank or echoes the PROMPT -> steadiness runs as HOLD "
+                  "(%s needs a distinct directive to steer toward)" % _steady_req, flush=True)
     # #2 Q2 palette-lock gate: hold/balanced get it whenever --palette_lock>0; evolve is excluded unless
     # --palette_lock_evolve (evolve WANTS drift). palette_pool is built after shot 1 (below); None = off.
     palette_active = args.palette_lock > 0 and (args.steadiness != "evolve" or args.palette_lock_evolve)
@@ -971,11 +977,13 @@ def main():
             return palette_lock(frames, palette_pool, args.palette_lock)
         return color_match(frames, ref)
 
-    # chained (non-director) runs reuse ONE prompt for every shot with no VLM rewriting -> fold the
-    # anchors into it so the style leash actually bites (director mode lets the VLM fold them per seam).
-    base_prompt = args.prompt if director else _fold_anchors(args.prompt, args.anchors)
+    # Fold the anchors into the base prompt in EVERY mode. Non-director runs reuse it for all shots;
+    # director mode previously deferred to the VLM — but the first VLM call is seam 3 (hold cadence),
+    # which rendered the first ~3 shots with NO style leash at all (audit M3). The VLM still owns every
+    # later rewrite (it receives --anchors separately and re-folds them itself).
+    base_prompt = _fold_anchors(args.prompt, args.anchors)
     if base_prompt != args.prompt:
-        print("chained mode: folded anchors into the prompt -> %s" % _ascii1(base_prompt, 200), flush=True)
+        print("folded anchors into the shot-1 prompt -> %s" % _ascii1(base_prompt, 200), flush=True)
     DIRECTOR_PY = "/home/wolve/video_gen/director_venv/bin/python"
     SIDECAR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vlm_director7b.py")
     if director:
@@ -991,9 +999,23 @@ def main():
     fit_check = args.steadiness != "evolve"
     if director:
         print(f"director cadence: steadiness={args.steadiness}, redirect_every={redirect_every}, fit_check={fit_check}", flush=True)
+        # as-run provenance marker (audit #8): what ACTUALLY runs, incl. the downgrade — so the
+        # studio/experiment log can never record a steadiness the engine didn't execute.
+        print("[[DCFG steadiness=%s requested=%s redirect_every=%d fit_check=%d]]"
+              % (args.steadiness, _steady_req, redirect_every, int(fit_check)), flush=True)
     last_redirect = 0
     _last_directed = None       # the seam frame the director last looked at (for the HOLD static-skip)
     _dproc = [None]             # the resident CPU director daemon (A1); None until first spawned
+
+    def _save_director_state(ckpt, beats_l, last_r):
+        """Audit H2: beats / last_redirect were never checkpointed, so a resumed evolve run re-planned
+        with an EMPTY story ('do not repeat' against a blank list) and fired an immediate off-cadence
+        redirect. Written next to every checkpoint; tiny, atomic-enough (single json dump)."""
+        try:
+            with open(os.path.join(ckpt, "director_state.json"), "w") as fh:
+                json.dump({"beats": [str(b) for b in beats_l[-6:]], "last_redirect": int(last_r)}, fh)
+        except Exception:
+            pass
 
     def _log_director(seg_idx, raw_obj):
         """Append the director's full per-seam record to <ckpt_dir>/director.jsonl. Never fatal."""
@@ -1011,29 +1033,76 @@ def main():
         except Exception:
             pass
 
+    def _daemon_model_cached():
+        """The CPU daemon loads full-precision Qwen3-VL-4B from the HF cache — if it isn't there,
+        from_pretrained would silently start a ~9GB hub download MID-RENDER behind a blocking read
+        (audit N1: the cache was empty, so the 'resident daemon' path never actually worked)."""
+        hub = os.path.join(os.path.expanduser(os.environ.get("HF_HOME") or "~/.cache/huggingface"), "hub")
+        return os.path.isdir(os.path.join(hub, "models--Qwen--Qwen3-VL-4B-Instruct"))
+
+    def _read_line_timeout(pipe, secs):
+        """Bounded readline (audit H1/N2: unbounded reads could wedge the whole render behind a hung
+        daemon, and SIGUSR1 suspend can't break a blocked readline). POSIX-only, which is all we run."""
+        import select
+        r, _, _ = select.select([pipe], [], [], secs)
+        if not r:
+            raise TimeoutError("director daemon did not answer within %ds" % int(secs))
+        return pipe.readline()
+
     def _director_daemon():
         """Spawn (once) the resident per-seam director on CPU (A1) — it never touches the GPU, so the
         video pipe is never evicted (no cold re-warm each shot). Returns the process, or None to fall
         back to the per-seam GPU subprocess."""
         if _dproc[0] is not None and _dproc[0].poll() is None:
             return _dproc[0]
+        import tempfile
+        if not _daemon_model_cached():
+            if not getattr(_director_daemon, "_warned", False):
+                _director_daemon._warned = True
+                print("director: resident CPU daemon disabled — Qwen3-VL-4B is not in the HF cache "
+                      "(loading it would download ~9GB mid-render). Using the per-seam GPU sidecar. "
+                      "Enable once with: /home/wolve/video_gen/director_venv/bin/python -c "
+                      "\"from huggingface_hub import snapshot_download; "
+                      "snapshot_download('Qwen/Qwen3-VL-4B-Instruct')\"", flush=True)
+            return None
         import subprocess
         cmd = [DIRECTOR_PY, SIDECAR, "--daemon", "--orig_prompt", args.prompt, "--directive", directive,
                "--anchors", args.anchors, "--steadiness", args.steadiness, "--total", str(est_segs)]
         if fit_check:
             cmd.append("--fit_check")
+        p = None
         try:
+            # daemon stderr -> a file (audit N6: DEVNULL made every load failure undiagnosable)
+            try:
+                _errdir = args.ckpt_dir or tempfile.gettempdir()
+                os.makedirs(_errdir, exist_ok=True)
+                _derr = open(os.path.join(_errdir, "director_daemon.err"), "w")
+            except Exception:
+                _derr = subprocess.DEVNULL
             p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                 stderr=subprocess.DEVNULL, text=True, bufsize=1, cwd=os.path.dirname(SIDECAR))
-            line = p.stdout.readline()
-            if line and json.loads(line.strip()).get("ready"):
+                                 stderr=_derr, text=True, bufsize=1, cwd=os.path.dirname(SIDECAR))
+            # guarded ready-handshake (audit N3: a non-JSON first line used to LEAK the loading daemon)
+            ok = False
+            try:
+                line = _read_line_timeout(p.stdout, 900.0)     # CPU model load takes minutes, not hours
+                ok = bool(line) and bool(json.loads(line.strip()).get("ready"))
+            except Exception:
+                ok = False
+            if ok:
                 _dproc[0] = p
                 print("director: resident CPU daemon ready (loads once, no GPU eviction)", flush=True)
                 return p
-            try: p.kill()
-            except Exception: pass
+            try:
+                p.kill()
+            except Exception:
+                pass
         except Exception as e:
             print(f"director daemon unavailable ({e}); using the per-seam subprocess", flush=True)
+            if p is not None:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
         return None
 
     def _kill_director_daemon():
@@ -1052,7 +1121,11 @@ def main():
         print("[[PHASE redirecting]]", flush=True)
         import tempfile
         seam = os.path.join(tempfile.gettempdir(), f"seam_{os.getpid()}.png")
-        video[-1].save(seam)
+        try:
+            video[-1].save(seam)
+        except Exception as e:      # audit N8: a full tmpfs must skip ONE redirect, not kill the render
+            print(f"director: seam save failed ({e}); keeping prompt for this seam", flush=True)
+            return current_prompt
         history = " || ".join(beats[-3:])
         p, plan_txt, raw_obj = current_prompt, "", {}
         load_ms, infer_ms = None, None
@@ -1061,7 +1134,7 @@ def main():
             try:
                 req = {"image": seam, "prev": current_prompt or "", "seg": seg_idx, "history": history}
                 daemon.stdin.write(json.dumps(req) + "\n"); daemon.stdin.flush()
-                resp = json.loads((daemon.stdout.readline() or "{}").strip())
+                resp = json.loads((_read_line_timeout(daemon.stdout, 600.0) or "{}").strip())
                 if resp and "error" not in resp:
                     p = resp.get("prompt") or p
                     plan_txt = resp.get("plan") or ""
@@ -1088,9 +1161,9 @@ def main():
                     pm = re.search(r"\[\[PLAN\s+(.*?)\]\]", out)
                     if pm:
                         plan_txt = pm.group(1).strip()
-                    nonmarker = [ln for ln in out.splitlines() if not ln.strip().startswith("[[")]
+                    nonmarker = [ln for ln in out.splitlines() if ln.strip() and not ln.strip().startswith("[[")]
                     if nonmarker:
-                        p = nonmarker[-1].strip()
+                        p = nonmarker[-1].strip() or p     # a blank prompt must never replace a real one
                     for ln in out.splitlines():
                         if ln.startswith("[[RAW]] "):
                             try: raw_obj = json.loads(ln[len("[[RAW]] "):])
@@ -1103,7 +1176,8 @@ def main():
             except Exception as e:
                 print(f"director sidecar error: {e}; keeping prompt", flush=True)
             torch.cuda.empty_cache(); gc.collect()          # the subprocess used the GPU
-        beats.append(p)
+        if p and p != current_prompt:      # audit M2: KEEP/error paths used to append duplicate beats,
+            beats.append(p)                # polluting evolve's "do not repeat" story history
         print(f"  director> {p[:100]}")
         print("[[PLAN %d %s]]" % (seg_idx, _ascii1(plan_txt, 400)), flush=True)
         if load_ms is not None:
@@ -1116,7 +1190,24 @@ def main():
     if args.resume:
         video, seg_idx, current_prompt = load_checkpoint(args.resume, args.backend)
         setattr(backend, "_resumed", True)     # #2 Q2: latent AdaIN anchor can't be reconstructed from a ckpt
-        anchor_frame = video[seg_frames - 1]   # Q3: never persisted -- recompute (shot 1's last frame)
+        # Q3 drift anchor: prefer the PERSISTED shot-1 last frame. The video[seg_frames-1] fallback is
+        # ~90% crossfaded toward shot 2 on the LTX path (audit H3) -> pre/post-resume [[DRIFT]] curves
+        # had different baselines, silently corrupting the exact metric the chaining experiments read.
+        anchor_frame = video[seg_frames - 1]
+        _ap = os.path.join(args.resume, "anchor.png")
+        if os.path.exists(_ap):
+            try:
+                anchor_frame = load_image(_ap)
+            except Exception:
+                pass
+        # audit H2: restore the director's story state written beside the checkpoint (older ckpts lack it)
+        try:
+            with open(os.path.join(args.resume, "director_state.json")) as fh:
+                _ds = json.load(fh)
+            beats.extend([str(b) for b in _ds.get("beats", [])][-6:])
+            last_redirect = int(_ds.get("last_redirect", 0))
+        except Exception:
+            pass
         if args.wan_ref_anchor:                # Q5: shot-1 last frame -> VACE reference on continuations
             setattr(backend, "_ref_anchor", anchor_frame)
         if args.palette_lock > 0:              # #2 Q2: never persisted -- recompute the pool from shot-1 frames
@@ -1142,15 +1233,24 @@ def main():
         if args.palette_lock > 0:  # #2 Q2: sample the anchor pixel pool from shot 1 (all its frames)
             palette_pool = build_palette_pool(video, args.seed)
         print("[[DRIFT 1 0 0]]", flush=True)   # seeds the curve; SEAMMSE is continuations-only (no seam yet)
+        if args.ckpt_dir:      # audit H3: persist the TRUE pre-crossfade shot-1 anchor for resume
+            try:
+                os.makedirs(args.ckpt_dir, exist_ok=True)
+                anchor_frame.save(os.path.join(args.ckpt_dir, "anchor.png"))
+            except Exception:
+                pass
         if director:
             beats.append(args.prompt)
-            if (seg_idx - last_redirect) >= redirect_every:
+            # audit M1: don't burn a full VLM redirect directing a shot that will never render
+            if len(video) < target and (seg_idx - last_redirect) >= redirect_every:
                 current_prompt = redirect(1, video, current_prompt)
                 last_redirect = 1
                 _last_directed = video[-1]
         if args.ckpt_dir:
             write_checkpoint(args.ckpt_dir, seg_idx, video, current_prompt, directive,
                              W, H, seg_frames, target, overlap, est_segs, args)
+            if director:
+                _save_director_state(args.ckpt_dir, beats, last_redirect)
 
     # --- continuations ---
     while len(video) < target:
@@ -1199,6 +1299,8 @@ def main():
             if args.steadiness == "hold" and _last_directed is not None and _seam_static(video[-1], _last_directed):
                 last_redirect = seg_idx          # scene is holding -> skip the VLM entirely, keep the prompt
                 print("  director> (skipped — scene is holding steady; prompt unchanged)", flush=True)
+                # audit #4: surface the decision — DIRECTOR'S NOTES used to look dead on skipped seams
+                print("[[PLAN %d (skipped - scene holding steady; prompt unchanged)]]" % seg_idx, flush=True)
             else:
                 current_prompt = redirect(seg_idx, video, current_prompt)
                 last_redirect = seg_idx
@@ -1206,6 +1308,8 @@ def main():
         if args.ckpt_dir:
             write_checkpoint(args.ckpt_dir, seg_idx, video, current_prompt, directive,
                              W, H, seg_frames, target, overlap, est_segs, args)
+            if director:
+                _save_director_state(args.ckpt_dir, beats, last_redirect)
 
     _kill_director_daemon()
     video = video[:target]
