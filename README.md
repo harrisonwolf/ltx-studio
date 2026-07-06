@@ -32,6 +32,10 @@ It was built under a hard constraint — an RTX 5070 Laptop (Blackwell, `sm_120`
 
 *Left: fireflies over a glowing forest stream. Right: "bioluminescent forest at night — glowing moths, luminescent moss, a stream lit from within" (the run shown in the LIVE screenshot above). Full-quality clips: [job_105358-5.mp4](media/job_105358-5.mp4) · [job_232906-2.mp4](media/job_232906-2.mp4).*
 
+![A corgi standing on a beach at golden hour, backlit by the sunset](media/corgi_redo-2.gif)
+
+*A corgi on the beach at golden hour — generated, upscaled ×4, and RIFE-interpolated end to end in about 15 minutes on the same card. Full clip: [corgi_redo-2.mp4](media/corgi_redo-2.mp4).*
+
 ---
 
 ## Why it looks the way it does
