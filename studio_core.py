@@ -161,6 +161,7 @@ class JobManager:
         self.paused = False
         self._stop = False
         self._suspend_req = False
+        self._interrupt_req = False   # stall-sentry hard-kill -> land 'interrupted' (ckpt kept), not 'cancelled'
         self.vram_reserve_gb = 1.0   # T14: GB of the 8GB card to leave for the desktop; studio.py loads/persists this
         for p in glob.glob(os.path.join(RUNS_DIR, "*.json")):
             try:
@@ -335,6 +336,15 @@ class JobManager:
         self._stop = True
         self.cancel()
 
+    def hard_interrupt(self):
+        """Stall-sentry escalation: kill the active run but land it 'interrupted' (checkpoint KEPT)
+        instead of 'cancelled' (checkpoint deleted). The exit path then promotes it straight to
+        'suspended' when a valid checkpoint exists, so it is resumable without an app restart.
+        The runner loop moves on to the next queued job either way."""
+        if self.proc and self.current:
+            self._interrupt_req = True
+            self.cancel()
+
     def suspend(self):
         """Clean checkpointed suspend (multi-segment jobs only) via SIGUSR1. Works even if paused."""
         job = self.jobs.get(self.current)
@@ -482,9 +492,9 @@ class JobManager:
                     job.status = "done"
                 elif rc < 0:
                     # killed: a user CANCEL -> 'cancelled' (artifacts cleaned below); an app-exit
-                    # shutdown() -> 'interrupted' so the checkpoint SURVIVES and Job.load promotes
-                    # it back to 'suspended' at the next launch (T9's whole point).
-                    job.status = "interrupted" if self._stop else "cancelled"
+                    # shutdown() OR a stall-sentry hard_interrupt() -> 'interrupted' so the checkpoint
+                    # SURVIVES and the job stays resumable (T9's whole point).
+                    job.status = "interrupted" if (self._stop or self._interrupt_req) else "cancelled"
                 else:
                     job.status, job.error = "failed", f"exit {rc}"
             except Exception as e:
@@ -493,6 +503,13 @@ class JobManager:
                 job.finished = time.time()
                 self.proc, self.current, self.paused = None, None, False
                 self._suspend_req = False
+                # stall-kill: promote LIVE to 'suspended' when the checkpoint is valid (same rule
+                # Job.load applies at app start) so the run is resumable from the QUEUE right away.
+                if self._interrupt_req and job.status == "interrupted":
+                    _ck = os.path.join(RUNS_DIR, f"{job.id}_ckpt")
+                    if job._ckpt_valid(_ck):
+                        job.status, job.ckpt_dir = "suspended", _ck
+                self._interrupt_req = False
                 if job.status in ("done", "cancelled"):
                     ck = os.path.join(RUNS_DIR, f"{job.id}_ckpt")
                     try:                 # keep the director's notes readable after cleanup (DIR RAW view)
