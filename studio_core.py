@@ -162,6 +162,7 @@ class JobManager:
         self._stop = False
         self._suspend_req = False
         self._interrupt_req = False   # stall-sentry hard-kill -> land 'interrupted' (ckpt kept), not 'cancelled'
+        self._cancel_req = False      # set ONLY by an explicit user cancel()
         self.vram_reserve_gb = 1.0   # T14: GB of the 8GB card to leave for the desktop; studio.py loads/persists this
         for p in glob.glob(os.path.join(RUNS_DIR, "*.json")):
             try:
@@ -317,6 +318,7 @@ class JobManager:
 
     def cancel(self):
         if self.proc and self.current:
+            self._cancel_req = True   # explicit user cancel -> 'cancelled' (vs kernel OOM-kill -> 'interrupted')
             try:
                 if self.paused:
                     self.proc.send_signal(signal.SIGCONT)
@@ -377,11 +379,25 @@ class JobManager:
 
     # ---- runner ----
     def _loop(self):
+        # The runner THREAD must survive anything — if it dies, the TUI keeps ticking but the
+        # queue silently freezes forever (worst possible overnight failure).
         while not self._stop:
-            nxt = next((j for j in self._sorted() if j.status == "queued"), None)
+            try:
+                nxt = next((j for j in self._sorted() if j.status == "queued"), None)
+            except RuntimeError:      # jobs dict mutated by the UI thread mid-iteration -> just retry
+                time.sleep(0.05); continue
             if nxt is None:
                 time.sleep(0.4); continue
-            self._run(nxt)
+            try:
+                self._run(nxt)
+            except Exception as e:    # ENOSPC / FS hiccup in the pre-Popen setup etc: fail THIS job, move on
+                try:
+                    nxt.status, nxt.error, nxt.finished = "failed", str(e)[:200], time.time()
+                    nxt.save()
+                except Exception:
+                    pass
+                self.proc, self.current, self.paused = None, None, False
+                time.sleep(1.0)
 
     def _run(self, job):
         env = dict(os.environ, PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
@@ -491,10 +507,12 @@ class JobManager:
                 elif rc == 0:
                     job.status = "done"
                 elif rc < 0:
-                    # killed: a user CANCEL -> 'cancelled' (artifacts cleaned below); an app-exit
-                    # shutdown() OR a stall-sentry hard_interrupt() -> 'interrupted' so the checkpoint
-                    # SURVIVES and the job stays resumable (T9's whole point).
-                    job.status = "interrupted" if (self._stop or self._interrupt_req) else "cancelled"
+                    # killed: ONLY an explicit user CANCEL -> 'cancelled' (artifacts cleaned below).
+                    # App-exit shutdown(), a stall-sentry hard_interrupt(), or an UNEXPLAINED SIGKILL
+                    # (kernel OOM killer under overnight swap thrash!) -> 'interrupted', so the
+                    # checkpoint SURVIVES and the job stays resumable.
+                    _user_cancel = self._cancel_req and not (self._stop or self._interrupt_req)
+                    job.status = "cancelled" if _user_cancel else "interrupted"
                 else:
                     job.status, job.error = "failed", f"exit {rc}"
             except Exception as e:
@@ -505,11 +523,12 @@ class JobManager:
                 self._suspend_req = False
                 # stall-kill: promote LIVE to 'suspended' when the checkpoint is valid (same rule
                 # Job.load applies at app start) so the run is resumable from the QUEUE right away.
-                if self._interrupt_req and job.status == "interrupted":
+                if job.status == "interrupted" and not self._stop:
                     _ck = os.path.join(RUNS_DIR, f"{job.id}_ckpt")
                     if job._ckpt_valid(_ck):
                         job.status, job.ckpt_dir = "suspended", _ck
                 self._interrupt_req = False
+                self._cancel_req = False
                 if job.status in ("done", "cancelled"):
                     ck = os.path.join(RUNS_DIR, f"{job.id}_ckpt")
                     try:                 # keep the director's notes readable after cleanup (DIR RAW view)
