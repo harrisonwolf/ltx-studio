@@ -24,7 +24,7 @@ It was built under a hard constraint — an RTX 5070 Laptop (Blackwell, `sm_120`
 
 ![ARCHIVE view with run lineage panel and blind A/B controls](media/tui-archive.png)
 
-**Sample output** — generated locally on the 8 GB laptop GPU:
+**Sample output** — all generated with the Wan backend, locally on the 8 GB laptop GPU:
 
 | | |
 |---|---|
@@ -34,7 +34,7 @@ It was built under a hard constraint — an RTX 5070 Laptop (Blackwell, `sm_120`
 
 ![A corgi standing on a beach at golden hour, backlit by the sunset](media/corgi_redo-2.gif)
 
-*A corgi on the beach at golden hour — the Wan backend this time: generated, upscaled ×4, and RIFE-interpolated end to end in about 15 minutes on the same card. Full clip: [corgi_redo-2.mp4](media/corgi_redo-2.mp4).*
+*A corgi on the beach at golden hour — generated, upscaled ×4, and RIFE-interpolated end to end in about 15 minutes. Full clip: [corgi_redo-2.mp4](media/corgi_redo-2.mp4).*
 
 ---
 
