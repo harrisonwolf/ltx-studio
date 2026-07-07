@@ -254,6 +254,16 @@ def tmark(key, text):
     return "[%s]%s[/%s]" % (c, text, c)
 
 
+def _sfx_options():
+    """(label, filename) for every WAV in sfx/ — drop a file in the folder and it appears in the
+    DONE/STALL sound pickers on the next launch. Never empty (Select needs >=1 option)."""
+    try:
+        fs = sorted(f for f in os.listdir(os.path.join(REPO, "sfx")) if f.lower().endswith(".wav"))
+    except Exception:
+        fs = []
+    return [(f[:-4], f) for f in fs] or [("run_done", "run_done.wav")]
+
+
 def _demark(s):
     """Neutralize [brackets] in USER text (prompts/titles) before it lands in Rich MARKUP strings —
     a prompt containing tag-like sequences would otherwise raise at render and panic the app.
@@ -1752,17 +1762,20 @@ class Studio(App):
     Input:focus { border: tall $accent; }
     Select, Switch { background: $background; }
     #form { width: 52; padding: 0 2 0 1; }
-    #rightcol { width: 1fr; height: 100%; margin: 0 1 0 2; overflow-y: auto; }
-    #rctop { width: 1fr; height: auto; }
+    #rightcol { width: 1fr; height: 100%; margin: 0 1 0 2; overflow: hidden; }
+    #rctop { width: 1fr; height: 1fr; }
+    #rleft { width: 3fr; height: 1fr; margin: 0 1 0 0; }
     #rightcol.-narrow #rctop { layout: vertical; }
-    #fieldvisual { width: 1fr; border: round $primary; background: $surface; padding: 0 1; margin: 0 1 1 0; height: auto; display: none; }
-    #fieldvisual.-active { display: block; }
-    #newinfo { width: 1fr; border: round $border; background: $surface; padding: 0 1; margin: 0 0 1 0; height: auto; }
+    #rightcol.-narrow #rleft { width: 1fr; height: 1fr; margin: 0 0 1 0; }
+    #rightcol.-narrow #infopanel { width: 1fr; height: 14; }
+    #fieldvisual { width: 1fr; height: 16; border: round $primary; background: $surface;
+                   padding: 0 1; margin: 0 0 1 0; overflow: hidden; }
+    #readout { width: 1fr; height: 1fr; border: round $border; background: $surface;
+               padding: 0 1; overflow: hidden; }
+    #infopanel { width: 2fr; height: 1fr; border: round $border; background: $surface; padding: 0 1; }
+    #newinfo { width: 1fr; height: auto; }
     #blindpanel { width: 1fr; border: round $primary; background: $surface; padding: 0 1; margin: 0 0 1 0; height: auto; display: none; }
     #blindpanel.-active { display: block; }
-    #readout { width: 1fr; border: round $border; background: $surface;
-               padding: 0 1; margin: 0 0 1 0; height: auto; display: none; }
-    #readout.-active { display: block; }
     #blindtitle { color: $accent; text-style: bold; height: 1; margin: 1 0 0 0; }
     #blindsub { color: $secondary; height: auto; margin: 0 0 1 0; }
     #blindvarrow { height: 3; }
@@ -1880,16 +1893,19 @@ class Studio(App):
                         yield field("ANCHORS", TextArea("", id="anchors", soft_wrap=True, tab_behavior="focus", classes="ta"))
                         yield field("NEG", TextArea(NEG, id="n_prompt", soft_wrap=True, tab_behavior="focus", classes="ta"))
                         yield Static("▌ CHAINING", classes="sec")
-                        yield field("SEGMENT s", Input(value="3", id="seg"))
+                        yield field("SEGMENT s", Input(value="3", id="seg"), "seg")
                         yield field("CONTINUITY", Input(value="1.0", id="cond_strength"))
                         yield Static("▌ DIRECTOR", classes="sec")
-                        yield field("DIRECTIVE", TextArea("", id="directive", soft_wrap=True, tab_behavior="focus", classes="ta"))
-                        yield field("STEADINESS", Select([("Hold (faithful)", "hold"), ("Balanced", "balanced"), ("Evolve (journey)", "evolve")], value="hold", id="steadiness", allow_blank=False))
+                        yield field("DIRECTIVE", TextArea("", id="directive", soft_wrap=True, tab_behavior="focus", classes="ta"), "directive")
+                        yield field("STEADINESS", Select([("Hold (faithful)", "hold"), ("Balanced", "balanced"), ("Evolve (journey)", "evolve")], value="hold", id="steadiness", allow_blank=False), "steadiness")
                         yield Static("▌ ADVANCED", classes="sec")
                         yield field("GUIDANCE RESCALE", Select([("off", "off"), ("0.5", "0.5"), ("0.7", "0.7")],
                                                                value="off", id="cfg_rescale", allow_blank=False), "cfg_rescale")
-                        yield field("GUIDANCE SCHEDULE", Select([("off", "off"), ("on (0.0:0.5)", "0.0:0.5")],
-                                                                value="off", id="cfg_interval", allow_blank=False), "cfg_interval")
+                        yield field("GUIDANCE SCHEDULE", Select(
+                            [("off", "off"), ("front 30%", "0.0:0.3"), ("front 50%", "0.0:0.5"),
+                             ("front 70%", "0.0:0.7"), ("late 70%", "0.3:1.0"),
+                             ("every 2nd step", "2"), ("every 3rd step", "3")],
+                            value="off", id="cfg_interval", allow_blank=False), "cfg_interval")
                         yield field("IDENTITY ANCHOR", Select([("off", "off"), ("on (Wan only)", "on")],
                                                               value="off", id="wan_ref_anchor", allow_blank=False), "wan_ref_anchor")
                         yield Static("▌ STUDIO", classes="sec")
@@ -1898,6 +1914,11 @@ class Studio(App):
                                                             value="1.0", id="vram_reserve", allow_blank=False), "vram_reserve")
                         yield field("SOUND", Select([("on", "on"), ("off", "off")],
                                                          value="on", id="sound_enabled", allow_blank=False), "sound_enabled")
+                        _sfx = _sfx_options()
+                        _v1 = "run_done.wav" if any(v == "run_done.wav" for _, v in _sfx) else _sfx[0][1]
+                        _v2 = "run_stall.wav" if any(v == "run_stall.wav" for _, v in _sfx) else _sfx[0][1]
+                        yield field("DONE SOUND", Select(_sfx, value=_v1, id="snd_done", allow_blank=False), "snd_done")
+                        yield field("STALL SOUND", Select(_sfx, value=_v2, id="snd_stall", allow_blank=False), "snd_stall")
                         yield Button("▶ TEST SOUND", id="sndtestbtn")
                         yield Static("▌ OUTPUT", classes="sec")
                         yield field("NAME", Input(placeholder="optional — file name (else job_HHMMSS)", id="name"))
@@ -1915,11 +1936,17 @@ class Studio(App):
                     # below. Three-across cramped everything; a single full-width stack wasted the
                     # horizontal space. #rightcol.-narrow (set in on_resize) restacks the top row
                     # vertically when the window is snapped/scaled small.
+                    # FIXED right rail (user spec 2026-07-06): three UNMOVING boxes. Left stack
+                    # (~3/5 width): schematic atop READOUT, same width. Right (~2/5): a tall,
+                    # SCROLLABLE info panel. Boxes never appear/disappear or change size — only
+                    # their contents update. The blind builder hides #rctop wholesale instead.
                     with Vertical(id="rightcol"):
                         with Horizontal(id="rctop"):
-                            yield Static("", id="fieldvisual")
-                            yield Static(INFO, id="newinfo")
-                        yield Static("", id="readout")      # T22: global readout meters
+                            with Vertical(id="rleft"):
+                                yield Static("", id="fieldvisual")
+                                yield Static("", id="readout")      # T22: global readout meters
+                            with VerticalScroll(id="infopanel"):
+                                yield Static(INFO, id="newinfo")
                         with Vertical(id="blindpanel"):
                             yield Static("⇄  BLIND A/B RUN", id="blindtitle")
                             yield Static("Two runs from the CURRENT form, identical except ONE field — shared "
@@ -2082,6 +2109,12 @@ class Studio(App):
         self.query_one("#inspectlog", RichLog).border_title = "« RAW TERMINAL »"
         self.query_one("#inspectpanel").border_title = "« RUN DETAILS »"
         self.query_one("#qinspectpanel").border_title = "« QUEUED RUN DETAILS »"
+        self.query_one("#fieldvisual").border_title = "« SCHEMATIC »"
+        self.query_one("#infopanel").border_title = "« INFO »"
+        self.query_one("#readout").border_title = "« READOUT »"
+        self.query_one("#fieldvisual", Static).update(
+            "[dim]schematic — focus a dial (or its ⓘ) to illustrate it[/dim]")
+        self.call_after_refresh(self.on_resize)   # settle -narrow/-short once real sizes exist
         self.query_one("#preview", Static).border_title = "« LAST FRAME »"
         self.query_one("#dirnotes", RichLog).border_title = "« DIRECTOR'S NOTES »"
         self.query_one("#pacestrip").border_title = "« PACE »"
@@ -2109,6 +2142,12 @@ class Studio(App):
             self._stall_grace = float(_snd.get("stall_grace_secs", 180) or 180)
             self._stall_decode_secs = float(_snd.get("stall_decode_secs", 600) or 600)   # warmup/decode/save fuse
             self._stall_max_secs = float(_snd.get("stall_max_secs", 7200) or 7200)       # any-phase catch-all
+            _evm = dict(_snd.get("events") or {})    # reflect persisted per-event WAV picks in the pickers
+            for _sid, _ev in (("snd_done", "run_done"), ("snd_stall", "run_stall")):
+                try:
+                    self.query_one("#" + _sid, Select).value = os.path.basename(_evm.get(_ev) or "")
+                except Exception:
+                    pass
         except Exception:
             self._stall_secs, self._stall_action, self._stall_grace = 240.0, "suspend", 180.0
             self._stall_decode_secs, self._stall_max_secs = 600.0, 7200.0
@@ -2184,29 +2223,36 @@ class Studio(App):
         art = None
         try:
             if field_visuals is not None and wid:
-                # while the blind builder owns the right region, keep the visual hidden too
+                # while the blind builder owns the right region (#rctop hidden), don't bother
                 if not self.query_one("#blindpanel", Vertical).has_class("-active"):
-                    art = field_visuals.render(wid, self)
+                    try:      # size the schematic to the FIXED box (falls back to render's default)
+                        pw = int(panel.content_size.width)
+                    except Exception:
+                        pw = 0
+                    art = field_visuals.render(wid, self, width=(pw if pw >= 24 else None))
         except Exception:
             art = None
+        # FIXED fixture: content updates in place; a visual-less field KEEPS the previous schematic
+        # (sticky-panel rule); the placeholder shows only before the first schematic ever renders.
         if art:
             panel.update(art)
-            panel.add_class("-active")
-        else:
-            panel.update("")
-            panel.remove_class("-active")
+            self._visual_set = True
+        elif not getattr(self, "_visual_set", False):
+            panel.update("[dim]schematic — focus a dial (or its ⓘ) to illustrate it[/dim]")
 
     # any dial change -> refresh the plan estimate
     def on_input_changed(self, event):
         self.update_est()
 
-    def on_resize(self, event):
-        # window resized (scaled down / snapped to half) -> (1) restack the [schematic|help] top
-        # row vertically when the right region gets narrow, (2) re-render the readout bars at the
-        # new panel width so they never wrap. update_est is cheap string math; refit is mtime-gated.
+    def on_resize(self, event=None):
+        # window resized (scaled down / snapped to half) -> (1) restack the right rail vertically
+        # when it gets narrow, (2) re-render the readout bars at the new panel width so they never
+        # wrap. content_size can read 0 before first layout (which used to STICK -narrow on) ->
+        # fall back to app width minus the fixed form; on_mount re-runs this after refresh.
         try:
             rc = self.query_one("#rightcol")
-            (rc.add_class if rc.content_size.width < 76 else rc.remove_class)("-narrow")
+            w = int(rc.content_size.width) or max(0, int(self.size.width) - 57)
+            (rc.add_class if w < 76 else rc.remove_class)("-narrow")
         except Exception:
             pass
         try:      # short terminal (portable monitor): shed LIVE info strips so controls stay visible
@@ -2253,6 +2299,19 @@ class Studio(App):
                 save_studio_config({**_cfg, "sounds": _snd})
                 self.query_one("#newinfo", Static).update(
                     "[#9dffce]event sounds: %s[/#9dffce]" % event.select.value)
+            except Exception:
+                pass
+        elif sid in ("snd_done", "snd_stall"):   # per-event WAV pick: persist + audition immediately
+            try:
+                ev = "run_done" if sid == "snd_done" else "run_stall"
+                _cfg = load_studio_config()
+                _snd = dict(_cfg.get("sounds") or {})
+                _evm = dict(_snd.get("events") or {})
+                _evm[ev] = "sfx/%s" % event.select.value
+                _snd["events"] = _evm
+                save_studio_config({**_cfg, "sounds": _snd})
+                msg = sounds.preview(ev, REPO) if sounds is not None else "saved"
+                self.query_one("#newinfo", Static).update(tmark("success", "♪ %s" % msg))
             except Exception:
                 pass
         self.update_est()
@@ -2698,6 +2757,21 @@ class Studio(App):
                     sounds.play("run_done", REPO)      # one chime even if several rows land together
         except Exception:
             pass
+        # --- run_start + queue_empty: observed transitions, same pattern (silent unless a WAV exists) ---
+        try:
+            act = m.active()
+            cur_id = getattr(act, "id", None)
+            prev_id = getattr(self, "_start_seen", "__boot__")
+            self._start_seen = cur_id
+            if sounds is not None and cur_id and prev_id != "__boot__" and cur_id != prev_id:
+                sounds.play("run_start", REPO)
+            busy = bool(cur_id or m.queued())
+            prev_busy = getattr(self, "_busy_seen", None)
+            self._busy_seen = busy
+            if sounds is not None and prev_busy and not busy:
+                sounds.play("queue_empty", REPO)       # the whole batch just finished
+        except Exception:
+            pass
         # --- stall-sentry: active run wedged (no phase/seg/step change AND no fresh preview write).
         #     stall_action="suspend" (default) ESCALATES so the queue unblocks: graceful suspend at
         #     the threshold (SIGUSR1 -> checkpoint at the next shot boundary; no-op for single-shot),
@@ -2768,6 +2842,8 @@ class Studio(App):
             pass
 
     def tick(self):
+        if not self.is_running:     # timer can fire once more during shutdown/teardown -> widgets gone
+            return
         m = self.mgr
         self._beat += 1
         # GPU STATUS — from our OWN job state ONLY, never nvidia-smi. REPRODUCED: nvidia-smi polling
@@ -3269,10 +3345,8 @@ class Studio(App):
             panel = self.query_one("#readout", Static)
         except Exception:
             return
-        try:                                       # blind builder owns the region -> keep readout hidden too
+        try:                                       # blind builder owns the region (#rctop hidden) -> skip work
             if self.query_one("#blindpanel", Vertical).has_class("-active"):
-                panel.update("")
-                panel.remove_class("-active")
                 return
         except Exception:
             pass
@@ -3307,11 +3381,8 @@ class Studio(App):
             art = readout.render_readout(cfg, secs, fit, width=(wd if wd > 0 else None))
         except Exception:
             art = None
-        if art:
+        if art:                                    # fixed fixture: content updates, the box never moves
             panel.update(art)
-            panel.add_class("-active")
-        else:
-            panel.update("")
             panel.remove_class("-active")
 
     def _winpath(self, linux_abs):
@@ -3458,7 +3529,9 @@ class Studio(App):
             "steadiness": [("Hold (faithful)", "hold"), ("Balanced", "balanced"),
                            ("Evolve (journey)", "evolve")],
             "cfg_rescale": [("off", "off"), ("0.5", "0.5"), ("0.7", "0.7")],
-            "cfg_interval": [("off", "off"), ("on (0.0:0.5)", "0.0:0.5")],
+            "cfg_interval": [("off", "off"), ("front 30%", "0.0:0.3"), ("front 50%", "0.0:0.5"),
+                             ("front 70%", "0.0:0.7"), ("late 70%", "0.3:1.0"),
+                             ("every 2nd step", "2"), ("every 3rd step", "3")],
             "wan_ref_anchor": [("off", "off"), ("on (Wan only)", "on")],
             "checkpoint": [("0.9.5 (base)", "none"), ("0.9.8-distilled", "distilled")],
         }
@@ -3734,20 +3807,12 @@ class Studio(App):
             + _turbo_note)
 
     def _open_blind_panel(self):
-        """Show the inline builder in the right region, hide the plain info panel, reset its state."""
-        try:                                     # the blind builder owns the region -> hide the visual too
-            fv = self.query_one("#fieldvisual", Static)
-            fv.update("")
-            fv.remove_class("-active")
+        """Show the inline builder in the right region: the WHOLE fixed rail (#rctop) steps aside
+        as one unit — individual boxes never appear/disappear on their own."""
+        try:
+            self.query_one("#rctop").display = False
         except Exception:
             pass
-        try:                                     # T22: hide the readout strip while the builder owns the region
-            rp = self.query_one("#readout", Static)
-            rp.update("")
-            rp.remove_class("-active")
-        except Exception:
-            pass
-        self.query_one("#newinfo", Static).display = False
         panel = self.query_one("#blindpanel", Vertical)
         panel.add_class("-active")
         self.query_one("#blindmsg", Static).update("")
@@ -3758,13 +3823,13 @@ class Studio(App):
         self._blind_render_clones(None)
 
     def _close_blind_panel(self):
-        """Hide the inline builder and restore the normal info panel."""
+        """Hide the inline builder and bring the fixed rail back."""
         try:
             self.query_one("#blindpanel", Vertical).remove_class("-active")
         except Exception:
             pass
         try:
-            self.query_one("#newinfo", Static).display = True
+            self.query_one("#rctop").display = True
         except Exception:
             pass
         try:
