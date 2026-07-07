@@ -21,7 +21,9 @@ active = types.SimpleNamespace(
     seg=2, nseg=2, step=7, nstep=25, out="outputs/x.mp4", director="", plans=[], dir_ms={}, dcfg={},
     phase="generating", phase_started=now - 60, phase_secs={}, seg_started=now - 300, seg_secs=[859],
     saw_step=True, first_step_ts=now - 900, first_step_seg=1, load_step=5, load_total=5,
-    load_msg="", preview=None, tail=[], error=None, ckpt_dir=None, resumes=0)
+    load_msg="", preview=None, tail=[], error=None, ckpt_dir=None, resumes=0,
+    created=now - 1300, started=now - 1200, finished=now - 100, favorite=False,
+    seam_mse=[], drift=[], tok_counts=[], peak_vram=5400)
 active.elapsed = lambda: 1100
 active.is_loading = lambda: False
 active.pct = lambda: 50
@@ -34,6 +36,7 @@ class FakeMgr:
     def archived(self): return []
     def active(self): return state["active"]
     def counts(self): return (0, 1 if state["active"] else 0, 0, 0)
+    def enhance_children(self, jid): return []
 studio.JobManager = FakeMgr
 studio.save_studio_config = lambda cfg: None
 studio.load_studio_config = lambda: {}
@@ -74,6 +77,20 @@ async def main():
         bar = str(app.query_one("#livebar", Static).render())
         check("live tick: real ETA in the livebar", "left" in bar and "~" in bar, bar[:80])
         state["active"] = None
+        # ARCHIVE INSPECT renders a real job end-to-end (_fmt_inspect NameError class: the
+        # _status_glyph/_run_kind strays only exploded when this exact path was clicked)
+        arch = active
+        arch.status = "done"
+        app.mgr.jobs["jS"] = arch
+        app._insp_jid, app._insp_view = "jS", "inspect"
+        app._render_inspect()
+        await pilot.pause()
+        info_txt = str(app.query_one("#inspectinfo", Static).render())
+        check("archive INSPECT renders (id + status present)", "jS" in info_txt and "DONE" in info_txt,
+              info_txt[:80])
+        app._insp_view = "timing"
+        app._render_inspect()
+        check("archive TIMING view renders", True)
         # every curated theme applies (stylesheet-crash guard)
         for t in studio.EXTRA_THEMES:
             try:

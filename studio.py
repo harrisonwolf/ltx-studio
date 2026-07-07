@@ -42,6 +42,12 @@ def _run_kind(job):
             "director": ("✦", "director")}.get(job.kind, ("·", job.kind or "run"))
 
 
+def _status_glyph(status):
+    return {"done": "[#9dffce]✓[/#9dffce]", "failed": "[#ff6d6d]✕[/#ff6d6d]",
+            "cancelled": "[dim]■[/dim]", "interrupted": "[#ffcf5c]‖[/#ffcf5c]",
+            "suspended": "[#ffcf5c]▽[/#ffcf5c]"}.get(status, "·")
+
+
 def _dial_title(wid):
     """Display name for a form field, parsed from its HELP entry's leading [b]TITLE[/b]
     (single source of truth with the INFO panel); falls back to the widget id."""
@@ -3802,7 +3808,7 @@ class Studio(App):
             return row(k, _HIDDEN if (_blind and _varied == dial) else v)
 
         _KGLYPH = {"single": "▭", "chained": "▥", "director": "✦", "enhance": "▲"}
-        L = [f"[b]{job.id}[/b]    {_status_glyph(job.status)} [{job.status.upper()}]",
+        L = [f"[b]{job.id}[/b]    {_status_glyph(job.status)} \[{job.status.upper()}]",
              time.strftime(f"[dim]{_KGLYPH.get(job.kind, '·')} {job.kind} · %b %d  %H:%M[/dim]",
                            time.localtime(job.finished or job.created)),
              "─" * 48,
@@ -3990,7 +3996,7 @@ class Studio(App):
         def ts(t):
             return time.strftime("%b %d  %H:%M:%S", time.localtime(t)) if t else "—"
 
-        L = [f"[b]{job.id}[/b]    {_status_glyph(job.status)} [{job.status.upper()}]",
+        L = [f"[b]{job.id}[/b]    {_status_glyph(job.status)} \[{job.status.upper()}]",
              f"[dim]{job.kind} · provenance[/dim]",
              "─" * 48,
              "[#6dffab]TIMELINE[/#6dffab]",

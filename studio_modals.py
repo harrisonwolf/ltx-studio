@@ -70,12 +70,6 @@ class FrameScrollScreen(ModalScreen):
     def action_close(self): self.dismiss(None)
 
 
-def _status_glyph(status):
-    return {"done": "[#9dffce]✓[/#9dffce]", "failed": "[#ff6d6d]✕[/#ff6d6d]",
-            "cancelled": "[dim]■[/dim]", "interrupted": "[#ffcf5c]‖[/#ffcf5c]",
-            "suspended": "[#ffcf5c]▽[/#ffcf5c]"}.get(status, "·")
-
-
 class ConfirmDeleteScreen(ModalScreen):
     """Confirm a permanent delete. dismiss(True) deletes, dismiss(False)/escape cancels."""
     DEFAULT_CSS = """
