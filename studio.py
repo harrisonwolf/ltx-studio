@@ -21,237 +21,25 @@ from rich.text import Text
 from rich.style import Style
 from studio_core import JobManager, REPO, ARCHIVED
 
-PIPBOY = Theme(
-    name="pipboy",
-    primary="#2fae5f",
-    secondary="#1f9a52",
-    accent="#6dffab",
-    foreground="#34d977",
-    background="#06120b",
-    surface="#08160d",
-    panel="#0a1c10",
-    success="#9dffce",
-    warning="#ffcf5c",
-    error="#ff6d6d",
-    dark=True,
-    variables={
-        "block-cursor-foreground": "#06120b",
-        "block-cursor-background": "#6dffab",
-        "footer-key-foreground": "#9dffce",
-        "footer-description-foreground": "#34d977",
-        "border": "#1c7a42",
-        "border-strong": "#134a2a",     # focus/hover/cursor fill (the CSS references these four
-        "surface-deep": "#050d08",      # custom vars, so every theme must define them)
-        "text-bright": "#7dffb8",
-        # extended palette slots (inline markup via SPAL; not referenced by CSS):
-        "accent-2": "#7fd0ff",          # counterpoint accent — enhance badge, secondary signals
-        "tertiary": "#5bbf83",          # supporting text — card params line etc.
-    },
-)
+from studio_themes import EXTRA_THEMES, SPAL, tmark
 
-# CURATED THEME SET (quality over quantity — 2026-07-05). Every theme is built around a real
-# REFERENCE OBJECT, carries the full variable shape (4 CSS custom vars + the extended accent-2/
-# tertiary inline slots), and is hand-tuned, not hue-rotated. The Ctrl+K picker lists ONLY this
-# family; builtin textual themes are cut (get_css_variables still guards them if forced).
-PIPBOY_AMBER = Theme(
-    name="pipboy-amber",
-    primary="#c98a1a", secondary="#a8720f", accent="#ffcf5c",
-    foreground="#e0a83e", background="#140d02", surface="#1a1004", panel="#1f1305",
-    success="#ffe29a", warning="#ffb347", error="#ff6d6d", dark=True,
-    variables={
-        "block-cursor-foreground": "#140d02", "block-cursor-background": "#ffcf5c",
-        "footer-key-foreground": "#ffe29a", "footer-description-foreground": "#e0a83e",
-        "border": "#7a5310", "border-strong": "#4a3208",
-        "surface-deep": "#0f0a02", "text-bright": "#f2c569",
-        "accent-2": "#ff8c42", "tertiary": "#b8923a",    # ember orange · aged brass
-    },
-)
-# (pipboy-blue and pipboy-red were CUT in the 2026-07-05 curation pass: blue was superseded by
-# vfd + ice, red read as harsh novelty. Recover them from git history if ever wanted.)
-PIPBOY_WHITE = Theme(
-    name="pipboy-white",
-    primary="#9fb8ac", secondary="#7d968a", accent="#ffffff",
-    foreground="#d6e8dc", background="#0b0d0c", surface="#101413", panel="#161a19",
-    success="#eafff4", warning="#ffcf5c", error="#ff6d6d", dark=True,
-    variables={
-        "block-cursor-foreground": "#0b0d0c", "block-cursor-background": "#ffffff",
-        "footer-key-foreground": "#eafff4", "footer-description-foreground": "#d6e8dc",
-        "border": "#55695f", "border-strong": "#333f39",
-        "surface-deep": "#070908", "text-bright": "#e8f8ee",
-        "accent-2": "#9fd4ff", "tertiary": "#a8c2b5",    # cool CRT-signal blue · silver sage
-    },
-)
-PIPBOY_PLASMA = Theme(
-    name="pipboy-plasma",
-    primary="#e06a1f", secondary="#b85417", accent="#ffb37a",
-    foreground="#ff9a5c", background="#170803", surface="#1e0b04", panel="#251006",
-    success="#ffd9b8", warning="#ffe29a", error="#ff6d6d", dark=True,
-    variables={
-        "block-cursor-foreground": "#170803", "block-cursor-background": "#ffb37a",
-        "footer-key-foreground": "#ffd9b8", "footer-description-foreground": "#ff9a5c",
-        "border": "#7a3d10", "border-strong": "#46220a",
-        "surface-deep": "#100502", "text-bright": "#ffb98a",
-        "accent-2": "#ffd23f", "tertiary": "#d97b3c",    # spark yellow · burnt copper
-    },
-)
-PIPBOY_VFD = Theme(
-    name="pipboy-vfd",
-    primary="#17ae94", secondary="#0f9a82", accent="#6dffe8",
-    foreground="#3fe0c8", background="#03110f", surface="#051814", panel="#071e19",
-    success="#b8fff2", warning="#ffcf5c", error="#ff6d6d", dark=True,
-    variables={
-        "block-cursor-foreground": "#03110f", "block-cursor-background": "#6dffe8",
-        "footer-key-foreground": "#b8fff2", "footer-description-foreground": "#3fe0c8",
-        "border": "#0f7a66", "border-strong": "#0a4a3e",
-        "surface-deep": "#020b0a", "text-bright": "#7df0dc",
-        "accent-2": "#7dc4ff", "tertiary": "#2fae94",    # cold segment blue · deep teal
-    },
-)
-PIPBOY_GAMEBOY = Theme(
-    name="pipboy-gameboy",
-    primary="#6f9a1f", secondary="#306230", accent="#9bbc0f",
-    foreground="#8bac0f", background="#0f2410", surface="#132c14", panel="#173418",
-    success="#cadd6f", warning="#ffcf5c", error="#ff6d6d", dark=True,
-    variables={
-        "block-cursor-foreground": "#0f2410", "block-cursor-background": "#9bbc0f",
-        "footer-key-foreground": "#cadd6f", "footer-description-foreground": "#8bac0f",
-        "border": "#306230", "border-strong": "#1d421d",
-        "surface-deep": "#0a1c0b", "text-bright": "#a3c322",
-        "accent-2": "#e8f2a0", "tertiary": "#7d9a2e",    # LCD glare · mid pea (true DMG shades)
-    },
-)
-PIPBOY_MIDNIGHT = Theme(
-    name="pipboy-midnight",
-    primary="#17693a", secondary="#115530", accent="#2fae5f",
-    foreground="#1f8a4c", background="#010503", surface="#020a06", panel="#041009",
-    success="#4cc07a", warning="#a8873a", error="#a84848", dark=True,
-    variables={
-        "block-cursor-foreground": "#010503", "block-cursor-background": "#2fae5f",
-        "footer-key-foreground": "#4cc07a", "footer-description-foreground": "#1f8a4c",
-        "border": "#0d3d22", "border-strong": "#082816",
-        "surface-deep": "#010302", "text-bright": "#27a35c",
-        "accent-2": "#2a6a7f", "tertiary": "#145c36",    # faint cyan ghost · deep moss (stays dim)
-    },
-)
-# Round 2 — themes with a REFERENCE OBJECT, not a hue swap:
-# vault = Vault-Tec suit (vault yellow accents on utility navy); wasteland = sun-bleached field
-# manual (dust sepia, burnt-orange warnings); ice = arctic glass HUD (near-white cyan, pale + high
-# contrast, unlike blue/vfd); violet = blacklight UV lab phosphor; radium = 1940s radium watch
-# dial (warm yellow-green lume on almost-black).
-PIPBOY_VAULT = Theme(
-    name="pipboy-vault",
-    # TERMINAL-BLACK RULE (2026-07-05, user): the CANVAS stays near-black like a real terminal —
-    # identity lives in text/borders/accents, never in background fills. v1 of this theme washed
-    # the whole screen navy (bg #071120 / panel #0d1f3c); the wash-guard test now enforces the rule.
-    primary="#2b6cb0", secondary="#1f4f8a", accent="#ffd24a",
-    foreground="#8fb3dd", background="#05080f", surface="#070b14", panel="#0a101c",
-    success="#a8d1ff", warning="#ffcf5c", error="#ff6d6d", dark=True,
-    variables={
-        "block-cursor-foreground": "#05080f", "block-cursor-background": "#ffd24a",
-        "footer-key-foreground": "#ffd24a", "footer-description-foreground": "#8fb3dd",
-        "border": "#1c477a", "border-strong": "#122a48",
-        "surface-deep": "#030509", "text-bright": "#a9cdf6",
-        "accent-2": "#ff8c42", "tertiary": "#5a86b8",    # hazard orange · suit-steel blue
-    },
-)
-PIPBOY_WASTELAND = Theme(
-    name="pipboy-wasteland",
-    primary="#a8863c", secondary="#8a6f2f", accent="#ffe8b0",
-    foreground="#d9c084", background="#161004", surface="#1d1606", panel="#241b08",
-    success="#f2ddad", warning="#ff9a3c", error="#e05252", dark=True,
-    variables={
-        "block-cursor-foreground": "#161004", "block-cursor-background": "#ffe8b0",
-        "footer-key-foreground": "#f2ddad", "footer-description-foreground": "#d9c084",
-        "border": "#6f5a26", "border-strong": "#453816",
-        "surface-deep": "#100b03", "text-bright": "#ecd9a0",
-        "accent-2": "#8fb85a", "tertiary": "#b89a5f",    # cactus green · worn leather
-    },
-)
-PIPBOY_ICE = Theme(
-    name="pipboy-ice",
-    primary="#4aa3c0", secondary="#33809a", accent="#e8faff",
-    foreground="#a8d8e8", background="#060e14", surface="#0a151d", panel="#0e1c26",
-    success="#c9f2ff", warning="#ffd280", error="#ff7d7d", dark=True,
-    variables={
-        "block-cursor-foreground": "#060e14", "block-cursor-background": "#e8faff",
-        "footer-key-foreground": "#c9f2ff", "footer-description-foreground": "#a8d8e8",
-        "border": "#2a607a", "border-strong": "#1a3f52",
-        "surface-deep": "#04090e", "text-bright": "#d1f0fa",
-        "accent-2": "#ffd280", "tertiary": "#6fb8d1",    # sun-glint amber · glacial mid-blue
-    },
-)
-PIPBOY_VIOLET = Theme(
-    name="pipboy-violet",
-    primary="#8a4fc0", secondary="#6f3da0", accent="#e3c3ff",
-    foreground="#b98ae0", background="#0e0616", surface="#140a1e", panel="#1a0e28",
-    success="#d9b8ff", warning="#ffcf5c", error="#ff6d8a", dark=True,
-    variables={
-        "block-cursor-foreground": "#0e0616", "block-cursor-background": "#e3c3ff",
-        "footer-key-foreground": "#d9b8ff", "footer-description-foreground": "#b98ae0",
-        "border": "#5a3380", "border-strong": "#3a2054",
-        "surface-deep": "#090310", "text-bright": "#d0a8f0",
-        "accent-2": "#7dffb8", "tertiary": "#9a6fd0",    # blacklight-green glow · mid violet
-    },
-)
-PIPBOY_RADIUM = Theme(
-    name="pipboy-radium",
-    primary="#9ab83c", secondary="#7d9a2e", accent="#eeff9a",
-    foreground="#c9d96f", background="#0c0d04", surface="#121306", panel="#171908",
-    success="#e3f2b8", warning="#ffb347", error="#ff6d6d", dark=True,
-    variables={
-        "block-cursor-foreground": "#0c0d04", "block-cursor-background": "#eeff9a",
-        "footer-key-foreground": "#e3f2b8", "footer-description-foreground": "#c9d96f",
-        "border": "#5f6f22", "border-strong": "#3d4a14",
-        "surface-deep": "#080902", "text-bright": "#dcea8a",
-        "accent-2": "#ffb347", "tertiary": "#a3b855",    # brass casing · olive lume
-    },
-)
-# Round 3 additions: nuka = Nuka-Cola machine (cola red + cream label + bottle-cap silver on
-# deep maroon); tube = a warm 1950s B&W television — near-grayscale with EXACTLY ONE color note,
-# the little green power LED (accent-2). Restraint as the design statement.
-PIPBOY_NUKA = Theme(
-    name="pipboy-nuka",
-    primary="#c23b2e", secondary="#8f2a20", accent="#ff6a55",
-    foreground="#e8c9b0", background="#140506", surface="#1c080a", panel="#240a0c",
-    success="#ffd9c2", warning="#ffcf5c", error="#ff6d6d", dark=True,
-    variables={
-        "block-cursor-foreground": "#140506", "block-cursor-background": "#ff6a55",
-        "footer-key-foreground": "#ffd9c2", "footer-description-foreground": "#e8c9b0",
-        "border": "#6f2018", "border-strong": "#451410",
-        "surface-deep": "#0e0304", "text-bright": "#f2d9c2",
-        "accent-2": "#d9d9d9", "tertiary": "#b8735c",    # bottle-cap silver · rusted chrome
-    },
-)
-PIPBOY_TUBE = Theme(
-    name="pipboy-tube",
-    primary="#8a857a", secondary="#6f6a60", accent="#f2ede2",
-    foreground="#cfc9bd", background="#0d0c0a", surface="#12110e", panel="#171512",
-    success="#e8e2d4", warning="#d9b96a", error="#d97a6a", dark=True,
-    variables={
-        "block-cursor-foreground": "#0d0c0a", "block-cursor-background": "#f2ede2",
-        "footer-key-foreground": "#e8e2d4", "footer-description-foreground": "#cfc9bd",
-        "border": "#4f4b42", "border-strong": "#33302a",
-        "surface-deep": "#090807", "text-bright": "#e0dacc",
-        "accent-2": "#7fd0a8", "tertiary": "#a8a296",    # THE power LED · warm gray
-    },
-)
-EXTRA_THEMES = (PIPBOY, PIPBOY_AMBER, PIPBOY_WHITE, PIPBOY_PLASMA, PIPBOY_VFD,
-                PIPBOY_GAMEBOY, PIPBOY_MIDNIGHT, PIPBOY_VAULT, PIPBOY_WASTELAND,
-                PIPBOY_ICE, PIPBOY_VIOLET, PIPBOY_RADIUM, PIPBOY_NUKA, PIPBOY_TUBE)
-
-# T20: studio-side semantic palette for INLINE Rich markup in dynamic content (queue cards, the
-# status meter, plan line, stall banner). CSS covers the shell via $vars; these cover the strings.
-# Rebound by _on_theme_changed; defaults = pipboy, so the default look is unchanged.
-SPAL = {"accent": "#6dffab", "success": "#9dffce", "foreground": "#34d977", "secondary": "#1f9a52",
-        "primary": "#2fae5f", "warning": "#ffcf5c", "error": "#ff6d6d", "text_bright": "#7dffb8",
-        "border": "#1c7a42", "title": "#d7ffe8", "muted": "#4a9d6e", "soft": "#5bbf83",
-        "accent2": "#7fd0ff"}   # extended slots: soft <- theme "tertiary", accent2 <- "accent-2"
-
-
-def tmark(key, text):
-    """Wrap `text` in the CURRENT theme's color for semantic `key` (balanced Rich tag)."""
-    c = SPAL.get(key) or "#34d977"
-    return "[%s]%s[/%s]" % (c, text, c)
+def _run_kind(job):
+    """T11: classify a job's PURPOSE from its params, distinct from job.kind (single/chained/
+    director/enhance, which is really the BACKEND shape). Returns (glyph, label)."""
+    p = job.params or {}
+    if job.kind == "enhance":
+        return "▲", "enhance"
+    if p.get("pair_id"):
+        if p.get("pair_blind") and not p.get("pair_revealed"):
+            return "⇄", "blind pair"        # hide the A/B variant until REVEAL
+        variant = p.get("pair_variant") or "?"
+        return "⇄", f"pair {variant}"
+    if p.get("replicate_set_id"):
+        return "×N", "replicate"
+    if p.get("source_id"):        # generic fallback: some derived kind we don't special-case above
+        return "⟲", "derived"
+    return {"single": ("▭", "single"), "chained": ("▥", "chained"),
+            "director": ("✦", "director")}.get(job.kind, ("·", job.kind or "run"))
 
 
 def _sfx_options():
@@ -281,29 +69,7 @@ LTX_REPO_DEFAULT = "Lightricks/LTX-Video-0.9.5"   # the checkpoint every ltx-bac
 DIRECTOR_VENV_PY = "/home/wolve/video_gen/director_venv/bin/python"
 PLANNER_SCRIPT = os.path.join(REPO, "vlm_planner.py")
 
-STUDIO_CONFIG_PATH = os.path.join(REPO, "runs", "studio_config.json")   # T14: small persisted UI prefs
-
-
-def load_studio_config():
-    """Read runs/studio_config.json; missing/corrupt -> {} so every caller just applies its own defaults."""
-    try:
-        with open(STUDIO_CONFIG_PATH) as f:
-            return json.load(f) or {}
-    except Exception:
-        return {}
-
-
-def save_studio_config(cfg):
-    """Atomic write of runs/studio_config.json (mirrors Job.save()'s tmp+replace pattern)."""
-    try:
-        os.makedirs(os.path.dirname(STUDIO_CONFIG_PATH), exist_ok=True)
-        tmp = STUDIO_CONFIG_PATH + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(cfg, f)
-        os.replace(tmp, STUDIO_CONFIG_PATH)
-    except Exception:
-        pass
-
+from studio_config import STUDIO_CONFIG_PATH, load_studio_config, save_studio_config
 
 def res_key(v):
     """Map a loose res token from the consultant ('512'/'704'/'768'/'704 x 480') to a RES key.
@@ -456,180 +222,8 @@ def slugify(s, maxlen=40):
     return s.strip("-_")[:maxlen].strip("-_")
 
 
-# ---- dense sub-cell preview renderer (torch-free, PIL + Rich only) -----------
-# Modes: "sextant" (2x3 px/cell, ~3x sharper), "quadrant" (2x2, universally font-safe),
-# "half" (1x2, the original). Cell grid stays cols x rows in every mode, so the panel
-# width math (cols+2) never changes. Sextants (U+1FB00..) need Cascadia 2404+, which
-# Windows Terminal ships; we DEFAULT to sextant when $WT_SESSION says we're in WT, else
-# quadrant. PREVIEW_MODE env or Ctrl+P (in-app) overrides if glyphs render as tofu.
-PREVIEW_MODE = os.environ.get("PREVIEW_MODE", "").strip().lower()
-if PREVIEW_MODE not in ("sextant", "quadrant", "half"):
-    PREVIEW_MODE = "sextant"   # sharpest; if glyphs show as boxes (old Cascadia) press Ctrl+P -> quadrant
-
-# quadrant mask (TL=1,TR=2,BL=4,BR=8) -> glyph
-_QUAD = {0: " ", 1: "▘", 2: "▝", 3: "▀", 4: "▖", 5: "▌", 6: "▞", 7: "▛",
-         8: "▗", 9: "▚", 10: "▐", 11: "▜", 12: "▄", 13: "▙", 14: "▟", 15: "█"}
-
-
-def _sextant_char(m):
-    """6-bit mask (pos1=top-left .. pos6=bottom-right, bit=2^(pos-1)) -> glyph.
-    Masks 0/21/42/63 have dedicated codepoints outside the U+1FB00 run."""
-    if m == 0:  return " "
-    if m == 21: return "▌"   # U+258C left half  (positions 1,3,5)
-    if m == 42: return "▐"   # U+2590 right half (positions 2,4,6)
-    if m == 63: return "█"   # U+2588 full
-    off = m - 1
-    if m > 21: off -= 1
-    if m > 42: off -= 1
-    return chr(0x1FB00 + off)
-
-
-def _two_color_cell(sub):
-    """sub = list of (r,g,b) sub-pixels in row-major order. Returns (mask, fg, bg) via
-    luminance-vs-mean 2-clustering (chafa-style mean colors). mask=-1 -> solid fg, 0 -> solid bg."""
-    lum = [0.299 * r + 0.587 * g + 0.114 * b for (r, g, b) in sub]
-    thr = sum(lum) / len(lum)
-    mask = 0
-    fr = fg_ = fb = br = bg_ = bb = nf = nb = 0
-    for i, (r, g, b) in enumerate(sub):
-        if lum[i] >= thr:
-            mask |= (1 << i); fr += r; fg_ += g; fb += b; nf += 1
-        else:
-            br += r; bg_ += g; bb += b; nb += 1
-    n = len(sub)
-    if nf == 0:                       # genuinely flat -> solid bg
-        bg = (sum(r for r, _, _ in sub) // n, sum(g for _, g, _ in sub) // n, sum(b for _, _, b in sub) // n)
-        return 0, bg, bg
-    if nb == 0:                       # genuinely flat -> solid fg
-        fg = (fr // nf, fg_ // nf, fb // nf)
-        return -1, fg, fg
-    return mask, (fr // nf, fg_ // nf, fb // nf), (br // nb, bg_ // nb, bb // nb)
-
-
-def render_preview(path, cols=48):
-    """Render a preview PNG as truecolor sub-cell ANSI art. Cell grid is cols x rows; each cell
-    packs 2x3 (sextant), 2x2 (quadrant) or 1x2 (half) sub-pixels with one fg + one bg color,
-    chosen per-cell by luminance clustering (chafa algorithm). Torch-free (PIL + Rich), never
-    raises -> Text() on error. Returns a rich.text.Text, drop-in for the original half-block one."""
-    try:
-        mode = PREVIEW_MODE
-        sx, sy = {"sextant": (2, 3), "quadrant": (2, 2), "half": (1, 2)}.get(mode, (2, 3))
-        im = Image.open(path).convert("RGB")
-        w, h = im.size
-        # 0.5 = terminal cell width/height; sets the on-screen aspect (same as the original
-        # half-block path). Sub-pixel density (sx,sy) is independent of this — it only raises
-        # resolution WITHIN each cell, so the cell grid (cols x rows) stays aspect-correct.
-        rows = max(1, round(cols * (h / w) * 0.5))
-        im = im.resize((cols * sx, rows * sy), Image.Resampling.LANCZOS)
-        px = im.load()
-        t = Text()
-        for ry in range(rows):
-            y0 = ry * sy
-            for cx in range(cols):
-                x0 = cx * sx
-                if mode == "half":
-                    tr, tg, tb = px[x0, y0]
-                    br, bg, bb = px[x0, y0 + 1]
-                    t.append("▀", Style(color=f"#{tr:02x}{tg:02x}{tb:02x}", bgcolor=f"#{br:02x}{bg:02x}{bb:02x}"))
-                    continue
-                sub = [px[x0 + dx, y0 + dy] for dy in range(sy) for dx in range(sx)]
-                m, fg, bg = _two_color_cell(sub)
-                if m == 0:
-                    t.append(" ", Style(bgcolor=f"#{bg[0]:02x}{bg[1]:02x}{bg[2]:02x}"))
-                elif m == -1:
-                    t.append("█", Style(color=f"#{fg[0]:02x}{fg[1]:02x}{fg[2]:02x}"))
-                else:
-                    glyph = _sextant_char(m) if mode == "sextant" else _QUAD[m]
-                    t.append(glyph, Style(color=f"#{fg[0]:02x}{fg[1]:02x}{fg[2]:02x}",
-                                          bgcolor=f"#{bg[0]:02x}{bg[1]:02x}{bg[2]:02x}"))
-            if ry != rows - 1:
-                t.append("\n")
-        return t
-    except Exception:
-        return Text()
-
-
-class FrameScrollScreen(ModalScreen):
-    """Scroll through a finished run's saved output frames as terminal art (reuses render_preview).
-    ←/→ (or h/l) step one frame, PgUp/PgDn jump 10, Home/End first/last, Esc closes."""
-    DEFAULT_CSS = """
-    FrameScrollScreen { align: center middle; background: $background 90%; }
-    #fsbox { width: auto; height: auto; border: round $primary; background: $surface-deep; padding: 1 2; }
-    #fsart { width: auto; height: auto; content-align: center middle; }
-    #fshelp { color: $secondary; height: 1; margin-top: 1; }
-    """
-    BINDINGS = [
-        ("escape", "close", "Close"),
-        ("left", "prev", "Prev"), ("h", "prev", ""),
-        ("right", "next", "Next"), ("l", "next", ""),
-        ("home", "first", "First"), ("end", "last", "Last"),
-        ("pageup", "back10", "-10"), ("pagedown", "fwd10", "+10"),
-    ]
-
-    def __init__(self, frames, title):
-        super().__init__()
-        self.frames = list(frames)        # sorted absolute frame paths
-        self.ftitle = title
-        self.i = 0
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="fsbox"):
-            yield Static("", id="fsart")
-            yield Static("", id="fshelp")
-
-    def on_mount(self):
-        self.query_one("#fsbox").border_title = "« FRAMES — %s »" % self.ftitle
-        self._paint()
-
-    # NB: named _paint, NOT _render — Widget._render() is a Textual-internal method that must return
-    # a Visual; shadowing it with a None-returning helper crashes the compositor at first paint.
-    def _paint(self):
-        n = len(self.frames)
-        art, help_ = self.query_one("#fsart", Static), self.query_one("#fshelp", Static)
-        if not n:
-            art.update("[dim]no frames saved for this run.[/dim]")
-            help_.update("[dim]Esc to close[/dim]")
-            return
-        self.i = max(0, min(self.i, n - 1))
-        cols = max(48, min(140, (getattr(self.app.size, "width", 0) or 120) - 8))
-        art.styles.width = cols + 2
-        art.update(render_preview(self.frames[self.i], cols=cols))
-        help_.update("[#6dffab]frame %d / %d[/#6dffab]   [dim]←/→ step · PgUp/PgDn ±10 · Home/End · Esc[/dim]"
-                     % (self.i + 1, n))
-
-    def action_prev(self):  self.i -= 1;  self._paint()
-    def action_next(self):  self.i += 1;  self._paint()
-    def action_first(self): self.i = 0;   self._paint()
-    def action_last(self):  self.i = len(self.frames) - 1; self._paint()
-    def action_back10(self): self.i -= 10; self._paint()
-    def action_fwd10(self):  self.i += 10; self._paint()
-    def action_close(self): self.dismiss(None)
-
-
-def _status_glyph(status):
-    return {"done": "[#9dffce]✓[/#9dffce]", "failed": "[#ff6d6d]✕[/#ff6d6d]",
-            "cancelled": "[dim]■[/dim]", "interrupted": "[#ffcf5c]‖[/#ffcf5c]",
-            "suspended": "[#ffcf5c]▽[/#ffcf5c]"}.get(status, "·")
-
-
-def _run_kind(job):
-    """T11: classify a job's PURPOSE from its params, distinct from job.kind (single/chained/
-    director/enhance, which is really the BACKEND shape). Returns (glyph, label)."""
-    p = job.params or {}
-    if job.kind == "enhance":
-        return "▲", "enhance"
-    if p.get("pair_id"):
-        if p.get("pair_blind") and not p.get("pair_revealed"):
-            return "⇄", "blind pair"        # hide the A/B variant until REVEAL
-        variant = p.get("pair_variant") or "?"
-        return "⇄", f"pair {variant}"
-    if p.get("replicate_set_id"):
-        return "×N", "replicate"
-    if p.get("source_id"):        # generic fallback: some derived kind we don't special-case above
-        return "⟲", "derived"
-    return {"single": ("▭", "single"), "chained": ("▥", "chained"),
-            "director": ("✦", "director")}.get(job.kind, ("·", job.kind or "run"))
-
+import preview_art
+from preview_art import render_preview
 
 def _filesize(path):
     try:
@@ -1395,339 +989,9 @@ class EnhanceOptsScreen(ModalScreen):
         self.dismiss(None)
 
 
-class ConfirmDeleteScreen(ModalScreen):
-    """Confirm a permanent delete. dismiss(True) deletes, dismiss(False)/escape cancels."""
-    DEFAULT_CSS = """
-    ConfirmDeleteScreen { align: center middle; background: $background 80%; }
-    #delbox { width: 70; height: auto; border: round $error; background: $background; padding: 1 2; }
-    #deltitle { color: $error; text-style: bold; height: 1; }
-    #delbody { height: auto; color: $error; margin: 1 0; }
-    .crow { height: 3; margin-top: 1; }
-    .crow Button { margin-right: 2; }
-    #del_yes { background: $background; color: $error; text-style: bold; }
-    """
-    BINDINGS = [("escape", "close", "Close")]
-
-    def __init__(self, summary):
-        super().__init__()
-        self.summary = summary
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="delbox"):
-            yield Static("✕  DELETE RUN — PERMANENT", id="deltitle")
-            yield Static(self.summary, id="delbody")
-            with Horizontal(classes="crow"):
-                yield Button("✕ DELETE", id="del_yes")
-                yield Button("↩ KEEP", id="del_no")
-
-    def on_mount(self):
-        self.query_one("#delbox").border_title = "« CONFIRM DELETE »"
-
-    def on_button_pressed(self, e):
-        self.dismiss(e.button.id == "del_yes")
-
-    def action_close(self):
-        self.dismiss(False)
-
-
-class ThemePickerScreen(ModalScreen):
-    """T13: browse every registered theme with LIVE PREVIEW -- arrowing to a theme applies it
-    immediately; ENTER keeps it; ESCAPE (or closing without picking) reverts to whatever theme was
-    active when the picker opened. Textual 8.2.7's own command-palette ThemeProvider only applies on
-    select (no highlight-preview hook on Provider/Hit), so a dedicated OptionList screen is the
-    cleanest way to get a true live preview in this version."""
-    DEFAULT_CSS = """
-    ThemePickerScreen { align: center middle; background: $background 80%; }
-    #thbox { width: 50; height: auto; max-height: 80%; border: round $primary; background: $background; padding: 1 2; }
-    #thtitle { color: $accent; text-style: bold; height: 1; }
-    #thsub { color: $secondary; height: auto; margin: 0 0 1 0; }
-    #thlist { height: auto; max-height: 20; border: round $border; background: $surface-deep; }
-    """
-    BINDINGS = [("escape", "cancel", "Revert + close")]
-
-    def __init__(self):
-        super().__init__()
-        self._original_theme = None
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="thbox"):
-            yield Static("◐  THEME", id="thtitle")
-            yield Static("↑/↓ previews live · ENTER keeps it · ESC reverts", id="thsub")
-            yield OptionList(id="thlist")
-
-    def on_mount(self):
-        self.query_one("#thbox").border_title = "« THEME PICKER »"
-        self._original_theme = self.app.theme
-        # CURATED list: only the hand-tuned pipboy family (builtin textual themes are cut —
-        # quality over quantity). The active theme is always included so the highlight lands.
-        names = sorted(n for n in self.app.available_themes
-                       if n.startswith("pipboy") or n == self._original_theme)
-        opts = self.query_one("#thlist", OptionList)
-        for name in names:
-            opts.add_option(Option(("» " if name == self._original_theme else "  ") + name, id=name))
-        try:
-            opts.highlighted = names.index(self._original_theme)
-        except ValueError:
-            pass
-        opts.focus()
-
-    def on_option_list_option_highlighted(self, e: OptionList.OptionHighlighted):
-        if e.option and e.option.id:
-            try:
-                self.app.theme = e.option.id     # live preview as you arrow through
-            except Exception:
-                pass
-
-    def on_option_list_option_selected(self, e: OptionList.OptionSelected):
-        if e.option and e.option.id:
-            self.app.theme = e.option.id
-            try:      # ENTER = keep -> persist across restarts (studio_config.json "theme")
-                save_studio_config({**load_studio_config(), "theme": e.option.id})
-            except Exception:
-                pass
-        self.dismiss(True)
-
-    def action_cancel(self):
-        if self._original_theme:
-            self.app.theme = self._original_theme    # revert -- dismissed without an explicit pick
-        self.dismiss(False)
-
-
-class RenameScreen(ModalScreen):
-    """Prefilled Input; dismiss(str) renames, dismiss(None)/escape cancels."""
-    DEFAULT_CSS = """
-    RenameScreen { align: center middle; background: $background 80%; }
-    #renbox { width: 64; height: auto; border: round $primary; background: $background; padding: 1 2; }
-    #rentitle { color: $accent; text-style: bold; height: 1; }
-    #rensub { color: $secondary; height: auto; margin: 0 0 1 0; }
-    .crow { height: 3; margin-top: 1; }
-    .crow Button { margin-right: 2; }
-    #ren_ok { background: $border-strong; color: $success; text-style: bold; }
-    """
-    BINDINGS = [("escape", "close", "Close")]
-
-    def __init__(self, current):
-        super().__init__()
-        self.current = current
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="renbox"):
-            yield Static("✎  RENAME RUN", id="rentitle")
-            yield Static("renames the title AND the output file (outputs/<slug>.mp4)", id="rensub")
-            yield Input(value=self.current, id="ren_input")
-            with Horizontal(classes="crow"):
-                yield Button("✓ RENAME", id="ren_ok")
-                yield Button("✕ CANCEL", id="ren_close")
-
-    def on_mount(self):
-        self.query_one("#renbox").border_title = "« RENAME »"
-        self.query_one("#ren_input", Input).focus()
-
-    def _submit(self):
-        self.dismiss((self.query_one("#ren_input", Input).value or "").strip() or None)
-
-    def on_input_submitted(self, e):
-        self._submit()
-
-    def on_button_pressed(self, e):
-        if e.button.id == "ren_ok":
-            self._submit()
-        else:
-            self.dismiss(None)
-
-    def action_close(self):
-        self.dismiss(None)
-
-
-class RerollScreen(ModalScreen):
-    """Re-run a job with a NEW seed, everything else identical. dismiss({"seed": str}) re-rolls
-    (empty/invalid seed -> randomize); dismiss(None)/escape cancels."""
-    DEFAULT_CSS = """
-    RerollScreen { align: center middle; background: $background 80%; }
-    #rrbox { width: 64; height: auto; border: round $primary; background: $background; padding: 1 2; }
-    #rrtitle { color: $accent; text-style: bold; height: 1; }
-    #rrsub { color: $secondary; height: auto; margin: 0 0 1 0; }
-    .crow { height: 3; margin-top: 1; }
-    .crow Button { margin-right: 2; }
-    #rr_ok { background: $border-strong; color: $success; text-style: bold; }
-    """
-    BINDINGS = [("escape", "close", "Close")]
-
-    def __init__(self, summary, cur_seed=None):
-        super().__init__()
-        self.summary = summary
-        self.cur_seed = cur_seed
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="rrbox"):
-            yield Static("⟲  RE-ROLL RUN", id="rrtitle")
-            yield Static(f"re-run '{self.summary}' with a NEW seed — everything else identical.\n"
-                         f"leave the box empty to randomize (current seed: {self.cur_seed}).", id="rrsub")
-            yield Input(placeholder="optional: a specific seed (empty = random)", id="rr_seed")
-            with Horizontal(classes="crow"):
-                yield Button("⟲ RE-ROLL", id="rr_ok")
-                yield Button("✕ CANCEL", id="rr_close")
-
-    def on_mount(self):
-        self.query_one("#rrbox").border_title = "« RE-ROLL »"
-        self.query_one("#rr_seed", Input).focus()
-
-    def _submit(self):
-        self.dismiss({"seed": (self.query_one("#rr_seed", Input).value or "").strip()})
-
-    def on_input_submitted(self, e):
-        self._submit()
-
-    def on_button_pressed(self, e):
-        if e.button.id == "rr_ok":
-            self._submit()
-        else:
-            self.dismiss(None)
-
-    def action_close(self):
-        self.dismiss(None)
-
-
-class PairScreen(ModalScreen):
-    """PAIR A/B (Q3): clone a job with ONE dial changed, same seed -- for a blind A/B comparison.
-    dismiss({"dial": str, "value": str}) confirms; dismiss(None)/escape cancels."""
-    DEFAULT_CSS = """
-    PairScreen { align: center middle; background: $background 80%; }
-    #pabox { width: 64; height: auto; border: round $primary; background: $background; padding: 1 2; }
-    #patitle { color: $accent; text-style: bold; height: 1; }
-    #pasub { color: $secondary; height: auto; margin: 0 0 1 0; }
-    .crow { height: 3; margin-top: 1; }
-    .crow Button { margin-right: 2; }
-    #pa_ok { background: $border-strong; color: $success; text-style: bold; }
-    """
-    DIALS = ("steps", "cfg", "res", "seg", "cond_strength", "steadiness", "backend", "fps")
-    BINDINGS = [("escape", "close", "Close")]
-
-    def __init__(self, summary):
-        super().__init__()
-        self.summary = summary
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="pabox"):
-            yield Static("⇄  PAIR A/B RUN", id="patitle")
-            yield Static(f"clone '{self.summary}' with ONE dial changed — same seed, for a blind A/B.\n"
-                         f"dial: {', '.join(self.DIALS)}", id="pasub")
-            yield Input(placeholder="dial name (e.g. cfg)", id="pa_dial")
-            yield Input(placeholder="new value", id="pa_value")
-            with Horizontal(classes="crow"):
-                yield Button("⇄ PAIR", id="pa_ok")
-                yield Button("✕ CANCEL", id="pa_close")
-
-    def on_mount(self):
-        self.query_one("#pabox").border_title = "« PAIR A/B »"
-        self.query_one("#pa_dial", Input).focus()
-
-    def _submit(self):
-        self.dismiss({"dial": (self.query_one("#pa_dial", Input).value or "").strip().lower(),
-                      "value": (self.query_one("#pa_value", Input).value or "").strip()})
-
-    def on_input_submitted(self, e):
-        self._submit()
-
-    def on_button_pressed(self, e):
-        if e.button.id == "pa_ok":
-            self._submit()
-        else:
-            self.dismiss(None)
-
-    def action_close(self):
-        self.dismiss(None)
-
-
-class ReplicateScreen(ModalScreen):
-    """×N REPLICATE (Q3): re-run a job N times with random seeds -- probes the seed noise floor.
-    dismiss({"n": str}) confirms (blank/invalid -> 3, clamped 2-5); dismiss(None)/escape cancels."""
-    DEFAULT_CSS = """
-    ReplicateScreen { align: center middle; background: $background 80%; }
-    #rebox { width: 64; height: auto; border: round $primary; background: $background; padding: 1 2; }
-    #retitle { color: $accent; text-style: bold; height: 1; }
-    #resub { color: $secondary; height: auto; margin: 0 0 1 0; }
-    .crow { height: 3; margin-top: 1; }
-    .crow Button { margin-right: 2; }
-    #re_ok { background: $border-strong; color: $success; text-style: bold; }
-    """
-    BINDINGS = [("escape", "close", "Close")]
-
-    def __init__(self, summary, subtitle=None):
-        super().__init__()
-        self.summary = summary
-        self.subtitle = subtitle or (
-            f"re-run '{summary}' N times with random seeds — probes the seed noise floor.")
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="rebox"):
-            yield Static("×N  REPLICATE RUN", id="retitle")
-            yield Static(self.subtitle, id="resub")
-            yield Input(placeholder="N (2-5, default 3)", id="re_n")
-            with Horizontal(classes="crow"):
-                yield Button("×N REPLICATE", id="re_ok")
-                yield Button("✕ CANCEL", id="re_close")
-
-    def on_mount(self):
-        self.query_one("#rebox").border_title = "« REPLICATE »"
-        self.query_one("#re_n", Input).focus()
-
-    def _submit(self):
-        self.dismiss({"n": (self.query_one("#re_n", Input).value or "").strip()})
-
-    def on_input_submitted(self, e):
-        self._submit()
-
-    def on_button_pressed(self, e):
-        if e.button.id == "re_ok":
-            self._submit()
-        else:
-            self.dismiss(None)
-
-    def action_close(self):
-        self.dismiss(None)
-
-
-class RatePairScreen(ModalScreen):
-    """≷ RATE PAIR (Q3): blind pair rating -- shows two output paths as '1'/'2' in random order (no
-    metadata that could bias the vote). dismiss("1"|"2"|"tie") records the verdict; dismiss(None)/
-    escape cancels."""
-    DEFAULT_CSS = """
-    RatePairScreen { align: center middle; background: $background 80%; }
-    #rpbox { width: 74; height: auto; border: round $primary; background: $background; padding: 1 2; }
-    #rptitle { color: $accent; text-style: bold; height: 1; }
-    #rpsub { color: $secondary; height: auto; margin: 0 0 1 0; }
-    .crow { height: 3; margin-top: 1; }
-    .crow Button { margin-right: 2; }
-    """
-    BINDINGS = [("escape", "close", "Close")]
-
-    def __init__(self, path1, path2):
-        super().__init__()
-        self.path1, self.path2 = path1, path2
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="rpbox"):
-            yield Static("≷  RATE PAIR (blind)", id="rptitle")
-            yield Static(f"1: {self.path1}\n2: {self.path2}\n\nplay both yourself, then pick.", id="rpsub")
-            with Horizontal(classes="crow"):
-                yield Button("1 BETTER", id="rp_1")
-                yield Button("2 BETTER", id="rp_2")
-                yield Button("TIE", id="rp_tie")
-                yield Button("✕ CANCEL", id="rp_close")
-
-    def on_button_pressed(self, e):
-        if e.button.id == "rp_1":
-            self.dismiss("1")
-        elif e.button.id == "rp_2":
-            self.dismiss("2")
-        elif e.button.id == "rp_tie":
-            self.dismiss("tie")
-        else:
-            self.dismiss(None)
-
-    def action_close(self):
-        self.dismiss(None)
+from studio_modals import (FrameScrollScreen, ConfirmDeleteScreen, ThemePickerScreen,
+                           RenameScreen, RerollScreen, PairScreen, ReplicateScreen,
+                           RatePairScreen)
 
 
 class Studio(App):
@@ -2960,8 +2224,8 @@ class Studio(App):
             mt = os.path.getmtime(ppath)
             w = self.size.width
             cols = 96 if w >= 150 else (72 if w >= 120 else 48)   # bigger preview on wide terminals
-            if mt != self._preview_mtime or cols != self._preview_cols or PREVIEW_MODE != self._preview_mode:
-                self._preview_mtime, self._preview_cols, self._preview_mode = mt, cols, PREVIEW_MODE
+            if mt != self._preview_mtime or cols != self._preview_cols or preview_art.PREVIEW_MODE != self._preview_mode:
+                self._preview_mtime, self._preview_cols, self._preview_mode = mt, cols, preview_art.PREVIEW_MODE
                 pv.styles.width = cols + 2
                 pv.update(render_preview(ppath, cols=cols))
         plans = getattr(job, "plans", None) or []
@@ -3108,7 +2372,13 @@ class Studio(App):
         if two builds land in the same second before either job is registered. This is a GENERAL fix
         (any two same-second jobs) and BLIND-SAFE: the disambiguator is a neutral timestamp/counter, it
         never encodes the A/B label or the varied value, so it leaks nothing about which variant is which."""
-        taken = set()
+        # ALSO reserve every slug this process has already handed out: two build() calls in the
+        # same second BEFORE either job registers used to collide (the counter fallback only ran
+        # on a detected collision, so the documented guarantee was false — caught by tests/test_build).
+        handed = getattr(self, "_handed_slugs", None)
+        if handed is None:
+            handed = self._handed_slugs = set()
+        taken = set(handed)
         try:
             for j in self.mgr.jobs.values():
                 o = (j.params or {}).get("out") or getattr(j, "out", None)
@@ -3123,15 +2393,19 @@ class Studio(App):
                     and not os.path.exists(os.path.join(REPO, f"outputs/{s}_frames")))
 
         if _free(slug):
+            handed.add(slug)
             return slug
         base, n = slug, 2                                  # first collision -> -2, -3, ... then a counter
         while True:
             cand = f"{base}-{n}"
             if _free(cand):
+                handed.add(cand)
                 return cand
             n += 1
             if n > 999:                                    # pathological: guarantee termination + uniqueness
-                return f"{base}-{next(_slug_counter)}"
+                cand = f"{base}-{next(_slug_counter)}"
+                handed.add(cand)
+                return cand
 
     def build(self, over=None):
         # over: optional field-id -> value SNAPSHOT (blind-pair build). When present, every form read
@@ -4752,11 +4026,11 @@ class Studio(App):
     def action_cycle_preview(self):
         """Cycle the preview glyph density (sextant -> quadrant -> half). Use if sextants
         show as boxes/tofu on an older Cascadia — quadrant is universally font-safe."""
-        global PREVIEW_MODE
         order = ["sextant", "quadrant", "half"]
-        PREVIEW_MODE = order[(order.index(PREVIEW_MODE) + 1) % 3] if PREVIEW_MODE in order else "sextant"
+        preview_art.PREVIEW_MODE = (order[(order.index(preview_art.PREVIEW_MODE) + 1) % 3]
+                                    if preview_art.PREVIEW_MODE in order else "sextant")
         self._preview_mtime = 0.0    # force a re-render on the next tick
-        self.notify(f"Preview style: {PREVIEW_MODE}")
+        self.notify(f"Preview style: {preview_art.PREVIEW_MODE}")
 
     def action_pick_theme(self):
         """T13: open the live-preview theme picker (Ctrl+K)."""
