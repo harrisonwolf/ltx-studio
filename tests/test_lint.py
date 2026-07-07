@@ -6,7 +6,11 @@ py_compile can't see and only explodes when the user clicks the one button that 
 import subprocess, sys, os
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = os.path.join(REPO, "venv", "bin", "python")
+# same interpreter resolution as run.sh: LTX_PYTHON override -> repo venv -> whatever runs us
+# (the mirror checkout has no venv of its own, so the hardcoded path failed there)
+PY = os.environ.get("LTX_PYTHON") or os.path.join(REPO, "venv", "bin", "python")
+if not os.path.exists(PY):
+    PY = sys.executable
 MODULES = ["studio.py", "studio_core.py", "studio_modals.py", "studio_themes.py",
            "studio_config.py", "preview_art.py", "sounds.py", "field_visuals.py",
            "readout.py", "dials_help.py", "style_presets.py", "experiment_log.py",
