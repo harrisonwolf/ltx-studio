@@ -20,9 +20,13 @@ It was built under a hard constraint — an RTX 5070 Laptop (Blackwell, `sm_120`
 
 ![LIVE render view with last-frame preview](media/tui-live-render.png)
 
-**The archive** — every run is a first-class record: status, per-run timing, favorites, and a lineage panel (here: a replicate source and its enhanced output) so provenance survives re-rolls, replicates, and enhancement passes. REVEAL / RATE PAIR / PAIR A/B are the blind-comparison harness:
+**The archive** — every run is a first-class record: status, per-run timing, favorites, and the blind-comparison harness (REVEAL / RATE PAIR / PAIR A/B). INSPECT shows a run's full config beside an opening-frame preview, so near-identical runs — especially replicates — can be told apart without opening a player:
 
-![ARCHIVE view with run lineage panel and blind A/B controls](media/tui-archive.png)
+![ARCHIVE inspect view: run config and prompt beside an opening-frame preview](media/tui-archive.png)
+
+Scrolling the same panel reaches the lineage table — here a replicate source, a replicate sibling, and an enhanced child — so provenance survives re-rolls, replicates, and enhancement passes:
+
+![Run lineage table: replicate source, replicate sibling, enhanced child](media/tui-lineage.png)
 
 **Sample output** — all generated with the Wan backend, locally on the 8 GB laptop GPU:
 
@@ -111,7 +115,7 @@ Because phase boundaries are explicit, the studio accumulates real per-phase tim
 - **Style presets** — named bundles of anchor words (`Cinematic`, `Golden Hour`, `Noir`, …) that append into the prompt, stackable and user-extensible via JSON.
 - **Multi-shot director** — chains shots into longer clips with latent anchoring (AdaIN + palette lock) to fight drift, plus context windows so long clips don't OOM.
 - **Three backends** — LTX-2B (pinned 0.9.5, optional 0.9.8-distilled transformer) for fast drafts, Wan-VACE-1.3B for fidelity, and a 4-step Wan-turbo DMD path — with each path's step/CFG clamps surfaced rather than hidden.
-- **Archive with lineage** — every run is a first-class record: favorite, re-roll, clone, replicate, enhance, blind-pair verdicts, and a lineage panel tracing each run's replicate source and enhanced children.
+- **Archive with lineage** — every run is a first-class record: favorite, re-roll, clone, replicate, enhance, blind-pair verdicts, a lineage panel tracing each run's replicate source and enhanced children, and an opening-frame preview on inspect so near-identical runs are distinguishable at a glance.
 - **Inspect & clone from the queue** — read-only provenance and one-click re-queue of any run's exact config.
 
 ---

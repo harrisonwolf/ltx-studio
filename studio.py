@@ -1108,7 +1108,9 @@ class Studio(App):
     #livelog { display: none; height: 8; }
     #livebar { height: 1; background: $panel; color: $accent; content-align: left middle; padding: 0 1; }
     #inspectpanel { border: round $border; background: $surface; height: 1fr; padding: 0 1; }
-    #inspectinfo { color: $foreground; }
+    #insprow { height: auto; }
+    #inspectinfo { color: $foreground; width: 1fr; }
+    #inspthumb { width: auto; margin-left: 2; display: none; }
     #qinspectpanel { border: round $border; background: $surface; height: 1fr; padding: 0 1; }
     #qinspect { color: $foreground; }
     #inspectlog { display: none; }
@@ -1320,7 +1322,9 @@ class Studio(App):
                     yield Button("✎ RENAME", id="renamebtn")
                     yield Button("✕ DELETE", id="deletebtn")
                 with VerticalScroll(id="inspectpanel"):
-                    yield Static("[dim]Select a run above and press INSPECT.[/dim]", id="inspectinfo")
+                    with Horizontal(id="insprow"):
+                        yield Static("[dim]Select a run above and press INSPECT.[/dim]", id="inspectinfo")
+                        yield Static("", id="inspthumb")   # T-thumb: opening-frame preview
                     yield DataTable(id="reltable", cursor_type="row")
                     yield Button("▶ PLAY SELECTED CHILD RUN", id="playchildbtn")
                 yield RichLog(id="inspectlog", highlight=True, markup=False, wrap=True)
@@ -3737,14 +3741,23 @@ class Studio(App):
         read-only view (mirrors how ARCHIVE refreshes its inspect on selection). Only the qtable
         drives this; everything else is a no-op. Fully guarded — must never break the app."""
         try:
-            if getattr(event, "data_table", None) is None or event.data_table.id != "qtable":
-                return
+            tid = event.data_table.id if getattr(event, "data_table", None) is not None else None
         except Exception:
             return
-        try:
-            self._render_qinspect()
-        except Exception:
-            pass
+        if tid == "qtable":
+            try:
+                self._render_qinspect()
+            except Exception:
+                pass
+        elif tid == "reltable":
+            # T-thumb: the preview follows the highlighted related run, so replicates can be
+            # compared frame-to-frame just by moving the cursor. Falls back to the inspected run.
+            try:
+                jid = self._selected("#reltable")
+                job = self.mgr.jobs.get(jid) if jid else None
+                self._render_insp_thumb(job or self.mgr.jobs.get(self._insp_jid))
+            except Exception:
+                pass
 
     def _render_qinspect(self):
         """T24: inline read-only details for the selected QUEUE row. Reuses the EXISTING
@@ -3783,6 +3796,7 @@ class Studio(App):
         fn = self._fmt_provenance if self._insp_view == "timing" else self._fmt_inspect
         self.query_one("#inspectinfo", Static).update(fn(job))
         self._render_related_table(job)
+        self._render_insp_thumb(job)
 
     def _render_related_table(self, job):
         """Populate #reltable with runs spawned from (or that spawned) `job` -- pairs, replicates,
@@ -3794,6 +3808,49 @@ class Studio(App):
             t.add_row(k.id, label, f"{_status_glyph(k.status)} {k.status}", os.path.basename(k.out or "?"), key=k.id)
         t.display = bool(rel)
         self.query_one("#playchildbtn", Button).display = bool(rel)
+
+    def _thumb_art(self, job, cols=44):
+        """T-thumb: opening-frame art for a run's output, cached as runs/thumbs/<id>.png so
+        repeat inspects are instant. Extraction uses the bundled imageio-ffmpeg binary.
+        Returns a renderable, or None (no output yet / extraction failed) — never raises."""
+        try:
+            out = getattr(job, "out", None)
+            if not out:
+                return None
+            src = out if os.path.isabs(out) else os.path.join(REPO, out)
+            if not os.path.exists(src):
+                return None
+            tdir = os.path.join(REPO, "runs", "thumbs")
+            os.makedirs(tdir, exist_ok=True)
+            thumb = os.path.join(tdir, f"{job.id}.png")
+            if not os.path.exists(thumb) or os.path.getmtime(thumb) < os.path.getmtime(src):
+                import imageio_ffmpeg
+                ff = imageio_ffmpeg.get_ffmpeg_exe()
+                r = subprocess.run(
+                    [ff, "-y", "-i", src, "-frames:v", "1", "-vf", "scale=480:-2", thumb],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+                if r.returncode != 0 or not os.path.exists(thumb):
+                    return None
+            return render_preview(thumb, cols=cols)
+        except Exception:
+            return None
+
+    def _render_insp_thumb(self, job):
+        """T-thumb: show the opening frame beside RUN DETAILS so near-identical runs
+        (especially replicates) can be told apart without opening the media player.
+        Follows the highlighted #reltable row when one is selected."""
+        try:
+            pv = self.query_one("#inspthumb", Static)
+        except Exception:
+            return
+        art = self._thumb_art(job) if job is not None else None
+        if art is None:
+            pv.display = False
+            pv.update("")
+        else:
+            pv.styles.width = 46
+            pv.display = True
+            pv.update(art)
 
     def _blind_lookup(self, pair_id):
         """Look up a blind A/B pair's TRUE mapping in runs/pair_blinds.jsonl (the only in-the-clear copy).
