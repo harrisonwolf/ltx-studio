@@ -67,6 +67,16 @@ async def main():
         app.query_one("#mode", Select).value = "director"; await pilot.pause()
         check("director: #seg enabled", app.query_one("#seg").disabled is False)
         app.query_one("#mode", Select).value = "single"; await pilot.pause()
+        # backend gray-out: schedule is Wan-only, identity anchor Wan/turbo-only
+        check("ltx: schedule + anchor grayed", app.query_one("#cfg_interval").disabled is True
+              and app.query_one("#wan_ref_anchor").disabled is True)
+        app.query_one("#backend", Select).value = "wan"; await pilot.pause()
+        check("wan: schedule + anchor enabled", app.query_one("#cfg_interval").disabled is False
+              and app.query_one("#wan_ref_anchor").disabled is False)
+        app.query_one("#backend", Select).value = "wan-turbo"; await pilot.pause()
+        check("turbo: schedule grayed, anchor enabled", app.query_one("#cfg_interval").disabled is True
+              and app.query_one("#wan_ref_anchor").disabled is False)
+        app.query_one("#backend", Select).value = "ltx"; await pilot.pause()
         # empty states
         check("queue empty-state row", app.query_one("#qtable").row_count == 1)
         check("archive empty-state row", app.query_one("#atable").row_count == 1)

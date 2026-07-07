@@ -914,6 +914,13 @@ def main():
     elif _cfg_surgery_on and args.cfg <= 1.0 and args.backend != "wan-turbo":
         # CFG itself is off below the 1.01 floor -> nothing to rescale/gate; leave a one-liner, keep default output.
         print("note: CFG surgery has no effect at --cfg %.3f (CFG off at cfg<=1.0)" % args.cfg, flush=True)
+    if args._cfg_interval is not None and args.backend == "ltx":
+        # WAN-ONLY (2026-07-07): LTX batches cond+uncond into ONE forward — pre-loop tensors are
+        # built batch-2, then per-step interval gating flips the latent batch to 1 -> attention
+        # shape crash at the first OFF step (tensor 512 vs 768; two real runs died). Wan runs two
+        # SEPARATE forwards per step, so skipping the uncond one is structurally clean there.
+        print("note: --cfg_interval is Wan-only (LTX's batched CFG is incompatible); disabled", flush=True)
+        args._cfg_interval = None
     if args.wan_ref_anchor and args.backend not in ("wan", "wan-turbo"):
         print("note: --wan_ref_anchor is Wan/VACE-only; ignored for backend=%s" % args.backend, flush=True)
 

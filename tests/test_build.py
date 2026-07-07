@@ -48,9 +48,12 @@ async def main():
         check("wan routes to director.py", "director.py" in cmd3[1])
         check("wan forces 16 fps", arg(cmd3, "--fps") == "16")
         check("wan upscales short side to >=480", int(arg(cmd3, "--height")) >= 480, cmd3)
-        # 4. guidance schedule variants reach the command verbatim
+        # 4. guidance schedule variants reach the command verbatim — WAN ONLY (LTX's batched CFG
+        #    forward is incompatible with per-step gating; it crashed two real runs on 2026-07-06)
         _t, _k, cmd4, _p = app.build(dict(BASE, backend="wan", cfg="5.5", cfg_interval="2"))
-        check("every-2nd schedule ships", arg(cmd4, "--cfg_interval") == "2")
+        check("every-2nd schedule ships on wan", arg(cmd4, "--cfg_interval") == "2")
+        _t, _k, cmd4b, _p = app.build(dict(BASE, backend="ltx", cfg="5.5", cfg_interval="0.0:0.5"))
+        check("ltx OMITS the schedule flag even when set", "--cfg_interval" not in cmd4b)
         _t, _k, cmd5, _p = app.build(dict(BASE, backend="wan", cfg="5.5", cfg_interval="0.3:1.0"))
         check("late-range schedule ships", arg(cmd5, "--cfg_interval") == "0.3:1.0")
         # 5. wan-turbo clamps steps at the source

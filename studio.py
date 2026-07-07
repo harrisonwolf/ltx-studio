@@ -1352,6 +1352,21 @@ class Studio(App):
             except Exception:
                 pass
 
+    def _sync_backend_disable(self):
+        """Gray the dials the launched command LITERALLY ignores for the current BACKEND:
+        GUIDANCE SCHEDULE is Wan-only (LTX's batched CFG forward is incompatible — it crashed two
+        real runs; wan-turbo runs cfg=1.0, nothing to gate) and IDENTITY ANCHOR is Wan/VACE-only."""
+        try:
+            be = self.v("backend") or "ltx"
+        except Exception:
+            return
+        for wid, dead in (("cfg_interval", be != "wan"),
+                          ("wan_ref_anchor", be not in ("wan", "wan-turbo"))):
+            try:
+                self.query_one("#" + wid).disabled = dead
+            except Exception:
+                pass
+
     def _on_theme_changed(self, theme):
         """T20: re-tint every INLINE-markup surface from the new theme — studio SPAL (cards/meter/
         status/plan) + the readout and field_visuals module palettes — then invalidate the cached
@@ -1420,6 +1435,7 @@ class Studio(App):
         except Exception:
             pass
         self._sync_mode_disable()     # initial MODE=single -> director-only dials start grayed
+        self._sync_backend_disable()  # initial BACKEND=ltx -> Wan-only dials start grayed
         try:      # sound/alert prefs: master toggle + stall threshold/action/grace (defaults ON / 240s / suspend / 180s)
             _snd = load_studio_config().get("sounds", {}) or {}
             self.query_one("#sound_enabled", Select).value = "on" if _snd.get("enabled", True) else "off"
@@ -1581,6 +1597,7 @@ class Studio(App):
             self._sync_mode_disable()
         if sid == "backend":   # ONLY a backend change may retune cfg/steps;
             self._sync_cfg_default()                         # RES/MODE/etc must never clobber tuned dials
+            self._sync_backend_disable()                     # + gray Wan-only dials off-backend
         elif sid == "vram_reserve":   # T14: persist immediately + apply to the NEXT run this manager launches
             try:
                 reserve = float(event.select.value)
@@ -2140,11 +2157,36 @@ class Studio(App):
         except Exception:
             pass
 
+    def _absorb_standby_gap(self, job, gap):
+        """Modern Standby froze the VM for `gap` wall-seconds (this platform enters standby when
+        the display goes dark, ES_SYSTEM_REQUIRED or not — Kernel-Power confirmed, twice). Shift
+        every wall-clock baseline forward so pace / this-shot / time-left math self-heals at wake
+        instead of showing 8h elapsed / '~0s left' garbage, and tally job.slept for the display."""
+        try:
+            for attr in ("seg_started", "phase_started", "first_step_ts"):
+                v = getattr(job, attr, None)
+                if v:
+                    setattr(job, attr, v + gap)
+            job.slept = getattr(job, "slept", 0.0) + gap
+            try:
+                self._smart_step_wall += gap
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     def tick(self):
         if not self.is_running:     # timer can fire once more during shutdown/teardown -> widgets gone
             return
         m = self.mgr
         self._beat += 1
+        _wall = time.time()
+        _gap = _wall - getattr(self, "_last_tick_wall", _wall)
+        self._last_tick_wall = _wall
+        if _gap > 120:              # ticks run every 0.5s; a 2min+ hole = the VM was frozen (standby)
+            _aj = m.active()
+            if _aj is not None:
+                self._absorb_standby_gap(_aj, _gap)
         # GPU STATUS — from our OWN job state ONLY, never nvidia-smi. REPRODUCED: nvidia-smi polling
         # in this WSL2 (RTX 5070 Blackwell + driver 591.74) destabilizes the dxg passthrough and
         # restarts the WHOLE VM after ~30 calls, EVEN WITH NO CUDA RUNNING. So there is no live VRAM%
@@ -2291,8 +2333,11 @@ class Studio(App):
         else:
             eta = "measuring..."
         p = job.params
+        _slept = getattr(job, "slept", 0.0)
+        _elstr = (f"t+{fmt(max(0, el - int(_slept)))} (+{fmt(int(_slept))} standby)" if _slept > 120
+                  else f"t+{fmt(el)} elapsed")
         self.query_one("#livebar", Static).update(
-            f"  t+{fmt(el)} elapsed   ·   {eta}      {p.get('res', '')}   {p.get('steps', '')} steps   "
+            f"  {_elstr}   ·   {eta}      {p.get('res', '')}   {p.get('steps', '')} steps   "
             f"seed {p.get('seed', '')}      → {os.path.basename(job.out or '')}")
         # ---- PACE strip ----
         nstp = job.nstep or 0
@@ -2480,8 +2525,9 @@ class Studio(App):
         wan_ref_anchor = V("wan_ref_anchor") or "off"
         if cfg_rescale != "off" and _cfg_val > 1.0 and backend != "wan-turbo":
             common += ["--cfg_rescale", cfg_rescale]           # LTX + Wan; no-op on wan-turbo / cfg<=1
-        if cfg_interval != "off" and _cfg_val > 1.0 and backend != "wan-turbo":
-            common += ["--cfg_interval", cfg_interval]         # LTX + Wan; no-op on wan-turbo / cfg<=1
+        if cfg_interval != "off" and _cfg_val > 1.0 and backend == "wan":
+            common += ["--cfg_interval", cfg_interval]         # WAN-ONLY: LTX's batched CFG forward is
+            # incompatible with per-step gating (attention shape crash); wan-turbo has no uncond pass.
         if wan_ref_anchor == "on" and backend in ("wan", "wan-turbo"):
             common += ["--wan_ref_anchor"]                     # Wan / Wan-turbo only
         # checkpoint variant (blind-pair only): the snapshot carries "_ltx_variant". distilled = the
@@ -3045,6 +3091,11 @@ class Studio(App):
                 self._blind_msg("[#ff6d6d]checkpoint A/B needs backend=ltx (0.9.8-distilled is LTX-only) — "
                                 "switch BACKEND to ltx, then retry.[/#ff6d6d]")
                 return
+        if var == "cfg_interval" and (base_cfg.get("backend") or "ltx") != "wan":
+            # would silently produce two IDENTICAL runs (build omits the flag off-wan) -> refuse
+            self._blind_msg("[#ff6d6d]guidance-schedule A/B needs backend=wan (interval CFG is "
+                            "Wan-only; LTX's batched CFG is incompatible) — switch BACKEND, then retry.[/#ff6d6d]")
+            return
         # SINGLE shared seed: honor the form seed if set, else mint ONE concrete random seed for both.
         s = (base_cfg.get("seed") or "").strip()
         seed = s if (s and s.lstrip("-").isdigit()) else str(random.randint(1, 2**31 - 1))

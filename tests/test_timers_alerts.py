@@ -85,5 +85,15 @@ def _boom(j): raise ValueError()
 check("estimator failure -> None", TL(types.SimpleNamespace(_run_budget=_boom, _smart_pct=lambda j: 0),
                                       types.SimpleNamespace()) is None)
 
+# --- standby-gap absorber: baselines shift by the frozen span, slept accumulates ---
+gapme = types.SimpleNamespace(_smart_step_wall=1000.0)
+gj = types.SimpleNamespace(seg_started=5000.0, phase_started=5100.0, first_step_ts=4900.0)
+studio.Studio._absorb_standby_gap(gapme, gj, 30000.0)
+check("standby: all wall baselines shifted", gj.seg_started == 35000.0 and gj.phase_started == 35100.0
+      and gj.first_step_ts == 34900.0 and gapme._smart_step_wall == 31000.0)
+check("standby: slept tallied", gj.slept == 30000.0)
+studio.Studio._absorb_standby_gap(gapme, gj, 500.0)
+check("standby: repeat gaps accumulate", gj.slept == 30500.0)
+
 print("RESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)
