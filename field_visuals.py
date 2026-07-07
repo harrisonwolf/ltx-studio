@@ -108,6 +108,46 @@ def _marker_row(pos, width, color=None, glyph="▲"):
     return " " * pos + _c(color, glyph)
 
 
+_AVAIL = 48   # panel content width for the CURRENT render() call (render() sets it per call)
+
+
+def _bar_w(default=42):
+    """Bar width for the current panel: the design width when it fits, else shrink (floor 24) so
+    bar art NEVER exceeds the box — fixed 42-col bars used to wrap/clip on narrow side-by-side
+    rails (16" portable monitor), which broke the user's two-column layout."""
+    try:
+        return max(24, min(int(default), int(_AVAIL) - 4))
+    except Exception:
+        return int(default)
+
+
+def _clip_line(line, w):
+    """Markup-safe HARD CLIP at w visible cols. Art lines are exempt from prose wrapping, so a
+    ruler/legend/caption wider than a narrow panel gets clipped at the box edge (suffix lost)
+    instead of overflowing — the systematic guarantee that no visual can ever exceed its panel."""
+    if _vis_len(line) <= w:
+        return line
+    out, vis, open_tags = [], 0, []
+    for part in _TAGRE.split(line):
+        if not part:
+            continue
+        if _TAGRE.fullmatch(part):
+            if part.startswith("[/"):
+                if open_tags:
+                    open_tags.pop()
+            else:
+                open_tags.append(part)
+            out.append(part)
+            continue
+        room = w - vis
+        if room <= 0:
+            break
+        out.append(part[:room])
+        vis += min(len(part), room)
+    out.extend("[/" + t[1:] for t in reversed(open_tags))
+    return "".join(out)
+
+
 def _tick(v, lo, hi, width):
     """Bar column for value `v` on the lo..hi axis — the SAME mapping the ▲ marker uses, so
     scale ticks and markers can never drift apart."""
@@ -168,7 +208,7 @@ def _cfg(app):
     #   3..4  good  (▒)
     #   5..6  punchy(█)
     #   7..8  fried (▉, too high -> neon / over-sharp / artifacts)
-    LO, HI, WIDTH = 1.0, 8.0, 42          # cfg range mapped onto WIDTH columns
+    LO, HI, WIDTH = 1.0, 8.0, _bar_w()          # cfg range mapped onto WIDTH columns
     segs = [                              # (upper_bound_inclusive, glyph, color)
         (2.0, "░", DIM),
         (4.0, "▒", MID),
@@ -217,7 +257,7 @@ def _steps(app):
         (40, "█", CLEAN),
         (50, "█", CLEAN),
     ]
-    WIDTH = 42
+    WIDTH = _bar_w()
     per = WIDTH // len(ramp)
     lines = ["  " + "".join(_c(color, glyph * per) for _n, glyph, color in ramp)]
 
@@ -290,7 +330,7 @@ def _res(app):
 # BACKEND — speed <-> quality axis: LTX (fast) . wan-turbo (fast, distilled) . Wan (nicer)
 # =====================================================================================
 def _backend(app):
-    WIDTH = 42
+    WIDTH = _bar_w()
     # a speed<->quality axis, fast on the left, nicer/slower on the right
     bar = _c(DIM, "▓" * 10) + _c(MID, "▓" * 12) + _c(CLEAN, "▓" * 12) + _c(WARN, "▓" * 8)
     opts = [
@@ -364,7 +404,7 @@ def _seconds(app):
 # FPS — choppy -> smooth motion ramp
 # =====================================================================================
 def _fps(app):
-    LO, HI, WIDTH = 12.0, 36.0, 42
+    LO, HI, WIDTH = 12.0, 36.0, _bar_w()
     segs = [
         (16.0, "░", BAD),
         (24.0, "▒", MID),
@@ -403,7 +443,7 @@ def _fps(app):
 #       plan line), so this meter can never disagree with it.
 # =====================================================================================
 def _seg(app):
-    WIDTH = 42
+    WIDTH = _bar_w()
     plan = None
     try:
         plan = app._plan()
@@ -481,7 +521,7 @@ def _seg(app):
 # COND_STRENGTH — how tightly each shot holds the previous frame
 # =====================================================================================
 def _cond_strength(app):
-    LO, HI, WIDTH = 0.0, 1.0, 42
+    LO, HI, WIDTH = 0.0, 1.0, _bar_w()
     segs = [
         (0.4, "░", BAD),
         (0.6, "▒", WARN),
@@ -516,7 +556,7 @@ def _cond_strength(app):
 # STEADINESS — camera energy: lots of motion/redirects <-> locked-off / hold
 # =====================================================================================
 def _steadiness(app):
-    WIDTH = 42
+    WIDTH = _bar_w()
     opts = [
         ("evolve",   "Evolve",   "journey / transform",   4,  BAD),
         ("balanced", "Balanced", "gentle variation",      19, MID),
@@ -548,8 +588,9 @@ def _steadiness(app):
 # CFG_RESCALE — the fry-fixer: over-saturated/fried -> corrected
 # =====================================================================================
 def _cfg_rescale(app):
-    fried = (_c(BAD, "▉" * 10) + _c(WARN, "▓" * 10) + _c(CLEAN, "▒" * 10) + _c(DIM, "░" * 10))
-    arrow = _c("dim", "  over-cooked ─────────────────▶ corrected")
+    q = max(6, _bar_w(40) // 4)               # gradient scales with the panel like every other bar
+    fried = (_c(BAD, "▉" * q) + _c(WARN, "▓" * q) + _c(CLEAN, "▒" * q) + _c(DIM, "░" * q))
+    arrow = _c("dim", "  over-cooked " + "─" * max(4, 4 * q - 25) + "▶ corrected")
 
     val = None
     try:
@@ -576,7 +617,7 @@ def _cfg_rescale(app):
 #   "2"/"3"  -> every-Nth-step comb   other -> generic "on" (defensive)
 # =====================================================================================
 def _cfg_interval(app):
-    WIDTH = 42
+    WIDTH = _bar_w()
 
     raw = None
     try:
@@ -781,6 +822,11 @@ def render(field_id, app, width=None):
     fn = VISUALS.get(field_id)
     if fn is None:
         return None
+    global _AVAIL
+    try:
+        _AVAIL = int(width) if (width and int(width) >= 24) else 48
+    except Exception:
+        _AVAIL = 48
     try:
         out = fn(app)
     except Exception:
@@ -788,8 +834,8 @@ def render(field_id, app, width=None):
     if not out or not str(out).strip():
         return None
     try:
-        w = int(width) if (width and int(width) >= 24) else 48
-        out = "\n".join(_fit_line(ln, w) for ln in out.split("\n"))
+        w = _AVAIL
+        out = "\n".join(_clip_line(_fit_line(ln, w), w) for ln in out.split("\n"))
     except Exception:
         pass
     return out

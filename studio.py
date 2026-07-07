@@ -1028,7 +1028,7 @@ class Studio(App):
     #form { width: 52; padding: 0 2 0 1; }
     #rightcol { width: 1fr; height: 100%; margin: 0 1 0 2; overflow: hidden; }
     #rctop { width: 1fr; height: 1fr; }
-    #rleft { width: 3fr; height: 1fr; margin: 0 1 0 0; }
+    #rleft { width: 3fr; min-width: 30; height: 1fr; margin: 0 1 0 0; }
     /* NARROW rail (portable monitor): stack vertically at natural sizes and let the RAIL scroll.
        Squeezing three boxes into ~30 rows crushed whichever came last (the READOUT vanished to a
        border sliver) — scrolling keeps every box fully real. Wide layout unchanged. */
@@ -1042,7 +1042,7 @@ class Studio(App):
                    padding: 0 1; margin: 0 0 1 0; overflow: hidden; }
     #readout { width: 1fr; height: 1fr; border: round $border; background: $surface;
                padding: 0 1; overflow: hidden; }
-    #infopanel { width: 2fr; height: 1fr; border: round $border; background: $surface; padding: 0 1; }
+    #infopanel { width: 2fr; min-width: 18; height: 1fr; border: round $border; background: $surface; padding: 0 1; }
     #newinfo { width: 1fr; height: auto; }
     #blindpanel { width: 1fr; border: round $primary; background: $surface; padding: 0 1; margin: 0 0 1 0; height: auto; display: none; }
     #blindpanel.-active { display: block; }
@@ -1526,9 +1526,10 @@ class Studio(App):
         try:
             rc = self.query_one("#rightcol")
             w = int(rc.content_size.width) or max(0, int(self.size.width) - 57)
-            # side-by-side needs >=84: the 3fr stack must fit the full ~44-col bar art (a 1-2 col
-            # deficit used to WRAP schematic bars into garbage on the 16" portable monitor)
-            (rc.add_class if w < 84 else rc.remove_class)("-narrow")
+            # The user's two-column rail (schematic/readout stack | info) HOLDS at narrow widths —
+            # schematic bars now scale to their panel (field_visuals._bar_w), so side-by-side works
+            # down to ~52 cols. The vertical stack is a LAST RESORT for truly tiny terminals only.
+            (rc.add_class if w < 52 else rc.remove_class)("-narrow")
         except Exception:
             pass
         try:      # short terminal (portable monitor): shed LIVE info strips so controls stay visible
