@@ -106,11 +106,12 @@ Because phase boundaries are explicit, the studio accumulates real per-phase tim
 - **Pip-Boy TUI** — NEW RUN form, live QUEUE, and a persistent right-hand rail with field schematics and global READOUT meters. Responsive layout that restacks below 76 columns.
 - **Blind A/B** — queue two variants of one config, rate them blind, reveal after. Ratings and pairings are logged to `runs/pair_*.jsonl`.
 - **Live preview** — the worker decodes a preview frame mid-generation; the UI refreshes it on a wall-clock cadence so you can bail on a bad seed early.
-- **READOUT gauges** — five meters (speed, VRAM headroom, seam quality, drift, throughput) that auto-refit their scales from your own run history.
-- **Field schematics** — every dial has a BF6-style ASCII block-art tooltip explaining what it does and its safe range, width-fitted so nothing wraps raggedly.
+- **READOUT gauges** — VRAM headroom, clip budget, system RAM, the shot chain, predicted quality, and drift risk, all auto-refit from your own run history so the scales mean something on *your* hardware.
+- **Field schematics** — a right-rail « SCHEMATIC » panel draws the focused dial's trade-off axis with your current value marked on it, beside an « INFO » panel whose guidance is per-dial *and* per-backend.
 - **Style presets** — named bundles of anchor words (`Cinematic`, `Golden Hour`, `Noir`, …) that append into the prompt, stackable and user-extensible via JSON.
 - **Multi-shot director** — chains shots into longer clips with latent anchoring (AdaIN + palette lock) to fight drift, plus context windows so long clips don't OOM.
-- **Distilled few-step backends** — LTX 0.9.5 / 0.9.8-distilled and a 4-step Wan-turbo DMD path, with the step/CFG clamps surfaced rather than hidden.
+- **Three backends** — LTX-2B (pinned 0.9.5, optional 0.9.8-distilled transformer) for fast drafts, Wan-VACE-1.3B for fidelity, and a 4-step Wan-turbo DMD path — with each path's step/CFG clamps surfaced rather than hidden.
+- **Archive with lineage** — every run is a first-class record: favorite, re-roll, clone, replicate, enhance, blind-pair verdicts, and a lineage panel tracing each run's replicate source and enhanced children.
 - **Inspect & clone from the queue** — read-only provenance and one-click re-queue of any run's exact config.
 
 ---
@@ -124,7 +125,7 @@ Because phase boundaries are explicit, the studio accumulates real per-phase tim
 | `director.py` | Multi-shot generation engine: LTX/Wan backends, drift anchors, context windows, telemetry emission. |
 | `run_ltx.py` | Single-clip LTX runner (the simple path). |
 | `experiment_log.py` | Appends structured run records to `runs/experiments.jsonl` — the measurement backbone. |
-| `readout.py` | The five self-calibrating READOUT gauges. |
+| `readout.py` | The self-calibrating READOUT gauges. |
 | `field_visuals.py` | ASCII block-art schematics for every form field. |
 | `style_presets.py` | Named anchor-word bundles for the STYLE dropdown. |
 | `gpu_budget.py` | VRAM budgeting helpers for the 8 GB envelope. |
