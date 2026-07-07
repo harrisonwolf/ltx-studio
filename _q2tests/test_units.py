@@ -147,7 +147,10 @@ check("build_record exports ltx_repo", rec.get("ltx_repo") == "Lightricks/LTX-Vi
 check("build_record exports ltx_variant", rec.get("ltx_variant") == "distilled")
 check("build_record still exports Q3 arrays",
       rec.get("seam_mse") == [[2, 340]] and rec.get("drift") == [[2, 120, 45]] and rec.get("tok_counts") == [[2, 96]])
-check("SCHEMA not bumped (still 1)", rec.get("schema") == 1 and experiment_log.SCHEMA == 1)
+# (was "SCHEMA not bumped (still 1)" — true during the Q2 sprint; the blind-A/B fields later
+# bumped it ADDITIVELY to 2, which is correct. Assert consistency, not a frozen number.)
+check("record schema matches module SCHEMA (>=2, additive)",
+      rec.get("schema") == experiment_log.SCHEMA and experiment_log.SCHEMA >= 2)
 # provenance fields default to None when absent (additive, tolerant)
 class _Bare(_Job):
     params = {"backend": "wan"}
