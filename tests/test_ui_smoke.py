@@ -37,7 +37,9 @@ class FakeMgr:
 studio.JobManager = FakeMgr
 studio.save_studio_config = lambda cfg: None
 studio.load_studio_config = lambda: {}
-studio.sounds = types.SimpleNamespace(play=lambda *a: None, preview=lambda *a: "ok")
+sound_calls = []
+studio.sounds = types.SimpleNamespace(play=lambda *a: sound_calls.append(("play", a)),
+                                      preview=lambda *a: sound_calls.append(("preview", a)) or "ok")
 
 async def main():
     global ok
@@ -78,6 +80,11 @@ async def main():
             except Exception:
                 good = False
             check("theme applies: %s" % t.name, good)
+        # picking a sound persists but NEVER auditions (no unexpected audio — user rule)
+        sound_calls.clear()
+        app.query_one("#snd_done", Select).value = "bell.wav"
+        await pilot.pause()
+        check("sound pick does NOT audition", sound_calls == [], sound_calls)
         # picker lists only the curated family
         scr = studio.ThemePickerScreen()
         app.push_screen(scr); await pilot.pause()

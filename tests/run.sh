@@ -3,6 +3,7 @@
 # Each test is a standalone script that exits nonzero on failure — no framework, by design.
 cd "$(dirname "$0")/.." || exit 1
 PY=${LTX_PYTHON:-./venv/bin/python}
+export STUDIO_MUTE=1   # WSL audio reaches the user's speakers — automation must NEVER make a sound
 fails=0; total=0
 run() {
     total=$((total + 1))

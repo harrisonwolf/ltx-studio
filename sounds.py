@@ -70,7 +70,15 @@ def _player_cmd(path, player_tmpl):
     return None
 
 
+def _muted():
+    """Hard kill-switch for automation: WSL audio reaches the USER's speakers, so test suites and
+    agent-driven runs export STUDIO_MUTE=1 — no code path may make a sound while it is set."""
+    return bool(os.environ.get("STUDIO_MUTE"))
+
+
 def _spawn(cmd):
+    if _muted():
+        return
     subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      stdin=subprocess.DEVNULL, start_new_session=True)
 
@@ -79,6 +87,8 @@ def _play_blocking(event, repo):
     """Resolve + launch the player synchronously (RESPECTS the enabled toggle). Returns True if a player
     was spawned. Never raises."""
     try:
+        if _muted():
+            return False
         cfg = _cfg(repo)
         if not cfg.get("enabled", True):
             return False
@@ -98,6 +108,8 @@ def preview(event, repo):
     """Play `event` IGNORING the enabled toggle — for a UI 'test' button (you want to hear it even when
     sound is off). Non-blocking. Returns a short status string for the UI (what played, or why not)."""
     try:
+        if _muted():
+            return "muted (STUDIO_MUTE is set)"
         cfg = _cfg(repo)
         path = _resolve_file(repo, event, cfg)
         if not path:

@@ -1573,7 +1573,9 @@ class Studio(App):
                     "[#9dffce]event sounds: %s[/#9dffce]" % event.select.value)
             except Exception:
                 pass
-        elif sid in ("snd_done", "snd_stall"):   # per-event WAV pick: persist + audition immediately
+        elif sid in ("snd_done", "snd_stall"):   # per-event WAV pick: persist ONLY — no audition.
+            # A pick is not a request to HEAR it: the app never plays a sound the user didn't
+            # explicitly ask for (user rule 2026-07-06). ▶ TEST SOUND is the opt-in play.
             try:
                 ev = "run_done" if sid == "snd_done" else "run_stall"
                 _cfg = load_studio_config()
@@ -1582,8 +1584,8 @@ class Studio(App):
                 _evm[ev] = "sfx/%s" % event.select.value
                 _snd["events"] = _evm
                 save_studio_config({**_cfg, "sounds": _snd})
-                msg = sounds.preview(ev, REPO) if sounds is not None else "saved"
-                self.query_one("#newinfo", Static).update(tmark("success", "♪ %s" % msg))
+                self.query_one("#newinfo", Static).update(
+                    tmark("success", "♪ %s → %s   (▶ TEST SOUND to hear it)" % (ev, event.select.value)))
             except Exception:
                 pass
         self.update_est()

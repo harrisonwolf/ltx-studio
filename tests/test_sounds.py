@@ -15,6 +15,14 @@ os.makedirs(os.path.join(tmp, "sfx"))
 open(os.path.join(tmp, "x.wav"), "wb").write(b"RIFF0000WAVE")
 open(os.path.join(tmp, "sfx", "queue_empty.wav"), "wb").write(b"RIFF0000WAVE")
 
+# STUDIO_MUTE (set by run.sh) must silence EVERY path — automation may never reach speakers
+os.environ["STUDIO_MUTE"] = "1"
+check("STUDIO_MUTE: play suppressed", sounds._play_blocking("run_done", tmp) is False)
+check("STUDIO_MUTE: preview suppressed", "muted" in sounds.preview("run_done", tmp))
+# contract tests below run un-muted but stay SILENT by construction: player='true' (a no-op
+# binary) and RIFF stubs — never a real audio backend.
+del os.environ["STUDIO_MUTE"]
+
 def write_cfg(enabled=True, events=None):
     with open(os.path.join(tmp, "runs", "studio_config.json"), "w") as f:
         json.dump({"sounds": {"enabled": enabled, "events": events or {}, "player": "true"}}, f)
