@@ -1031,7 +1031,9 @@ class Studio(App):
     #rleft { width: 3fr; height: 1fr; margin: 0 1 0 0; }
     #rightcol.-narrow #rctop { layout: vertical; }
     #rightcol.-narrow #rleft { width: 1fr; height: 1fr; margin: 0 0 1 0; }
-    #rightcol.-narrow #infopanel { width: 1fr; height: 14; }
+    #rightcol.-narrow #infopanel { width: 1fr; height: 12; }
+    #rightcol.-narrow #fieldvisual { height: 12; }
+    #rightcol.-narrow #readout { min-height: 6; }
     #fieldvisual { width: 1fr; height: 16; border: round $primary; background: $surface;
                    padding: 0 1; margin: 0 0 1 0; overflow: hidden; }
     #readout { width: 1fr; height: 1fr; border: round $border; background: $surface;
@@ -1498,8 +1500,12 @@ class Studio(App):
             art = None
         # FIXED fixture: content updates in place; a visual-less field KEEPS the previous schematic
         # (sticky-panel rule); the placeholder shows only before the first schematic ever renders.
+        # no_wrap: block-art CLIPS at the box edge, never wraps (a 1-col deficit on a small monitor
+        # used to smear bar fragments onto the next line).
         if art:
-            panel.update(art)
+            _t = Text.from_markup(art)
+            _t.no_wrap = True
+            panel.update(_t)
             self._visual_set = True
         elif not getattr(self, "_visual_set", False):
             panel.update("[dim]schematic — focus a dial (or its ⓘ) to illustrate it[/dim]")
@@ -1516,7 +1522,9 @@ class Studio(App):
         try:
             rc = self.query_one("#rightcol")
             w = int(rc.content_size.width) or max(0, int(self.size.width) - 57)
-            (rc.add_class if w < 76 else rc.remove_class)("-narrow")
+            # side-by-side needs >=84: the 3fr stack must fit the full ~44-col bar art (a 1-2 col
+            # deficit used to WRAP schematic bars into garbage on the 16" portable monitor)
+            (rc.add_class if w < 84 else rc.remove_class)("-narrow")
         except Exception:
             pass
         try:      # short terminal (portable monitor): shed LIVE info strips so controls stay visible
@@ -2656,8 +2664,9 @@ class Studio(App):
         except Exception:
             art = None
         if art:                                    # fixed fixture: content updates, the box never moves
-            panel.update(art)
-            panel.remove_class("-active")
+            _t = Text.from_markup(art)
+            _t.no_wrap = True                      # bars clip at the box edge, never wrap
+            panel.update(_t)
 
     def _winpath(self, linux_abs):
         r"""WSL abs path -> \\wsl.localhost UNC, pasteable into Windows Explorer."""
