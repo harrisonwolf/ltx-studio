@@ -43,7 +43,7 @@ VARIANTS = {
     "wan-turbo": base_cfg(backend="wan-turbo", cfg=1.0, steps=8, seg_frames=57),
 }
 
-TITLES = ("VRAM", "RAM", "TIME", "QUAL", "DRIFT")
+TITLES = ("VRAM", "CLIP", "RAM", "SHOTS", "QUAL", "DRIFT")
 ABSOLUTE_WORDS = ("guarantee", "guaranteed", "perfect", "certain", "always", "100%", "flawless", "best")
 
 
@@ -60,7 +60,7 @@ def check_1_render_titles():
 
 
 def check_2_line_widths():
-    # a fit with an active ltx time-fit forces the TIME caption's "(fit ...)" annotation,
+    # a fit with an active ltx time-fit forces the SHOTS caption's "(fit ...)" annotation,
     # and a wildly wrong COEF makes that delta huge -> widest possible caption line.
     annot_fit = {"vram": {}, "time": {"ltx": {"COEF": 40.0, "WARM": 4000.0, "DECODE": 900.0,
                                               "LOAD": 9000.0, "SEAM": 90.0, "SEG_REF": 49.0, "rows": 6}}}

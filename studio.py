@@ -1044,7 +1044,7 @@ class Studio(App):
     #form { width: 52; padding: 0 2 0 1; }
     #rightcol { width: 1fr; height: 100%; margin: 0 1 0 2; overflow: hidden; }
     #rctop { width: 1fr; height: 1fr; }
-    #rleft { width: 3fr; min-width: 30; height: 1fr; margin: 0 1 0 0; }
+    #rleft { width: 3fr; min-width: 30; height: 1fr; margin: 0 1 0 0; overflow-y: auto; }
     /* NARROW rail (portable monitor): stack vertically at natural sizes and let the RAIL scroll.
        Squeezing three boxes into ~30 rows crushed whichever came last (the READOUT vanished to a
        border sliver) — scrolling keeps every box fully real. Wide layout unchanged. */
@@ -1054,9 +1054,13 @@ class Studio(App):
     #rightcol.-narrow #infopanel { width: 1fr; height: 12; }
     #rightcol.-narrow #fieldvisual { height: 12; }
     #rightcol.-narrow #readout { height: 15; }
-    #fieldvisual { width: 1fr; height: 16; border: round $primary; background: $surface;
+    /* height priority: READOUT is FIXED at 15 (title + six 2-line gauges, exactly) and the
+       SCHEMATIC flexes — on short rails the schematic loses hint lines, never the gauges.
+       (The old 1fr readout silently clipped SHOTS/QUAL/DRIFT on the portable monitor.) */
+    #fieldvisual { width: 1fr; height: 1fr; min-height: 10; max-height: 16;
+                   border: round $primary; background: $surface;
                    padding: 0 1; margin: 0 0 1 0; overflow: hidden; }
-    #readout { width: 1fr; height: 1fr; border: round $border; background: $surface;
+    #readout { width: 1fr; height: 15; border: round $border; background: $surface;
                padding: 0 1; overflow: hidden; }
     #infopanel { width: 2fr; min-width: 18; height: 1fr; border: round $border; background: $surface; padding: 0 1; }
     #newinfo { width: 1fr; height: auto; }
@@ -2722,7 +2726,8 @@ class Studio(App):
                 consult = False
             cfg = {"backend": rd("backend"), "mode": rd("mode"), "steadiness": rd("steadiness"),
                    "W": W, "H": H, "fps": fps, "seg_frames": seg_frames, "total_frames": total_frames,
-                   "nseg": nseg, "chain": chain, "steps": rd("steps"), "cfg": rd("cfg"),
+                   "nseg": nseg, "chain": chain, "seconds": rd("seconds"),
+                   "steps": rd("steps"), "cfg": rd("cfg"),
                    "cond_strength": rd("cond_strength"), "ltx_variant": rd("ltx_variant"),
                    "wan_ref_anchor": rd("wan_ref_anchor"), "latent_adain": rd("latent_adain"),
                    "reserve_gb": rd("vram_reserve", "1.0"), "consult": consult}

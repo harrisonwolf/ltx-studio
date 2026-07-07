@@ -13,7 +13,6 @@
 
 import os
 import json
-import math
 import statistics
 import time
 
@@ -441,6 +440,27 @@ def _score_bar(pct, width, fill_color):
     return "".join(_c(fill_color, "█") for _ in range(filled)) + "".join(_c(DIM, "░") for _ in range(width - filled))
 
 
+def _chain_boxes(ns, width, col):
+    """[██]─[██]─[██] — one box per shot in the chain, joiners dim. Padded to `width` cells so the
+    value tag stays column-aligned with the bar gauges. Overflow shows as a dim '┄+N' tail.
+    NB the opening bracket is markup-escaped ('\\[') or Rich eats the box as a style tag."""
+    ns = max(1, int(ns))
+    shown = ns if ns * 5 - 1 <= width else max(1, (width - 3 + 1) // 5)   # tail '┄+N' needs ~3 cells
+    parts = []
+    for i in range(shown):
+        if i:
+            parts.append(_c(DIM, "─"))
+        parts.append(_c(col, "\\[██]"))
+    used = shown * 5 - 1
+    if ns > shown:
+        tail = "┄+%d" % (ns - shown)
+        parts.append(_c(DIM, tail))
+        used += len(tail)
+    if used < width:
+        parts.append(" " * (width - used))
+    return "".join(parts)
+
+
 def _fmt_secs(s):
     s = max(0.0, s)
     if s < 90:
@@ -466,7 +486,7 @@ def _row(title, bar, label):
 
 
 def render_readout(cfg, secs, fit, width=None):
-    """The full six-gauge strip as ONE Rich-markup string. Order: VRAM, CLIP, RAM, TIME, QUALITY,
+    """The full six-gauge strip as ONE Rich-markup string. Order: VRAM, CLIP, RAM, SHOTS, QUALITY,
     DRIFT. Defensive: a single gauge failing degrades to a dim placeholder rather than crashing
     the panel. `width` = the panel's CONTENT width in cells (studio measures it and re-renders
     on window resize); bars are sized to fit so nothing wraps on narrow/snapped windows."""
@@ -516,23 +536,32 @@ def render_readout(cfg, secs, fit, width=None):
     except Exception:
         lines += ["RAM  " + _c("dim", "n/a"), ""]
 
-    # ---- TIME (bins the studio-supplied secs; never recomputes the base ETA) ----
+    # ---- SHOTS (the chain itself: one box per SEGMENT pass, glued in order. Replaced the old
+    #      TIME log-bar; the render ETA lives on in the caption so no information was lost) ----
     try:
-        if secs is None:
-            lines.append("TIME  " + _c("dim", "enter numbers"))
-            lines.append("      " + _c("dim", "1m 5m 15m 1h 3h"))
+        sf = int(_f(cfg.get("seg_frames")))
+        ns = int(_f(cfg.get("nseg"))) or 1
+        fpsv = _f(cfg.get("fps")) or 0.0
+        if sf > 0 and fpsv > 0:
+            col = CLEAN if ns <= 1 else (MID if ns <= 3 else WARN)
+            tf = _f(cfg.get("total_frames"))
+            actual = (tf if tf > 0 else float(sf * ns)) / fpsv
+            asked = _f(cfg.get("seconds"))
+            val = ("%gs→%.1fs" % (asked, actual)) if (asked > 0 and abs(asked - actual) > 0.05) \
+                else ("%.1fs" % actual)
+            lines.append(_row("SHOTS", _chain_boxes(ns, w_bar, col), _c(col, val)))
+            cap = "%d × %.1fs" % (ns, sf / fpsv)
+            if secs is not None:
+                cap += " · " + _fmt_secs(secs) + " render"
+                ft = _fitted_time(cfg, fit)
+                if ft is not None and not narrow:  # the fit annot is the first thing to wrap when snapped
+                    cap += "  (fit %s)" % _fmt_delta(ft - secs)
+            lines.append("      " + _c("dim", cap))
         else:
-            lo, hi = math.log(60.0), math.log(10800.0)
-            frac = _clamp((math.log(max(1.0, secs)) - lo) / (hi - lo), 0.0, 1.0)
-            col = MID if secs <= 900 else (WARN if secs <= 3600 else BAD)
-            lines.append(_row("TIME ", _score_bar(frac * 100.0, w_bar, col), _c(col, _fmt_secs(secs))))
-            annot = ""
-            ft = _fitted_time(cfg, fit)
-            if ft is not None and not narrow:     # the fit annot is the first thing to wrap when snapped
-                annot = "  " + _c("dim", "(fit %s)" % _fmt_delta(ft - secs))
-            lines.append("      " + _c("dim", "1m 5m 15m 1h 3h") + annot)
+            lines.append("SHOTS " + _c("dim", "enter numbers"))
+            lines.append("      " + _c("dim", "one box per glued segment"))
     except Exception:
-        lines += ["TIME  " + _c("dim", "n/a"), ""]
+        lines += ["SHOTS " + _c("dim", "n/a"), ""]
 
     # ---- QUALITY (rough guide) ----
     try:

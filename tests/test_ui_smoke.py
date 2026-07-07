@@ -61,6 +61,13 @@ async def main():
         app.query_one("#name").focus(); await pilot.pause()
         check("sticky schematic keeps its label on visual-less focus", "GUIDANCE" in str(fv.border_title))
         check("rail: boxes unmoving across focus", before == (fv.region, ro.region, ip.region))
+        # readout is FIXED 15 rows = all six gauges always visible (the old 1fr box clipped the
+        # tail gauges on short screens); SHOTS chain gauge replaced the TIME bar
+        check("readout: fixed 15-row box", ro.region.height == 15, ro.region.height)
+        _rr = str(ro.render())                     # Textual 8 Static: update() lands in .content, not .renderable
+        check("readout: SHOTS chain gauge rendered", "SHOTS" in _rr and "[██]" in _rr, _rr[:120])
+        check("readout: TIME bar retired", "TIME " not in _rr)
+        check("readout: tail gauge DRIFT present", "DRIFT" in _rr)
         # mode gray-out
         for wid in ("directive", "steadiness", "seg"):
             check("single: #%s grayed" % wid, app.query_one("#" + wid).disabled is True)
