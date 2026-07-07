@@ -12,7 +12,7 @@ It was built under a hard constraint — an RTX 5070 Laptop (Blackwell, `sm_120`
 
 ## What it looks like
 
-**Job control** — the NEW RUN screen, with the self-calibrating READOUT meters (VRAM headroom, clip budget, time estimate, predicted quality, drift risk):
+**Job control** — the NEW RUN screen: dials on the left; a STEPS schematic placing the current value on the quality-vs-time curve; a contextual INFO panel for whichever field has focus; and the self-calibrating READOUT meters (VRAM headroom, clip budget, system RAM, time estimate):
 
 ![NEW RUN screen with READOUT meters](media/tui-job-control.png)
 
