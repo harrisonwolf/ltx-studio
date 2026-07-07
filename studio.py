@@ -1029,11 +1029,15 @@ class Studio(App):
     #rightcol { width: 1fr; height: 100%; margin: 0 1 0 2; overflow: hidden; }
     #rctop { width: 1fr; height: 1fr; }
     #rleft { width: 3fr; height: 1fr; margin: 0 1 0 0; }
-    #rightcol.-narrow #rctop { layout: vertical; }
-    #rightcol.-narrow #rleft { width: 1fr; height: 1fr; margin: 0 0 1 0; }
+    /* NARROW rail (portable monitor): stack vertically at natural sizes and let the RAIL scroll.
+       Squeezing three boxes into ~30 rows crushed whichever came last (the READOUT vanished to a
+       border sliver) — scrolling keeps every box fully real. Wide layout unchanged. */
+    #rightcol.-narrow { overflow-y: auto; }
+    #rightcol.-narrow #rctop { layout: vertical; height: auto; }
+    #rightcol.-narrow #rleft { width: 1fr; height: auto; margin: 0 0 1 0; }
     #rightcol.-narrow #infopanel { width: 1fr; height: 12; }
     #rightcol.-narrow #fieldvisual { height: 12; }
-    #rightcol.-narrow #readout { min-height: 6; }
+    #rightcol.-narrow #readout { height: 15; }
     #fieldvisual { width: 1fr; height: 16; border: round $primary; background: $surface;
                    padding: 0 1; margin: 0 0 1 0; overflow: hidden; }
     #readout { width: 1fr; height: 1fr; border: round $border; background: $surface;
