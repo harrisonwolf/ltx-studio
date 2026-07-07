@@ -4,7 +4,7 @@ A local, offline AI-video studio that runs modern video-diffusion models on a **
 
 LTX Studio wraps [LTX-Video](https://github.com/Lightricks/LTX-Video) and [Wan](https://github.com/Wan-Video) diffusion backends in a Pip-Boy–styled [Textual](https://textual.textualize.io/) TUI, and adds the layer those research repos leave out: a job queue, live previews, calibrated time estimates, a blind A/B harness, and a per-run experiment log so quality changes are *measured*, not guessed at.
 
-It was built under a hard constraint — an RTX 5070 Laptop (Blackwell, `sm_120`) with 8 GB of VRAM *shared with the Windows desktop* — and most of the interesting engineering falls out of taking that constraint seriously.
+It was built under a hard constraint — an RTX 5070 Laptop (Blackwell, `sm_120`) with 8 GB of VRAM *shared with the Windows desktop* — and most of the interesting engineering falls out of taking that constraint seriously. The payoff is everything cloud video-gen can't offer: it's free, private, and offline — no API keys, no per-second billing, nothing leaves the machine.
 
 > **Status:** a working personal tool, iterated over many sessions. Single author. This repo is the studio and its orchestration; the model weights and the diffusion research code are external dependencies (see [Running it](#running-it)).
 
