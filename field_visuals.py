@@ -22,6 +22,11 @@ extend and safe to import from either venv.
 PALETTE (green-phosphor, matches studio.py's Rich markup tags):
   [#6dffab] bright accent   [#9dffce] success/clean   [#34d977] mid green   [#1f9a52] dim green
   [#ffcf5c] warning/amber    [#ff6d6d] bad/fried/red   [dim] muted caption
+
+LAYOUT IDIOM (every bar schematic, top to bottom — keep new visuals on this grid):
+  bar row  ->  ▲ marker row  ->  zone-label row  ->  scale-tick row  ->
+  '  ↑ now X  ·  hint' caption  ->  dim hint line(s).
+  Uniform 2-space left margin; no line wider than 46 visible cols (2 margin + 42 bar + slack).
 """
 
 import re
@@ -103,6 +108,57 @@ def _marker_row(pos, width, color=None, glyph="▲"):
     return " " * pos + _c(color, glyph)
 
 
+def _tick(v, lo, hi, width):
+    """Bar column for value `v` on the lo..hi axis — the SAME mapping the ▲ marker uses, so
+    scale ticks and markers can never drift apart."""
+    if hi <= lo:
+        return 0
+    frac = (v - lo) / float(hi - lo)
+    frac = 0.0 if frac < 0.0 else (1.0 if frac > 1.0 else frac)
+    return int(round(frac * (width - 1)))
+
+
+def _pin_row(width, pins):
+    """One row of labels pinned to exact bar columns: pins = [(col, text, color), ...] where
+    `col` is the column the label is CENTERED on (same column space as the ▲ marker). Labels
+    are clamped into 0..width-1; a label that would touch an already-placed one is dropped
+    (earlier pins win). Returns a Rich-markup string, right-trimmed."""
+    cells = [(" ", None)] * width
+    for col, text, color in pins:
+        if not text or len(text) > width:
+            continue
+        start = int(col) - (len(text) - 1) // 2
+        start = max(0, min(start, width - len(text)))
+        lo, hi = max(0, start - 1), min(width, start + len(text) + 1)
+        if any(ch != " " for ch, _cl in cells[lo:hi]):
+            continue
+        for i, ch in enumerate(text):
+            cells[start + i] = (ch, color)
+    end = width
+    while end and cells[end - 1][0] == " ":
+        end -= 1
+    parts, i = [], 0
+    while i < end:
+        color = cells[i][1]
+        j = i
+        while j < end and cells[j][1] == color:
+            j += 1
+        run = "".join(ch for ch, _cl in cells[i:j])
+        parts.append(_c(color, run) if color else run)
+        i = j
+    return "".join(parts)
+
+
+def _caption(value, hint=None):
+    """The standard caption line under a marker row: '  ↑ now <value>  ·  <hint>'.
+    `value`/`hint` are pre-colored markup fragments; the scaffolding is dim. Keep the whole
+    line <= 46 visible cols — the ↑ makes it alignment-locked art, so it is never wrapped."""
+    s = _c("dim", "  ↑ now ") + value
+    if hint:
+        s += _c("dim", "  ·  ") + hint
+    return s
+
+
 # =====================================================================================
 # EXEMPLAR 1 — GUIDANCE (cfg): wash -> good -> punchy -> fried, scale 1..8
 # =====================================================================================
@@ -110,10 +166,9 @@ def _cfg(app):
     # zoned gradient bar across cfg 1..8. Each zone is a run of a block glyph in a palette color.
     #   1..2  wash  (░, too low -> flat / vague)
     #   3..4  good  (▒)
-    #   5..6  punchy(▓ -> █)
+    #   5..6  punchy(█)
     #   7..8  fried (▉, too high -> neon / over-sharp / artifacts)
     LO, HI, WIDTH = 1.0, 8.0, 42          # cfg range mapped onto WIDTH columns
-    # build the bar column-by-column so the value marker lines up exactly under the bar
     segs = [                              # (upper_bound_inclusive, glyph, color)
         (2.0, "░", DIM),
         (4.0, "▒", MID),
@@ -129,29 +184,22 @@ def _cfg(app):
                 break
         else:
             bar.append(_c(BAD, "▉"))
-    bar_str = "".join(bar)
+    lines = ["  " + "".join(bar)]
 
-    # zone labels under the bar (roughly aligned to each zone's centre)
-    labels = (
-        _c(DIM, "wash") + "      " + _c(MID, "good") + "    "
-        + _c(CLEAN, "punchy") + "    " + _c(BAD, "fried")
-    )
-    scale = _c("dim", "1        3        5        7    8   (CFG)")
-
-    lines = ["  " + bar_str, "  " + labels, "  " + scale]
-
-    # value-aware marker: read live cfg, drop a ▲ under it
     cfg = _num(app, "cfg")
     if cfg is not None:
-        frac = (cfg - LO) / (HI - LO)
-        pos = int(round(frac * (WIDTH - 1)))
-        lines.insert(1, "  " + _marker_row(pos, WIDTH, ACCENT, "▲"))
-        cap_val = _c(ACCENT, "now %.3g" % cfg)
-        lines.append(_c("dim", "  ↑ ") + cap_val
-                     + _c("dim", "  ·  too low = vague, too high = ") + _c(BAD, "fried"))
+        lines.append("  " + _marker_row(_tick(cfg, LO, HI, WIDTH), WIDTH))
+    # zone labels + scale ticks pinned to the SAME columns the ▲ marker maps to
+    lines.append("  " + _pin_row(WIDTH, [(2, "wash", DIM), (11, "good", MID),
+                                         (23, "punchy", CLEAN), (35, "fried", BAD)]))
+    lines.append("  " + _pin_row(WIDTH, [(_tick(v, LO, HI, WIDTH), "%g" % v, "dim")
+                                         for v in (1, 3, 5, 7)]
+                                        + [(WIDTH - 1, "(CFG)", "dim")]))
+    if cfg is not None:
+        lines.append(_caption(_c(ACCENT, "%.3g" % cfg),
+                              _c("dim", "low = vague, high = ") + _c(BAD, "fried")))
     else:
-        lines.append(_c("dim", "  low = loose/vague  ·  high = ") + _c(BAD, "over-cooked, saturated"))
-
+        lines.append(_c("dim", "  low = loose/vague · high = ") + _c(BAD, "fried, saturated"))
     return "\n".join(lines)
 
 
@@ -161,40 +209,38 @@ def _cfg(app):
 def _steps(app):
     # a quality ramp: left tiles are coarse/noisy, right tiles resolve to clean detail.
     # Each "tile" stands for a step budget; the glyph gets finer left->right.
-    ramp = [
-        (8,  "░", BAD,   "noisy"),
-        (16, "▒", WARN,  ""),
-        (24, "▓", MID,   ""),
-        (30, "█", CLEAN, "clean"),
-        (40, "█", CLEAN, ""),
-        (50, "█", CLEAN, "best"),
+    ramp = [                              # (upper_bound_steps, glyph, color)
+        (8,  "░", BAD),
+        (16, "▒", WARN),
+        (24, "▓", MID),
+        (30, "█", CLEAN),
+        (40, "█", CLEAN),
+        (50, "█", CLEAN),
     ]
     WIDTH = 42
     per = WIDTH // len(ramp)
-    bar = []
-    for _n, glyph, color, _lab in ramp:
-        bar.append(_c(color, glyph * per))
-    bar_str = "".join(bar)
-
-    # scale ticks under the tiles (step counts)
-    scale = _c("dim", "8    16   24   30   40   50   (steps)")
-    note = (_c("dim", "few = ") + _c(BAD, "blocky/noisy")
-            + _c("dim", "  →  many = ") + _c(CLEAN, "clean/detailed"))
-    dimin = _c("dim", "past ~30 = ") + _c(WARN, "diminishing returns, just slower")
-
-    lines = ["  " + bar_str]
+    lines = ["  " + "".join(_c(color, glyph * per) for _n, glyph, color in ramp)]
 
     steps = _num(app, "steps")
     if steps is not None:
-        # map 0..~60 steps onto the bar for the marker (clamp beyond)
-        SMAX = 60.0
-        frac = max(0.0, min(1.0, steps / SMAX))
-        pos = int(round(frac * (WIDTH - 1)))
-        lines.append("  " + _marker_row(pos, WIDTH, ACCENT, "▲"))
-        lines.append(_c("dim", "  ↑ ") + _c(ACCENT, "now %g" % steps))
-    lines.append("  " + scale)
-    lines.append("  " + note)
-    lines.append("  " + dimin)
+        # piecewise map the step count onto the TILE axis so the ▲ agrees with the tick row
+        bounds = [0] + [n for n, _g, _cl in ramp]
+        pos = WIDTH - 1
+        for i in range(len(ramp)):
+            if steps <= bounds[i + 1]:
+                frac = max(0.0, (steps - bounds[i]) / float(bounds[i + 1] - bounds[i]))
+                pos = int(round((i + frac) * per))
+                break
+        lines.append("  " + _marker_row(min(WIDTH - 1, pos), WIDTH))
+    lines.append("  " + _pin_row(WIDTH, [(3, "noisy", BAD), (24, "clean", CLEAN),
+                                         (38, "best", CLEAN)]))
+    lines.append("  " + _pin_row(WIDTH, [((i + 1) * per, "%d" % n, "dim")
+                                         for i, (n, _g, _cl) in enumerate(ramp)]))
+    if steps is not None:
+        lines.append(_caption(_c(ACCENT, "%g" % steps)))
+    lines.append(_c("dim", "  few = ") + _c(BAD, "blocky/noisy")
+                 + _c("dim", " → many = ") + _c(CLEAN, "clean/detailed"))
+    lines.append(_c("dim", "  past ~30 = ") + _c(WARN, "diminishing returns, just slower"))
     return "\n".join(lines)
 
 
@@ -210,21 +256,15 @@ def _res(app):
         ("704 x 480", "balanced", 6, MID),
         ("768 x 512", "sharp",    8, BAD),
     ]
-    boxes = []
+    rows = [[], [], []]
     for _label, _tag, w, color in tiers:
-        boxes.append([
-            _c(color, "┌" + "─" * w + "┐"),
-            _c(color, "│" + " " * w + "│"),
-            _c(color, "└" + "─" * w + "┘"),
-        ])
-
-    line1 = "  " + "  ".join(b[0] for b in boxes)
-    line2 = "  " + "  ".join(b[1] for b in boxes)
-    line3 = "  " + "  ".join(b[2] for b in boxes)
-    labels = "  " + "  ".join(_c(c, "%-8s" % t) + " " * max(0, w - len(t) - 5)
-                              for (_l, t, w, c) in tiers)
-
-    lines = [line1, line2, line3, labels]
+        rows[0].append(_c(color, "┌" + "─" * w + "┐"))
+        rows[1].append(_c(color, "│" + " " * w + "│"))
+        rows[2].append(_c(color, "└" + "─" * w + "┘"))
+    lines = ["  " + "  ".join(r) for r in rows]
+    # tag labels in cells as wide as their box (same 2-space gutters) -> columns line up
+    lines.append("  " + "  ".join(_c(color, "%-*s" % (w + 2, tag))
+                                  for (_label, tag, w, color) in tiers))
 
     res = None
     try:
@@ -233,32 +273,30 @@ def _res(app):
         res = None
     if res:
         s = str(res)
-        col = 2
-        for (label, _tag, w, _color) in tiers:
-            box_width = w + 2  # incl the two border chars
+        col, total = 0, sum(t[2] + 2 for t in tiers) + 2 * (len(tiers) - 1)
+        for label, _tag, w, _color in tiers:
             if s.startswith(label):
-                lines.append(_c("dim", "  ↑ now ") + _c(ACCENT, s))
+                lines.insert(3, "  " + _marker_row(col + (w + 2) // 2, total))
+                lines.append(_caption(_c(ACCENT, s)))
                 break
-            col += box_width + 2
+            col += w + 2 + 2
     lines.append(_c("dim", "  bigger box = ") + _c(MID, "sharper") + _c("dim", " + ")
                  + _c(BAD, "shorter max clip"))
-    lines.append(_c("dim", "  peak VRAM held ~flat (res trades ") + _c(WARN, "clip len") + _c("dim", ")"))
+    lines.append(_c("dim", "  peak VRAM ~flat — res trades ") + _c(WARN, "max clip len"))
     return "\n".join(lines)
 
 
 # =====================================================================================
-# BACKEND — speed <-> quality axis: LTX (fast) . Wan (slower, nicer) . wan-turbo (fast, distilled)
+# BACKEND — speed <-> quality axis: LTX (fast) . wan-turbo (fast, distilled) . Wan (nicer)
 # =====================================================================================
 def _backend(app):
     WIDTH = 42
     # a speed<->quality axis, fast on the left, nicer/slower on the right
     bar = _c(DIM, "▓" * 10) + _c(MID, "▓" * 12) + _c(CLEAN, "▓" * 12) + _c(WARN, "▓" * 8)
-    ruler = _c("dim", "fast" + " " * 15 + "slower" + " " * 13 + "nicer")
-
     opts = [
-        ("ltx",       "LTX-2B",      "fast draft",         5,  DIM),
-        ("wan-turbo", "Wan-turbo",   "fast 4-step distill", 20, MID),
-        ("wan",       "Wan-VACE",    "slower, nicer",       36, CLEAN),
+        ("ltx",       "LTX-2B",    "fast draft",          5,  DIM),
+        ("wan-turbo", "Wan-turbo", "fast 4-step distill", 20, MID),
+        ("wan",       "Wan-VACE",  "slower, nicer",       36, CLEAN),
     ]
 
     backend = None
@@ -266,21 +304,17 @@ def _backend(app):
         backend = app.v("backend")
     except Exception:
         backend = None
-    backend = (backend or "ltx").strip().lower()
+    backend = str(backend or "ltx").strip().lower()
 
-    lines = ["  " + bar]
     marker = [" "] * WIDTH
     for key, _name, _tag, pos, color in opts:
         marker[pos] = _c(ACCENT, "▲") if key == backend else _c(color, "·")
-    lines.append("  " + "".join(marker))
-    lines.append("  " + ruler)
+    lines = ["  " + bar, "  " + "".join(marker)]
+    lines.append("  " + _pin_row(WIDTH, [(5, "fast", "dim"), (36, "nicer (slower)", "dim")]))
 
-    legend = []
-    for key, name, tag, _pos, color in opts:
+    for key, name, tag, _pos, color in opts:    # A19: one item per line -> fits narrow panels
         tick = _c(ACCENT, "● ") if key == backend else "  "
-        legend.append(tick + _c(color, name) + _c("dim", " (%s)" % tag))
-    for lg in legend:                       # A19: one item per line -> fits narrow panels
-        lines.append("  " + lg)
+        lines.append("  " + tick + _c(color, name) + _c("dim", " (%s)" % tag))
     return "\n".join(lines)
 
 
@@ -306,10 +340,7 @@ def _seconds(app):
 
     MAXSHOTS = 6                            # A19: keep the chain row within a narrow panel
     shown = min(n_shots, MAXSHOTS)
-    shots = []
-    for i in range(shown):
-        shots.append(_c(CLEAN if i == 0 else MID, "[███]"))
-    row = "  " + "─".join(shots)
+    row = "  " + "─".join(_c(CLEAN if i == 0 else MID, "[███]") for i in range(shown))
     if n_shots > MAXSHOTS:
         row += _c("dim", " …+%d" % (n_shots - MAXSHOTS))
 
@@ -317,15 +348,15 @@ def _seconds(app):
     if seconds is not None:
         # round EXACTLY like the QUEUE RUN plan line (round(_,1)) so the two never disagree by a digit
         req_r = round(float(seconds), 1)
-        s_txt = _c(ACCENT, "%ss" % req_r)
+        val = _c(ACCENT, "%gs" % req_r)
         if actual_s is not None:
             act_r = round(float(actual_s), 1)
             if abs(act_r - req_r) >= 0.05:       # frame-grid rounded the request -> show req → actual
-                s_txt = _c(ACCENT, "%ss" % req_r) + _c("dim", " → ") + _c(ACCENT, "%ss" % act_r)
-        lines.append(_c("dim", "  ↑ now ") + s_txt
-                      + _c("dim", "  ·  %d shot%s" % (n_shots, "" if n_shots == 1 else "s")))
-    lines.append(_c("dim", "  each shot = one SEGMENT pass, glued at the tails"))
-    lines.append(_c("dim", "  longer = more shots = more ") + _c(WARN, "TIME") + _c("dim", ", not more VRAM"))
+                val += _c("dim", " → ") + _c(ACCENT, "%gs" % act_r)
+        lines.append(_caption(val, _c("dim", "%d shot%s" % (n_shots, "" if n_shots == 1 else "s"))))
+    lines.append(_c("dim", "  each shot = one SEGMENT pass, glued at tails"))
+    lines.append(_c("dim", "  longer = more shots = more ") + _c(WARN, "TIME")
+                 + _c("dim", ", not VRAM"))
     return "\n".join(lines)
 
 
@@ -349,56 +380,100 @@ def _fps(app):
                 break
         else:
             bar.append(_c(CLEAN, "█"))
-    bar_str = "".join(bar)
-    labels = _c(BAD, "choppy") + "        " + _c(MID, "24 cinematic") + "      " + _c(CLEAN, "30+ smooth")
-    scale = _c("dim", "12       18       24       30      36  (fps)")
+    lines = ["  " + "".join(bar)]
 
-    lines = ["  " + bar_str]
     fps = _num(app, "fps")
     if fps is not None:
-        frac = max(0.0, min(1.0, (fps - LO) / (HI - LO)))
-        pos = int(round(frac * (WIDTH - 1)))
-        lines.append("  " + _marker_row(pos, WIDTH, ACCENT, "▲"))
-        lines.append(_c("dim", "  ↑ ") + _c(ACCENT, "now %g" % fps))
-    lines.append("  " + labels)
-    lines.append("  " + scale)
-    lines.append(_c("dim", "  note: Wan always renders its native 16fps regardless of this"))
+        lines.append("  " + _marker_row(_tick(fps, LO, HI, WIDTH), WIDTH))
+    lines.append("  " + _pin_row(WIDTH, [(3, "choppy", BAD), (14, "24 cinematic", MID),
+                                         (31, "30+ smooth", CLEAN)]))
+    lines.append("  " + _pin_row(WIDTH, [(_tick(v, LO, HI, WIDTH), "%g" % v, "dim")
+                                         for v in (12, 18, 24, 30)]
+                                        + [(WIDTH - 1, "(fps)", "dim")]))
+    if fps is not None:
+        lines.append(_caption(_c(ACCENT, "%g" % fps)))
+    lines.append(_c("dim", "  note: Wan always renders native 16fps"))
     return "\n".join(lines)
 
 
 # =====================================================================================
-# SEG — how the clip is chunked into shots (per-shot length)
+# SEG — per-shot length METER: the effective shot vs the SAFE_PX VRAM cap. The SEG field
+#       is DIRECTOR-mode input only — in single/auto-chain the engine ignores it and every
+#       shot is the cap itself. Numbers come from app._plan() (same source as QUEUE RUN's
+#       plan line), so this meter can never disagree with it.
 # =====================================================================================
 def _seg(app):
-    LO, HI, WIDTH = 1.5, 3.0, 42
-    segs = [
-        (1.75, "▒", DIM),
-        (2.5,  "▓", CLEAN),
-        (3.0,  "█", WARN),
-    ]
+    WIDTH = 42
+    plan = None
+    try:
+        plan = app._plan()
+    except Exception:
+        plan = None
+    if plan is None:
+        # static fallback: form mid-edit — show the concept, no live numbers
+        return "\n".join([
+            "  " + _c(CLEAN, "█" * 26) + _c(DIM, "░" * 16),
+            "  " + _pin_row(WIDTH, [(0, "0s", "dim"), (WIDTH - 1, "VRAM cap", "dim")]),
+            _c("dim", "  per shot = min(SEG s, VRAM cap at this res)"),
+            _c("dim", "  live numbers return once the form parses"),
+        ])
+    W, H, fps, _total, seg_frames, nseg, _chain = plan
+
+    director = False
+    try:
+        director = str(app.v("mode") or "").strip().lower() == "director"
+    except Exception:
+        director = False
+    wan = False
+    try:
+        wan = str(app.v("backend") or "ltx").strip().lower() in ("wan", "wan-turbo")
+    except Exception:
+        wan = False
+    # the SAFE_PX working-set cap for the CURRENT res/backend — same math as app._plan()
+    q = (lambda n: ((max(1, n) - 1) // 4) * 4 + 1) if wan else (lambda n: (max(1, n) // 8) * 8 + 1)
+    cap = max(9, q(int(getattr(app, "SAFE_PX", 20_000_000) / float(W * H))))
+
+    req_frames, seg_req = None, _num(app, "seg")
+    if director and seg_req is not None and seg_req > 0:
+        req_frames = q(int(round(seg_req * fps) if wan else int(seg_req * fps)))
+
+    span = float(max(cap, req_frames or 0, seg_frames, 1))
+    fill = max(1, min(WIDTH, int(round(WIDTH * seg_frames / span))))
+    capcol = min(WIDTH, int(round(WIDTH * cap / span)))
     bar = []
     for col in range(WIDTH):
-        val = LO + (HI - LO) * col / (WIDTH - 1)
-        for ub, glyph, color in segs:
-            if val <= ub + 1e-9:
-                bar.append(_c(color, glyph))
-                break
+        if col < fill:
+            bar.append(_c(CLEAN, "█"))       # the effective per-shot length
+        elif col < capcol:
+            bar.append(_c(DIM, "░"))         # headroom up to the VRAM cap
         else:
-            bar.append(_c(WARN, "█"))
-    bar_str = "".join(bar)
-    labels = _c(DIM, "more seams") + "     " + _c(CLEAN, "sweet spot") + "      " + _c(WARN, "heavier/shot")
-    scale = _c("dim", "1.5      2.0      2.5      3.0  (SEGMENT s)")
+            bar.append(_c(BAD, "░"))         # past the cap — unreachable territory
+    lines = ["  " + "".join(bar)]
 
-    lines = ["  " + bar_str]
-    seg = _num(app, "seg")
-    if seg is not None:
-        frac = max(0.0, min(1.0, (seg - LO) / (HI - LO)))
-        pos = int(round(frac * (WIDTH - 1)))
-        lines.append("  " + _marker_row(pos, WIDTH, ACCENT, "▲"))
-        lines.append(_c("dim", "  ↑ ") + _c(ACCENT, "now %.3gs / shot" % seg))
-    lines.append("  " + labels)
-    lines.append("  " + scale)
-    lines.append(_c("dim", "  shorter = less VRAM, more seam/drift risk  ·  longer = fewer seams"))
+    eff_s = round(seg_frames / float(fps), 1) if fps else 0.0
+    cap_s = round(cap / float(fps), 1) if fps else 0.0
+    shots = _c("dim", "%d shot%s" % (nseg, "" if nseg == 1 else "s"))
+    scale = _pin_row(WIDTH, [(0, "0s", "dim"), (capcol - 1, "cap %gs" % cap_s, "dim")])
+
+    if director and req_frames is not None:
+        over = req_frames > cap
+        lines.append("  " + _marker_row(int(round((req_frames / span) * (WIDTH - 1))),
+                                        WIDTH, WARN if over else ACCENT))
+        lines.append("  " + scale)
+        if over:
+            val = (_c(WARN, "%gs" % seg_req) + _c("dim", " → capped ")
+                   + _c(ACCENT, "%df ≈ %gs" % (seg_frames, eff_s)))
+        else:
+            val = _c(ACCENT, "%gs → %df ≈ %gs" % (seg_req, seg_frames, eff_s))
+        lines.append(_caption(val, shots))
+        lines.append(_c("dim", "  shorter shots = more seams to hide"))
+    else:
+        lines.append("  " + scale)
+        lines.append(_c("dim", "  single/auto-chain: SEG is AUTO = VRAM cap"))
+        lines.append(_c("dim", "  (field inactive — used in DIRECTOR mode)"))
+        lines.append(_c("dim", "  auto shot = %df ≈ %gs @ %gfps  ·  " % (seg_frames, eff_s, fps))
+                     + shots)
+    lines.append(_c("dim", "  cap = what fits VRAM at this res/backend"))
     return "\n".join(lines)
 
 
@@ -422,20 +497,18 @@ def _cond_strength(app):
                 break
         else:
             bar.append(_c(CLEAN, "█"))
-    bar_str = "".join(bar)
-    labels = _c(BAD, "drifts freely") + "   " + _c(CLEAN, "sticks tight (can stall)")
-    scale = _c("dim", "0.0      0.4      0.6      0.8     1.0  (0-1)")
+    lines = ["  " + "".join(bar)]
 
-    lines = ["  " + bar_str]
     val = _num(app, "cond_strength")
     if val is not None:
-        frac = max(0.0, min(1.0, (val - LO) / (HI - LO)))
-        pos = int(round(frac * (WIDTH - 1)))
-        lines.append("  " + _marker_row(pos, WIDTH, ACCENT, "▲"))
-        lines.append(_c("dim", "  ↑ ") + _c(ACCENT, "now %.3g" % val))
-    lines.append("  " + labels)
-    lines.append("  " + scale)
-    lines.append(_c("dim", "  raise if subject drifts/morphs · lower if a clip feels 'stuck'"))
+        lines.append("  " + _marker_row(_tick(val, LO, HI, WIDTH), WIDTH))
+    lines.append("  " + _pin_row(WIDTH, [(8, "drifts freely", BAD),
+                                         (37, "sticks tight", CLEAN)]))
+    lines.append("  " + _pin_row(WIDTH, [(_tick(v, LO, HI, WIDTH), "%.1f" % v, "dim")
+                                         for v in (0.0, 0.4, 0.6, 0.8, 1.0)]))
+    if val is not None:
+        lines.append(_caption(_c(ACCENT, "%.3g" % val)))
+    lines.append(_c("dim", "  raise if subject drifts · lower if stuck"))
     return "\n".join(lines)
 
 
@@ -445,8 +518,8 @@ def _cond_strength(app):
 def _steadiness(app):
     WIDTH = 42
     opts = [
-        ("evolve",   "Evolve",   "journey / transform", 4,  BAD),
-        ("balanced", "Balanced", "gentle variation",     19, MID),
+        ("evolve",   "Evolve",   "journey / transform",   4,  BAD),
+        ("balanced", "Balanced", "gentle variation",      19, MID),
         ("hold",     "Hold",     "faithful / locked-off", 34, CLEAN),
     ]
     bar = _c(BAD, "▓" * 12) + _c(MID, "▓" * 14) + _c(CLEAN, "▓" * 16)
@@ -456,22 +529,18 @@ def _steadiness(app):
         steadiness = app.v("steadiness")
     except Exception:
         steadiness = None
-    steadiness = (steadiness or "hold").strip().lower()
+    steadiness = str(steadiness or "hold").strip().lower()
 
     marker = [" "] * WIDTH
     for key, _name, _tag, pos, color in opts:
         marker[pos] = _c(ACCENT, "▲") if key == steadiness else _c(color, "·")
-
     lines = ["  " + bar, "  " + "".join(marker)]
-    ruler = _c("dim", "lots of motion" + " " * 5 + "gentle" + " " * 8 + "locked-off")
-    lines.append("  " + ruler)
+    lines.append("  " + _pin_row(WIDTH, [(6, "lots of motion", "dim"), (19, "gentle", "dim"),
+                                         (33, "locked-off", "dim")]))
 
-    legend = []
-    for key, name, tag, _pos, color in opts:
+    for key, name, tag, _pos, color in opts:    # A19: one item per line -> fits narrow panels
         tick = _c(ACCENT, "● ") if key == steadiness else "  "
-        legend.append(tick + _c(color, name) + _c("dim", " (%s)" % tag))
-    for lg in legend:                       # A19: one item per line -> fits narrow panels
-        lines.append("  " + lg)
+        lines.append("  " + tick + _c(color, name) + _c("dim", " (%s)" % tag))
     return "\n".join(lines)
 
 
@@ -479,54 +548,72 @@ def _steadiness(app):
 # CFG_RESCALE — the fry-fixer: over-saturated/fried -> corrected
 # =====================================================================================
 def _cfg_rescale(app):
-    WIDTH = 42
-    fried = _c(BAD, "▉▉▉▉▉▉▉▉") + _c(WARN, "▓▓▓▓▓▓▓▓") + _c(CLEAN, "▒▒▒▒▒▒▒▒") + _c(DIM, "░░░░░░░░")
-    arrow = _c("dim", "  over-cooked ─────────────▶ corrected")
+    fried = (_c(BAD, "▉" * 10) + _c(WARN, "▓" * 10) + _c(CLEAN, "▒" * 10) + _c(DIM, "░" * 10))
+    arrow = _c("dim", "  over-cooked ─────────────────▶ corrected")
 
     val = None
     try:
         val = app.v("cfg_rescale")
     except Exception:
         val = None
-    val = (val or "off").strip().lower()
+    val = str(val or "off").strip().lower()
 
     lines = ["  " + fried, arrow]
-    tags = [("off", "off"), ("0.5", "mild"), ("0.7", "stronger")]
+    tags = [("off", "as-is"), ("0.5", "mild"), ("0.7", "strong")]
     legend = []
     for key, tag in tags:
         tick = _c(ACCENT, "●") if key == val else _c("dim", "○")
         legend.append(tick + " " + _c(ACCENT if key == val else MID, key) + _c("dim", " (%s)" % tag))
     lines.append("  " + "   ".join(legend))
-    lines.append(_c("dim", "  fixes over-saturated/fried output when GUIDANCE > ~3"))
+    lines.append(_c("dim", "  fixes fried output when GUIDANCE > ~3"))
     lines.append(_c("dim", "  LTX-2B + Wan only · no-op at GUIDANCE ≤ 1"))
     return "\n".join(lines)
 
 
 # =====================================================================================
-# CFG_INTERVAL — step timeline: CFG on early / off late = faster
+# CFG_INTERVAL — step timeline: WHICH denoising steps run guidance, for the CURRENT value.
+#   off      -> every step            a:b   -> the a..b fraction of the step axis
+#   "2"/"3"  -> every-Nth-step comb   other -> generic "on" (defensive)
 # =====================================================================================
 def _cfg_interval(app):
     WIDTH = 42
 
-    val = None
+    raw = None
     try:
-        val = app.v("cfg_interval")
+        raw = app.v("cfg_interval")
     except Exception:
-        val = None
-    on = str(val or "off").strip().lower() not in ("off", "")
+        raw = None
+    val = str(raw if raw is not None else "off").strip().lower()
 
-    if on:
-        bar = _c(ACCENT, "█" * 21) + _c(DIM, "░" * 21)
-        cap = _c(ACCENT, "on") + _c("dim", " (0.0:0.5) — guidance only over the first half of denoising")
+    if val in ("", "off"):
+        bar = _c(MID, "█" * WIDTH)
+        cap = _c("dim", "off — guidance runs every step (default)")
+    elif val.isdigit() and int(val) >= 2:
+        n = int(val)                         # every-Nth-step comb: █ on, ░ skipped
+        bar = "".join(_c(ACCENT, "█") if col % n == 0 else _c(DIM, "░")
+                      for col in range(WIDTH))
+        cap = (_c(ACCENT, "every %d%s step" % (n, {2: "nd", 3: "rd"}.get(n, "th")))
+               + _c("dim", " — CFG on 1 step in %d" % n))
     else:
-        bar = _c(MID, "█" * 42)
-        cap = _c("dim", "off — guidance runs every step (current default)")
+        m = re.match(r"^(\d*\.?\d+)\s*:\s*(\d*\.?\d+)$", val)
+        if m:
+            a = max(0.0, min(1.0, float(m.group(1))))
+            b = max(a, min(1.0, float(m.group(2))))
+            bar = "".join(_c(ACCENT, "█") if a <= (col + 0.5) / WIDTH <= b else _c(DIM, "░")
+                          for col in range(WIDTH))
+            cap = (_c(ACCENT, "on %s" % val)
+                   + _c("dim", " — CFG on %d–%d%% of the steps"
+                        % (int(round(a * 100)), int(round(b * 100)))))
+        else:                                # unknown token -> generic on (defensive)
+            bar = _c(ACCENT, "█" * WIDTH)
+            cap = _c(ACCENT, "on (%s)" % val[:12]) + _c("dim", " — custom schedule")
 
     lines = ["  " + bar]
-    lines.append(_c("dim", "  step 0") + " " * 28 + _c("dim", "step N"))
+    lines.append("  " + _pin_row(WIDTH, [(0, "step 0", "dim"), (WIDTH - 1, "step N", "dim")]))
     lines.append("  " + cap)
-    lines.append(_c(ACCENT, "  on") + _c("dim", " skips the uncond forward pass late = faster, fewer artifacts"))
-    lines.append(_c("dim", "  LTX-2B + Wan only · no-op at GUIDANCE ≤ 1 or on wan-turbo"))
+    lines.append("  " + _c(ACCENT, "█") + _c("dim", " = CFG on   ")
+                 + _c(DIM, "░") + _c("dim", " = uncond pass skipped = faster"))
+    lines.append(_c("dim", "  LTX-2B + Wan only · no-op: CFG ≤ 1, wan-turbo"))
     return "\n".join(lines)
 
 
@@ -542,18 +629,22 @@ def _wan_ref_anchor(app):
     on = str(val or "off").strip().lower() == "on"
 
     if on:
-        chain = (_c(CLEAN, "[◆]") + _c(DIM, "──") + _c(CLEAN, "[◆]")
-                 + _c(DIM, "──") + _c(CLEAN, "[◆]") + _c(DIM, "──") + _c(CLEAN, "[◆]"))
-        anchors = "  " + " " * 0 + _c("dim", "│") + " " * 4 + _c("dim", "└─────anchored to shot 1─────┘")
-        cap = _c(ACCENT, "on") + _c("dim", " — every shot pinned back to shot 1's opening frame")
+        chain = (_c(CLEAN, "[◆]") + _c(DIM, "──")) * 3 + _c(CLEAN, "[◆]")
+        lines = [
+            "  " + chain,
+            "   " + _c(DIM, "│") + "    " + _c(ACCENT, "↑    ↑    ↑"),
+            "   " + _c(DIM, "└────┴────┴────┘") + _c("dim", "  anchored to shot 1"),
+            "  " + _c(ACCENT, "on") + _c("dim", " — every shot pinned back to shot 1"),
+        ]
     else:
-        chain = (_c(CLEAN, "[◆]") + _c(DIM, "──") + _c(WARN, "[◇]")
-                 + _c(DIM, "──") + _c(BAD, "[◈]") + _c(DIM, "──") + _c(BAD, "[?]"))
-        anchors = _c("dim", "  shot 1        drifting        drifting        ") + _c(BAD, "morphed")
-        cap = _c("dim", "off — each shot only conditions on the ") + _c(WARN, "previous") + _c("dim", " one")
-
-    lines = ["  " + chain, anchors, "  " + cap]
-    lines.append(_c("dim", "  Wan / Wan-turbo only, chained (multi-shot) runs"))
+        chain = (_c(CLEAN, "[◆]") + _c(DIM, "──") + _c(WARN, "[◇]") + _c(DIM, "──")
+                 + _c(BAD, "[◈]") + _c(DIM, "──") + _c(BAD, "[?]"))
+        lines = [
+            "  " + chain,
+            "  " + _pin_row(20, [(1, "shot 1", CLEAN), (16, "morphed", BAD)]),
+            "  " + _c("dim", "off — each shot only sees the previous shot"),
+        ]
+    lines.append(_c("dim", "  Wan backends only · chained (multi-shot) runs"))
     return "\n".join(lines)
 
 
@@ -566,20 +657,27 @@ def _seed(app):
         seed = app.v("seed")
     except Exception:
         seed = None
-    seed_s = str(seed).strip() if seed not in (None, "") else "0"
+    seed_s = str(seed).strip() if seed not in (None, "") else ""
 
-    row1 = "  " + _c(CLEAN, "┌─────────┐") + "   " + _c("dim", "same settings") + "   " + _c(CLEAN, "┌─────────┐")
-    row2 = ("  " + _c(CLEAN, "│ seed %-3s│" % seed_s[:3]) + " ──────────────▶ "
-            + _c(CLEAN, "│ identical│"))
-    row3 = "  " + _c(CLEAN, "└─────────┘") + "                 " + _c(CLEAN, "└─────────┘")
-    row4 = "  " + _c(WARN, "┌─────────┐") + "   " + _c("dim", "any other seed") + "   " + _c(WARN, "┌─────────┐")
-    row5 = ("  " + _c(WARN, "│ seed ??? │") + " ──────────────▶ "
-            + _c(WARN, "│ new take │"))
-    row6 = "  " + _c(WARN, "└─────────┘") + "                 " + _c(WARN, "└─────────┘")
+    top = "┌" + "─" * 10 + "┐"              # all four boxes share one 12-col footprint
+    bot = "└" + "─" * 10 + "┘"
+    arrow = " " + "─" * 14 + "▶ "           # 17-col connector, same width as the gap labels
+    shown = (seed_s[:4] or "?")
 
-    lines = [row1, row2, row3, "", row4, row5, row6]
-    lines.append(_c("dim", "  ↑ now ") + _c(ACCENT, "seed=%s" % seed_s))
-    lines.append(_c("dim", "  fix it to change ONE thing at a time and compare fairly"))
+    lines = [
+        "  " + _c(CLEAN, top) + _c("dim", "  same settings  ") + _c(CLEAN, top),
+        "  " + _c(CLEAN, "│ seed %-4s│" % shown) + _c("dim", arrow) + _c(CLEAN, "│ identical│"),
+        "  " + _c(CLEAN, bot) + " " * 17 + _c(CLEAN, bot),
+        "",
+        "  " + _c(WARN, top) + _c("dim", " any other seed  ") + _c(WARN, top),
+        "  " + _c(WARN, "│ seed ??? │") + _c("dim", arrow) + _c(WARN, "│ new take │"),
+        "  " + _c(WARN, bot) + " " * 17 + _c(WARN, bot),
+    ]
+    if seed_s:
+        lines.append(_caption(_c(ACCENT, "seed=%s" % seed_s[:10])))
+    else:
+        lines.append(_caption(_c(WARN, "blank"), _c("dim", "random seed every run")))
+    lines.append(_c("dim", "  fix the seed to change ONE thing at a time"))
     return "\n".join(lines)
 
 
