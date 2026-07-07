@@ -12,7 +12,7 @@ It was built under a hard constraint — an RTX 5070 Laptop (Blackwell, `sm_120`
 
 ## What it looks like
 
-**Job control** — the NEW RUN screen: dials on the left; a schematic placing the focused dial on its quality curve (here GUIDANCE, running wash → good → punchy → fried); a contextual INFO panel with per-backend guidance; and the self-calibrating READOUT meters (VRAM headroom, clip budget, system RAM, time estimate):
+**Job control** — the NEW RUN screen: dials on the left; a schematic for the focused dial (here BACKEND, laid out fast → nicer); a contextual INFO panel with per-backend knowledge baked in; and the self-calibrating READOUT (VRAM headroom, clip budget, system RAM, the shot chain, predicted quality, drift risk):
 
 ![NEW RUN screen with READOUT meters](media/tui-job-control.png)
 
