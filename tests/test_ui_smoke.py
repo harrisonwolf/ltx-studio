@@ -54,7 +54,9 @@ async def main():
         check("rail: info panel right + taller", ip.region.x > fv.region.x and ip.region.height > fv.region.height)
         before = (fv.region, ro.region, ip.region)
         app.query_one("#cfg").focus(); await pilot.pause()
+        check("schematic title names the shown dial", "GUIDANCE" in str(fv.border_title), fv.border_title)
         app.query_one("#name").focus(); await pilot.pause()
+        check("sticky schematic keeps its label on visual-less focus", "GUIDANCE" in str(fv.border_title))
         check("rail: boxes unmoving across focus", before == (fv.region, ro.region, ip.region))
         # mode gray-out
         for wid in ("directive", "steadiness", "seg"):

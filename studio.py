@@ -42,6 +42,16 @@ def _run_kind(job):
             "director": ("✦", "director")}.get(job.kind, ("·", job.kind or "run"))
 
 
+def _dial_title(wid):
+    """Display name for a form field, parsed from its HELP entry's leading [b]TITLE[/b]
+    (single source of truth with the INFO panel); falls back to the widget id."""
+    try:
+        m = re.match(r"\[b\](.+?)\[/b\]", HELP.get(wid, ""))
+        return (m.group(1).split("(")[0].strip() if m else (wid or "").upper()) or (wid or "").upper()
+    except Exception:
+        return (wid or "").upper()
+
+
 def _sfx_options():
     """(label, filename) for every WAV in sfx/ — drop a file in the folder and it appears in the
     DONE/STALL sound pickers on the next launch. Never empty (Select needs >=1 option)."""
@@ -1511,6 +1521,10 @@ class Studio(App):
             _t.no_wrap = True
             panel.update(_t)
             self._visual_set = True
+            try:      # the border title always names WHICH dial is illustrated (sticky panels can
+                panel.border_title = "« SCHEMATIC — %s »" % _dial_title(wid)   # outlive their focus)
+            except Exception:
+                pass
         elif not getattr(self, "_visual_set", False):
             panel.update("[dim]schematic — focus a dial (or its ⓘ) to illustrate it[/dim]")
 
