@@ -1100,9 +1100,12 @@ class Studio(App):
     .strip { height: 2; margin: 0; padding: 0 1; border-top: dashed $border-strong; }
     .strip Static { width: 1fr; height: 1; color: $foreground; content-align: left middle; }
     /* SHORT terminals (16" portable monitor etc): the LIVE tab's fixed stack used to overflow and
-       push the PAUSE/CANCEL row off-screen. -short (set in on_resize, height < 38) sheds the info
-       strips and shrinks the preview so the CONTROLS always stay reachable. */
-    Screen.-short .strip { display: none; }
+       push the PAUSE/CANCEL row off-screen. -short (height < 38) sheds the two lower-value strips
+       (PACE, STEERING) but KEEPS the PHASES stopwatch — the one live meter worth its rows. -tiny
+       (height < 30) sheds PHASES too, restoring the controls-always-reachable guarantee on genuinely
+       small/snapped windows. #livemid (1fr) shrinks to soak up the slack in both regimes. */
+    Screen.-short #pacestrip, Screen.-short #steerstrip { display: none; }
+    Screen.-tiny #phasestrip { display: none; }
     Screen.-short #livemid { min-height: 6; }
     #ph_timeline { width: 1fr; }
     #livelog { display: none; height: 8; }
@@ -1576,8 +1579,10 @@ class Studio(App):
             (rc.add_class if w < 52 else rc.remove_class)("-narrow")
         except Exception:
             pass
-        try:      # short terminal (portable monitor): shed LIVE info strips so controls stay visible
-            (self.screen.add_class if self.size.height < 38 else self.screen.remove_class)("-short")
+        try:      # short terminal (portable monitor): shed lower-value LIVE strips so controls stay
+            h = int(self.size.height)   # visible. -short keeps the PHASES stopwatch; -tiny sheds it too
+            (self.screen.add_class if h < 38 else self.screen.remove_class)("-short")
+            (self.screen.add_class if h < 30 else self.screen.remove_class)("-tiny")
         except Exception:
             pass
         self.update_est()

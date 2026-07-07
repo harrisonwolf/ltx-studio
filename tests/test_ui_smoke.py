@@ -129,6 +129,34 @@ async def main():
         check("picker curated to pipboy family", names and all(n.startswith("pipboy") for n in names))
         await pilot.press("escape"); await pilot.pause()
 
+async def short_live():
+    """Portable-monitor regime on the LIVE tab: -short (height<38) sheds PACE+STEERING but KEEPS
+    the PHASES stopwatch; -tiny (height<30) sheds PHASES too. Controls stay reachable at both."""
+    state["active"] = active
+    def reachable(app):
+        pb = app.query_one("#pausebtn"); return pb.region.y + pb.region.height <= app.size.height
+    def shown(app, sel):
+        w = app.query_one(sel); return bool(w.display) and w.region.height > 0
+    app = studio.Studio()
+    async with app.run_test(size=(120, 34)) as pilot:      # short, not tiny
+        await pilot.pause()
+        app.query_one(TabbedContent).active = "tab-live"; await pilot.pause()
+        app.tick(); await pilot.pause()
+        check("short LIVE: -short set", app.screen.has_class("-short") and not app.screen.has_class("-tiny"))
+        check("short LIVE: PHASES stopwatch KEPT", shown(app, "#phasestrip"))
+        check("short LIVE: PACE/STEERING shed", not shown(app, "#pacestrip") and not shown(app, "#steerstrip"))
+        check("short LIVE: controls reachable", reachable(app))
+    app2 = studio.Studio()
+    async with app2.run_test(size=(120, 28)) as pilot:     # tiny
+        await pilot.pause()
+        app2.query_one(TabbedContent).active = "tab-live"; await pilot.pause()
+        app2.tick(); await pilot.pause()
+        check("tiny LIVE: -tiny set", app2.screen.has_class("-tiny"))
+        check("tiny LIVE: PHASES shed too", not shown(app2, "#phasestrip"))
+        check("tiny LIVE: controls still reachable", reachable(app2))
+    state["active"] = None
+
 asyncio.run(main())
+asyncio.run(short_live())
 print("RESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)
