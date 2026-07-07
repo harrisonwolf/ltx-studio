@@ -36,6 +36,14 @@ It was built under a hard constraint — an RTX 5070 Laptop (Blackwell, `sm_120`
 
 *A corgi on the beach at golden hour — generated, upscaled ×4, and RIFE-interpolated end to end in about 15 minutes. Full clip: [corgi_redo-2.mp4](media/corgi_redo-2.mp4).*
 
+**Two weeks in** — the first clip this project ever produced (June 22, the initial smoke test) happens to also be a dog on a beach. Next to it, the corgi above (July 6). No prior video-generation experience; same 8 GB card:
+
+| June 22 — first output | July 6 |
+|---|---|
+| ![First smoke-test output: a blurry dog on a beach](media/day-one.png) | ![Two weeks later: a golden-hour corgi on the beach](media/day-fourteen.png) |
+
+*The difference between the two columns is the rest of this README.*
+
 ---
 
 ## Why it looks the way it does
