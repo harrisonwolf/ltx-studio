@@ -582,9 +582,24 @@ ULTRA_BLADERUNNER = Theme(
         "selection": "#1a2230",                          # rain-blue lift (> panel)
     },
 )
+# Vaporwave — pastel pink/cyan, a marble bust over a checkerboard floor. 純粋.
+ULTRA_VAPORWAVE = Theme(
+    name="ultra-vaporwave",
+    primary="#e070c0", secondary="#a04a8a", accent="#7af0ff",
+    foreground="#e0a8d8", background="#0a060e", surface="#140a1a", panel="#1c0e26",
+    success="#7af0ff", warning="#ffcf5c", error="#ff6d8a", dark=True,
+    variables={
+        "block-cursor-foreground": "#0a060e", "block-cursor-background": "#7af0ff",
+        "footer-key-foreground": "#ffd0ec", "footer-description-foreground": "#e0a8d8",
+        "border": "#6a2a7a", "border-strong": "#401a4a",
+        "surface-deep": "#070410", "text-bright": "#ffd0ec",
+        "accent-2": "#ffd0ec", "tertiary": "#a86ab8",    # pale-pink glow · mid orchid
+        "selection": "#241030",                          # orchid lift (> panel)
+    },
+)
 ULTRA_THEMES = (ULTRA_DRAGON, ULTRA_SKYNET, ULTRA_SYNTHWAVE, ULTRA_MATRIX, ULTRA_ARCADE, ULTRA_TV,
                 ULTRA_CASSETTE, ULTRA_SONAR, ULTRA_SCOPE, ULTRA_KAIJU, ULTRA_AURORA, ULTRA_VHS,
-                ULTRA_BLADERUNNER)
+                ULTRA_BLADERUNNER, ULTRA_VAPORWAVE)
 # Single source of truth for "is this the animated tier" — used by the picker (sectioning) and by
 # studio._on_theme_changed (show/hide the decoration). ultra_art.THEMES maps the same names to art.
 ULTRA_NAMES = frozenset(t.name for t in ULTRA_THEMES)

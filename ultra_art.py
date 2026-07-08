@@ -74,6 +74,8 @@ EFFECTS = {
                         "bgpulse": ("#05070e", "#080b18")},   # black -> faint vhs-blue swell
     "ultra-bladerunner": {"border": "AMBER2", "mode": "electron", "base": "#c89a5a", "hot": "#ffe0a0",
                         "bgpulse": ("#060810", "#0c0e18")},   # black -> faint amber/teal swell
+    "ultra-vaporwave": {"border": "ORCHID", "mode": "wave",     "base": "#d888c8", "hot": "#ffd0ec",
+                        "bgpulse": ("#0a060e", "#100818")},   # black -> faint orchid swell
 }
 
 _PAL = {}                   # optional theme palette (set by set_palette); reserved for future re-tint
@@ -770,6 +772,39 @@ def _bladerunner(beat, width=None):
         return ""
 
 
+# ---------------------------------------------------------------- vaporwave (aesthetic) -----------
+def _vaporwave(beat, width=None):
+    """A E S T H E T I C: a classical marble bust silhouette over a slowly-scrolling pastel
+    checkerboard floor, with a few dreamy sparkles drifting. Calm, slow. Pure fn of beat."""
+    try:
+        W = min(max(int(width or 32), 18), 44); H = 8
+        b = float(beat); bi = int(b)
+        pink, cyan, mag, marble = "#ff9ad8", "#7af0ff", "#c060c8", "#f0d8f0"
+        grid = [[" "] * W for _ in range(H)]
+        def put(y, x, ch, c):
+            if 0 <= x < W and 0 <= y < H:
+                grid[y][x] = "[%s]%s[/%s]" % (c, ch, c)
+        off = bi // 2                                    # checkerboard floor scrolls slowly
+        for y in (H - 2, H - 1):
+            for x in range(W):
+                if (((x + off) // 2) + y) % 2 == 0:
+                    put(y, x, "█", _lerp(mag, cyan, x / float(W)))
+        bx = W // 2 - 3                                  # classical bust
+        for s, ry in (("  ▄▄▄  ", 1), (" ▟███▙ ", 2), (" █████ ", 3), (" █████ ", 4), ("▟█████▙", 5)):
+            for i, ch in enumerate(s):
+                if ch != " ":
+                    put(ry, bx + i, ch, marble if ry < 3 else pink)
+        for i in range(3):                               # dreamy drifting sparkles
+            sx = (i * 11 + bi // 3) % W
+            sy = i % 3
+            tw = 0.5 + 0.5 * math.sin(b * 0.3 + i * 2.0)
+            if tw > 0.55 and grid[sy][sx] == " ":
+                put(sy, sx, "✧", _lerp("#3a2a44", "#ffd0ec", (tw - 0.55) / 0.45))
+        return "\n".join("".join(r) for r in grid)
+    except Exception:
+        return ""
+
+
 # ---------------------------------------------------------------- public API ----------------------
 THEMES = {
     "ultra-dragon": lambda b, w=None: render_sprite(DRAGON, b, cols=w),
@@ -785,6 +820,7 @@ THEMES = {
     "ultra-aurora": lambda b, w=None: _aurora(b, width=w),
     "ultra-vhs": lambda b, w=None: _vhs(b, width=w),
     "ultra-bladerunner": lambda b, w=None: _bladerunner(b, width=w),
+    "ultra-vaporwave": lambda b, w=None: _vaporwave(b, width=w),
 }
 TITLES = {
     "ultra-dragon": "「 年 · YEAR OF THE DRAGON 」",
@@ -800,6 +836,7 @@ TITLES = {
     "ultra-aurora": "「 AURORA · 69°N 」",
     "ultra-vhs": "「 ● REC · SP 」",
     "ultra-bladerunner": "「 OFF-WORLD · 2019 」",
+    "ultra-vaporwave": "「 ＶＡＰＯＲ · 純粋 」",
 }
 
 
