@@ -20,45 +20,35 @@ import math
 import os
 
 SHIMMER_PERIOD = 2          # sprite shimmer/scroll cadence (pixel art — stays chunky)
-GLOW_PERIOD = 5             # border-breathe divisor: bigger = slower, more gradual swell (~20s full cycle)
 
-# ordered emission ramps: deep -> hot. sweep/pulse index into these.
+# ordered emission ramps: deep -> hot. The sprite glow-sweep/pulse (dragon, T-800, synth sun) index
+# into these.
 RAMPS = {
     "GOLD":  ["#b8860b", "#d9a520", "#ffd24a", "#ffe89a", "#fff3c4"],   # dragon gold
     "RED":   ["#7a1010", "#b01818", "#e02020", "#ff3030", "#ff6a4a"],   # T-800 eyes
     "SYNTH": ["#ffd24a", "#ff9a3d", "#ff6a5a", "#ff3d7a", "#ff2d95"],   # synthwave sun (top->bottom)
-    "SYNTHB": ["#7a2a7e", "#c42678", "#ff2d95", "#ff6ab0", "#5cffe0"],  # synthwave border breathe (magenta->cyan)
-    "GREEN":  ["#0c3a16", "#177a2a", "#2eae3f", "#5bff77", "#b8ffc4"],  # matrix rain (deep -> bright green)
-    "TVB":    ["#2a323a", "#4a5560", "#7a8894", "#b8c4d0", "#f0f4f8"],  # broadcast steel -> white
-    "CHROME": ["#3a2e14", "#7a5a1a", "#c89a2a", "#e6c86a", "#fff0c0"],  # cassette chrome/tape-gold
-    "CYAN":   ["#0a3a44", "#127a8a", "#1fb6d4", "#5ce0f0", "#c4faff"],  # sonar / scope cyan
-    "ATOMIC": ["#0a2a44", "#154a7a", "#2a8ad0", "#6ac0ff", "#d0ecff"],  # kaiju atomic-blue
-    "AURORA": ["#0a3a2a", "#177a4a", "#2ec06a", "#6affaa", "#b8ffd8"],  # aurora green->mint
-    "VHSB":   ["#1a2a4a", "#2a4a8a", "#3f6ac8", "#7a9ae0", "#d0e0ff"],  # vhs blue
-    "AMBER2": ["#3a2606", "#7a4e12", "#c8901f", "#ffbf5c", "#ffe6b0"],  # blade-runner amber
-    "ORCHID": ["#3a1a44", "#7a3a8a", "#c060c8", "#ff9ad8", "#ffd0ec"],  # vaporwave pink/orchid
 }
 
-# Per-ultra-theme "breakout" effects (the flourish that escapes the decoration box, opt-in per theme):
-#   border = which RAMP the panel borders breathe through (independent triangle wave).
-#   mode/base/hot = the INFO-panel running-light: "electron" (a bright comet + tail travels the text)
-#     or "wave" (a smooth traveling brightness wave). base = readable resting color, hot = the crest.
-# (The whole-canvas "full-page touch" was removed 2026-07-07 — being redesigned; awaiting approval.)
+# Per-ultra-theme INFO-panel running-light (the flourish that escapes the decoration box, opt-in):
+#   mode/base/hot = "electron" (a bright comet + tail travels the text) or "wave" (a smooth traveling
+#   brightness wave). base = readable resting color, hot = the crest.
+# (Panel borders are STATIC — the border-breathe was removed 2026-07-08 at the user's request.
+#  The whole-canvas "full-page touch" was removed 2026-07-07 — being redesigned; awaiting approval.)
 EFFECTS = {
-    "ultra-dragon":    {"border": "GOLD",   "mode": "electron", "base": "#c9a24a", "hot": "#fff3c4"},
-    "ultra-skynet":    {"border": "RED",    "mode": "electron", "base": "#b0b8c0", "hot": "#ff6a5a"},
-    "ultra-synthwave": {"border": "SYNTHB", "mode": "wave",     "base": "#e0a0d0", "hot": "#5cffe0"},
-    "ultra-matrix":    {"border": "GREEN",  "mode": "electron", "base": "#5ab86a", "hot": "#d8ffe0"},
-    "ultra-arcade":    {"border": "GREEN",  "mode": "electron", "base": "#5ab86a", "hot": "#d8ffe0"},
-    "ultra-tv":        {"border": "TVB",    "mode": "wave",     "base": "#9aa4ae", "hot": "#f0f4f8"},
-    "ultra-cassette":  {"border": "CHROME", "mode": "electron", "base": "#b8a06a", "hot": "#fff0c0"},
-    "ultra-sonar":     {"border": "CYAN",   "mode": "wave",     "base": "#4ac0d0", "hot": "#c4faff"},
-    "ultra-scope":     {"border": "GREEN",  "mode": "wave",     "base": "#4ac0a0", "hot": "#c4ffe8"},
-    "ultra-kaiju":     {"border": "ATOMIC", "mode": "electron", "base": "#6a8aa8", "hot": "#eaf6ff"},
-    "ultra-aurora":    {"border": "AURORA", "mode": "wave",     "base": "#4ac080", "hot": "#b8ffd8"},
-    "ultra-vhs":       {"border": "VHSB",   "mode": "electron", "base": "#7a8ab8", "hot": "#eef2f8"},
-    "ultra-bladerunner": {"border": "AMBER2", "mode": "electron", "base": "#c89a5a", "hot": "#ffe0a0"},
-    "ultra-vaporwave": {"border": "ORCHID", "mode": "wave",     "base": "#d888c8", "hot": "#ffd0ec"},
+    "ultra-dragon":    {"mode": "electron", "base": "#c9a24a", "hot": "#fff3c4"},
+    "ultra-skynet":    {"mode": "electron", "base": "#b0b8c0", "hot": "#ff6a5a"},
+    "ultra-synthwave": {"mode": "wave",     "base": "#e0a0d0", "hot": "#5cffe0"},
+    "ultra-matrix":    {"mode": "electron", "base": "#5ab86a", "hot": "#d8ffe0"},
+    "ultra-arcade":    {"mode": "electron", "base": "#5ab86a", "hot": "#d8ffe0"},
+    "ultra-tv":        {"mode": "wave",     "base": "#9aa4ae", "hot": "#f0f4f8"},
+    "ultra-cassette":  {"mode": "electron", "base": "#b8a06a", "hot": "#fff0c0"},
+    "ultra-sonar":     {"mode": "wave",     "base": "#4ac0d0", "hot": "#c4faff"},
+    "ultra-scope":     {"mode": "wave",     "base": "#4ac0a0", "hot": "#c4ffe8"},
+    "ultra-kaiju":     {"mode": "electron", "base": "#6a8aa8", "hot": "#eaf6ff"},
+    "ultra-aurora":    {"mode": "wave",     "base": "#4ac080", "hot": "#b8ffd8"},
+    "ultra-vhs":       {"mode": "electron", "base": "#7a8ab8", "hot": "#eef2f8"},
+    "ultra-bladerunner": {"mode": "electron", "base": "#c89a5a", "hot": "#ffe0a0"},
+    "ultra-vaporwave": {"mode": "wave",     "base": "#d888c8", "hot": "#ffd0ec"},
 }
 
 _PAL = {}                   # optional theme palette (set by set_palette); reserved for future re-tint
@@ -184,28 +174,6 @@ def _lerp(a, b, f):
     f = max(0.0, min(1.0, f))
     ca, cb = _rgb(a), _rgb(b)
     return "#%02x%02x%02x" % tuple(int(round(ca[i] + (cb[i] - ca[i]) * f)) for i in range(3))
-
-
-def glow(theme_name, beat):
-    """Breathing border color for an ultra theme at `beat` — a triangle wave up and down its border
-    RAMP, INTERPOLATED continuously between ramp stops so a fast (float) clock breathes smoothly
-    instead of snapping through 5 colors. Returns a hex string, or None if not an ultra theme. Pure
-    fn of a float beat (STUDIO_NO_ANIM -> frame 0)."""
-    eff = EFFECTS.get(theme_name)
-    if not eff:
-        return None
-    b = 0.0 if _frozen() else float(beat)
-    ramp = RAMPS.get(eff["border"], RAMPS["GOLD"])
-    n = len(ramp)
-    if n == 1:
-        return ramp[0]
-    u = b / max(1, GLOW_PERIOD)                        # continuous phase (GLOW_PERIOD slows the swell)
-    m = 2 * (n - 1)                                    # triangle period
-    t = u % m
-    pos = t if t <= (n - 1) else (m - t)              # continuous triangle 0..n-1..0
-    lo = int(pos)
-    hi = min(n - 1, lo + 1)
-    return _lerp(ramp[lo], ramp[hi], pos - lo)
 
 
 def electron_text(text, beat, base, hot, mode="electron", speed=2, tail=6, wavelen=7, amp=1.0):

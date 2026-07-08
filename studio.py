@@ -1469,16 +1469,8 @@ class Studio(App):
                         self._ultra_timer.pause()
                     except Exception:
                         pass
-                # left the ultra tier -> restore every glowed rail border to THIS theme's static color
-                # (del styles.border does not revert to CSS cleanly), un-animate the INFO + topbar
-                _slotcol = {"primary": theme.primary or "#2fae5f",
-                            "accent": theme.accent or "#6dffab",
-                            "border": v.get("border") or theme.secondary or "#1f9a52"}
-                for wid, slot in self._ULTRA_BORDERS:
-                    try:
-                        self.query_one("#" + wid).styles.border = ("round", _slotcol[slot])
-                    except Exception:
-                        pass
+                # left the ultra tier -> un-animate the INFO + topbar (panel borders are static CSS
+                # now, so there is nothing to restore there)
                 for wid, txt in (("newinfo", getattr(self, "_info_base", None)),
                                  ("topbartitle", self.TOPBAR_TITLE)):
                     if txt:
@@ -1653,24 +1645,16 @@ class Studio(App):
             self._electron_next = self._ultra_t + gap
 
     def _paint_ultra(self):
-        """Rail-border breathe + the decoration scene, repainted every frame (the pixels/scroll stay
-        chunky via int(clock) inside ultra_art; the border-glow and the twinkling sparkles/stars move
-        smoothly off the float clock). No-op unless an ultra theme is active AND the NEW RUN tab is
-        showing. Deterministic in _ultra_t; guarded."""
+        """The decoration scene, repainted every frame (the pixels/scroll stay chunky via int(clock)
+        inside ultra_art; the twinkling sparkles/stars move smoothly off the float clock). No-op unless
+        an ultra theme is active AND the NEW RUN tab is showing. Deterministic in _ultra_t; guarded.
+        Panel borders are STATIC CSS — they do NOT breathe."""
         name = getattr(self, "_ultra_theme", None)
         if not name or ultra_art is None:
             return
         try:
             if self.query_one(TabbedContent).active != "tab-new":
                 return
-            # the whole rail's BORDERS breathe together (continuous interpolated glow -> smooth)
-            col = ultra_art.glow(name, self._ultra_t)
-            if col:
-                for wid, _slot in self._ULTRA_BORDERS:
-                    try:
-                        self.query_one("#" + wid).styles.border = ("round", col)
-                    except Exception:
-                        pass
             decor = self.query_one("#ultradecor", Static)
             if not decor.has_class("-on"):
                 return
@@ -1684,11 +1668,6 @@ class Studio(App):
                 decor.update(t)
         except Exception:
             pass
-
-    # NEW RUN rail panels that breathe on an ultra theme, paired with the theme color slot their CSS
-    # border normally uses (so leaving the ultra tier restores the exact look).
-    _ULTRA_BORDERS = (("fieldvisual", "primary"), ("readout", "border"),
-                      ("infopanel", "border"), ("ultradecor", "accent"))
 
     def _animate_ultra_topbar(self):
         """Gentle ambient life for a second-monitor idle: a slow soft wave drifts through the TOPBAR

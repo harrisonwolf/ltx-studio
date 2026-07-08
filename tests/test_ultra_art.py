@@ -1,8 +1,8 @@
 """ultra_art: the animated decorations for the ultra-themes tier. FULLY DATA-DRIVEN — every check
 iterates the registry (studio_themes.ULTRA_THEMES / ultra_art.THEMES), so adding a theme needs NO
 edit here. Guards the properties the studio relies on: purity (deterministic frames), real motion,
-the STUDIO_NO_ANIM freeze, width-fit + balanced markup at every size/beat, the additive canvas breath
-(base==theme bg, peak near-black), and the border glow."""
+the STUDIO_NO_ANIM freeze, width-fit + balanced markup at every size/beat, and the INFO running-light.
+(Panel borders are static now — the border-breathe was removed 2026-07-08, so there is no glow.)"""
 import sys, os, re, math
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import ultra_art
@@ -54,13 +54,9 @@ for n in NAMES:
 
 # (The whole-canvas "full-page touch" was removed — being redesigned; awaiting approval. No bg_pulse.)
 
-# EFFECTS covers exactly the ultra tier; border glow is valid + breathes, per theme
+# EFFECTS covers exactly the ultra tier (INFO running-light config; panel borders are static — no glow)
 check("EFFECTS covers exactly the ultra tier", set(ultra_art.EFFECTS) == set(studio_themes.ULTRA_NAMES))
-check("glow: non-ultra -> None", ultra_art.glow("pipboy", 0) is None)
-_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
-for n in NAMES:
-    cols = [ultra_art.glow(n, b) for b in range(0, 14)]
-    check("%s: glow valid hex + breathes" % n, all(_HEX.match(c or "") for c in cols) and len(set(cols)) > 1)
+check("border-breathe removed: no glow() on ultra_art", not hasattr(ultra_art, "glow"))
 
 # electron_text (topbar wave / info comet) — smooth float clock, bracket-safe, balanced
 _ITXT = "PIP-OS v8 :: JOB CONTROL\nConfigure a run and QUEUE it. cfg [1..7]"
@@ -81,7 +77,6 @@ os.environ["STUDIO_NO_ANIM"] = "1"
 try:
     for n in NAMES:
         check("%s: STUDIO_NO_ANIM freezes to frame 0" % n, ultra_art.render(n, 9) == ultra_art.render(n, 0))
-    check("glow frozen under STUDIO_NO_ANIM", ultra_art.glow(NAMES[0], 9) == ultra_art.glow(NAMES[0], 0))
 finally:
     del os.environ["STUDIO_NO_ANIM"]
 
