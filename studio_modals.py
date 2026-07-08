@@ -118,11 +118,13 @@ class ThemePickerScreen(ModalScreen):
     cleanest way to get a true live preview in this version."""
     DEFAULT_CSS = """
     ThemePickerScreen { align: center middle; background: $background 80%; }
-    #thbox { width: 50; height: auto; max-height: 80%; border: round $primary; background: $background; padding: 1 2; }
+    /* DEFINITE height (never exceeds the screen) + a FLEX list that scrolls, so the whole picker
+       always fits even on a short second monitor (auto height clipped the bottom before). */
+    #thbox { width: 50; height: 90%; max-height: 34; border: round $primary; background: $background; padding: 1 2; }
     #thtitle { color: $accent; text-style: bold; height: 1; }
     #thsub { color: $secondary; height: auto; margin: 0 0 1 0; }
-    #thlist { height: auto; max-height: 20; border: round $border; background: $surface-deep; }
-    #thpreview { height: auto; content-align: center middle; margin: 1 0 0 0; display: none; }
+    #thlist { height: 1fr; min-height: 6; border: round $border; background: $surface-deep; }
+    #thpreview { height: auto; max-height: 8; content-align: center middle; margin: 1 0 0 0; display: none; }
     #thpreview.-on { display: block; }
     """
     BINDINGS = [("escape", "cancel", "Revert + close")]

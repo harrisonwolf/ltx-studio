@@ -1186,9 +1186,11 @@ class Studio(App):
         self._info_base = INFO           # markup an ultra theme's electron/wave animates over (see _set_info)
         self.consult = ConsultDaemon()
 
+    TOPBAR_TITLE = "VAULT-TEC  PIP-BOY 3000  ::  L T X   S T U D I O  ::  JOB CONTROL"
+
     def compose(self) -> ComposeResult:
         with Horizontal(id="topbar"):
-            yield Static("VAULT-TEC  PIP-BOY 3000  ::  L T X   S T U D I O  ::  JOB CONTROL", id="topbartitle")
+            yield Static(self.TOPBAR_TITLE, id="topbartitle")
             yield Static("", id="statusmeter")
         with TabbedContent(initial="tab-new"):
             with TabPane("▌ NEW RUN", id="tab-new"):
@@ -1444,22 +1446,27 @@ class Studio(App):
             self._ultra_phase = None                     # force a repaint at the current beat
             if on:
                 decor.border_title = ultra_art.TITLES.get(name, "« ULTRA »")
-                self._paint_ultra()                      # sprite + start the border breathe
+                self._paint_ultra()                      # sprite + start the rail border breathe
                 self._animate_ultra_info(force=True)     # light up the INFO text immediately
+                self._animate_ultra_topbar()             # start the topbar ambient wave
             else:
-                # left the ultra tier -> restore the two glowed panels' borders to THIS theme's static
-                # colors (del styles.border does not revert to CSS cleanly) and un-animate the INFO panel
-                for wid, col in (("ultradecor", theme.accent or "#6dffab"),
-                                 ("infopanel", v.get("border") or theme.secondary or "#1f9a52")):
+                # left the ultra tier -> restore every glowed rail border to THIS theme's static color
+                # (del styles.border does not revert to CSS cleanly), un-animate the INFO + topbar
+                _slotcol = {"primary": theme.primary or "#2fae5f",
+                            "accent": theme.accent or "#6dffab",
+                            "border": v.get("border") or theme.secondary or "#1f9a52"}
+                for wid, slot in self._ULTRA_BORDERS:
                     try:
-                        self.query_one("#" + wid).styles.border = ("round", col)
+                        self.query_one("#" + wid).styles.border = ("round", _slotcol[slot])
                     except Exception:
                         pass
-                if getattr(self, "_info_base", None):
-                    try:
-                        self.query_one("#newinfo", Static).update(self._info_base)
-                    except Exception:
-                        pass
+                for wid, txt in (("newinfo", getattr(self, "_info_base", None)),
+                                 ("topbartitle", self.TOPBAR_TITLE)):
+                    if txt:
+                        try:
+                            self.query_one("#" + wid, Static).update(txt)
+                        except Exception:
+                            pass
         except Exception:
             pass
 
@@ -1609,15 +1616,36 @@ class Studio(App):
             if art:
                 t = Text.from_markup(art); t.no_wrap = True
                 decor.update(t)
-            # breakout #1 — the decoration + info panel BORDERS breathe through the theme's ramp (slow,
-            # phase-gated ~1s, so it reads as a glow, not a strobe). Reset in _on_theme_changed off-path.
+            # breakout #1 — the whole NEW RUN rail's BORDERS breathe together through the theme's ramp
+            # (slow, phase-gated ~1s -> a gentle glow, not a strobe). Reset in _on_theme_changed off-path.
             col = ultra_art.glow(name, self._beat)
             if col:
-                for wid in ("ultradecor", "infopanel"):
+                for wid, _slot in self._ULTRA_BORDERS:
                     try:
                         self.query_one("#" + wid).styles.border = ("round", col)
                     except Exception:
                         pass
+        except Exception:
+            pass
+
+    # NEW RUN rail panels that breathe on an ultra theme, paired with the theme color slot their CSS
+    # border normally uses (so leaving the ultra tier restores the exact look).
+    _ULTRA_BORDERS = (("fieldvisual", "primary"), ("readout", "border"),
+                      ("infopanel", "border"), ("ultradecor", "accent"))
+
+    def _animate_ultra_topbar(self):
+        """Gentle ambient life for a second-monitor idle: a slow soft wave drifts through the TOPBAR
+        banner whenever an ultra theme is active (every tab — the topbar is always visible). Kept
+        deliberately quiet (slow, long wavelength). Deterministic in _beat; STUDIO_NO_ANIM freezes it."""
+        name = getattr(self, "_ultra_theme", None)
+        if not name or ultra_art is None:
+            return
+        try:
+            eff = ultra_art.EFFECTS.get(name) or {}
+            art = ultra_art.electron_text(self.TOPBAR_TITLE, self._beat, eff.get("base", "#cccccc"),
+                                          eff.get("hot", "#ffffff"), mode="wave", speed=1, wavelen=14)
+            if art:
+                self.query_one("#topbartitle", Static).update(Text.from_markup(art))
         except Exception:
             pass
 
@@ -2380,8 +2408,9 @@ class Studio(App):
         self.query_one("#status", Static).update(
             f"  ▌ QUEUED {q}{_etastr}    ▶ {st}    ✓ DONE {d}    ▽ SUSP {s}     │     {self._gpu_str}{self._stall_note}")
         self.query_one("#statusmeter", Static).update(self._meter())
-        self._paint_ultra()             # ultra decoration sprite + breathing borders (phase-gated ~1s)
+        self._paint_ultra()             # ultra decoration sprite + breathing rail borders (phase-gated ~1s)
         self._animate_ultra_info()      # ultra INFO-panel electron/wave (every beat, for visible travel)
+        self._animate_ultra_topbar()    # ultra TOPBAR gentle ambient wave (every beat, all tabs)
         # queue + archive tables — rebuilt only when content changes (cursor stays put; no rubber-band)
         _dt = lambda ts: time.strftime("%m-%d %H:%M", time.localtime(ts)) if ts else "—"
         def _atitle(j):

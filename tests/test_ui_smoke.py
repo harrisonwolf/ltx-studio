@@ -138,12 +138,19 @@ async def main():
             return str(b.top[1].hex) if b and b.top else None
         app._beat = 0; app._ultra_phase = None; app._paint_ultra(); app._animate_ultra_info()
         _b0, _info0 = _bord(), repr(app.query_one("#newinfo").render())
-        app._beat = 6; app._ultra_phase = None; app._paint_ultra(); app._animate_ultra_info()
+        _t0 = repr(app.query_one("#topbartitle").render())
+        app._beat = 6; app._ultra_phase = None; app._paint_ultra(); app._animate_ultra_info(); app._animate_ultra_topbar()
         check("ultra: info-panel border breathes across ticks", _b0 != _bord(), (_b0, _bord()))
         check("ultra: INFO electron/wave moves across ticks", _info0 != repr(app.query_one("#newinfo").render()))
+        check("ultra: topbar ambient wave moves across ticks", _t0 != repr(app.query_one("#topbartitle").render()))
+        check("ultra: whole rail breathes (all 4 borders)",
+              all(app.query_one("#" + w).styles.border and app.query_one("#" + w).styles.border.top
+                  for w, _ in app._ULTRA_BORDERS))
         app.theme = "pipboy"; await pilot.pause()
         check("normal theme hides the decoration", not dec.has_class("-on"))
         check("ultra->normal restores a non-glow border", _bord() not in ("#FF2D95", "#FF6AB0", "#C42678"), _bord())
+        check("ultra->normal restores the plain topbar title",
+              str(app.query_one("#topbartitle").render()).strip() == studio.Studio.TOPBAR_TITLE.strip())
         # theme overhaul: $selection resolves for CSS (pipboy defines it; builtins fall back to panel),
         # and the selected queue card re-lights its OWN frame in heavy box-art vs rounded when not
         cssv = app.get_css_variables()
@@ -200,6 +207,16 @@ async def short_live():
         check("tiny LIVE: -tiny set", app2.screen.has_class("-tiny"))
         check("tiny LIVE: PHASES shed too", not shown(app2, "#phasestrip"))
         check("tiny LIVE: controls still reachable", reachable(app2))
+        # theme picker must FIT a short second monitor (auto height used to clip the bottom off-screen)
+        app2.push_screen(studio.ThemePickerScreen()); await pilot.pause(); await pilot.pause()
+        pbox = app2.screen.query_one("#thbox")
+        check("picker fits short screen (no bottom cutoff)",
+              pbox.region.y >= 0 and pbox.region.y + pbox.region.height <= 28,
+              (pbox.region.y, pbox.region.height))
+        plist = app2.screen.query_one("#thlist")
+        _last = next((plist.get_option_at_index(i).id for i in range(plist.option_count - 1, -1, -1)
+                      if plist.get_option_at_index(i).id), None)
+        check("picker still lists the ultra tier (scrollable to synthwave)", _last == "ultra-synthwave", _last)
     state["active"] = None
 
 asyncio.run(main())
