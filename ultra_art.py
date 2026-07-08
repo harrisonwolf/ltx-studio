@@ -208,17 +208,6 @@ def glow(theme_name, beat):
     return _lerp(ramp[lo], ramp[hi], pos - lo)
 
 
-def frame_color(accent, beat):
-    """Slow breathe for the corner-frame ticks — a dim-accent <-> full-accent swell (~10s). Pure fn of
-    `beat` (STUDIO_NO_ANIM -> mid). `accent` is the current theme's accent hex. Never raises."""
-    try:
-        b = 0.0 if _frozen() else float(beat)
-        f = 0.5 + 0.5 * math.sin(b * 0.3)
-        return _lerp(_lerp("#000000", accent, 0.4), accent, f)
-    except Exception:
-        return accent
-
-
 def electron_text(text, beat, base, hot, mode="electron", speed=2, tail=6, wavelen=7, amp=1.0):
     """Overlay a moving running-light on plain `text` and return Rich markup. Two modes:
       'electron' — a bright crest + fading tail travels through the (non-space) characters.

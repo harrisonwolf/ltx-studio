@@ -1690,22 +1690,10 @@ class Studio(App):
     _ULTRA_BORDERS = (("fieldvisual", "primary"), ("readout", "border"),
                       ("infopanel", "border"), ("ultradecor", "accent"))
 
-    def _corner(self, glyph):
-        """ULTRA corner-frame tick: breathing-accent markup for `glyph`, or '' on a normal theme (so
-        every render point that calls this is byte-identical off the ultra tier). Never raises."""
-        name = getattr(self, "_ultra_theme", None)
-        if not name or ultra_art is None:
-            return ""
-        try:
-            c = ultra_art.frame_color(SPAL.get("accent") or "#6dffab", self._beat)
-            return "[%s]%s[/%s]" % (c, glyph, c)
-        except Exception:
-            return ""
-
     def _animate_ultra_topbar(self):
         """Gentle ambient life for a second-monitor idle: a slow soft wave drifts through the TOPBAR
-        banner whenever an ultra theme is active (every tab — the topbar is always visible). Also anchors
-        the top-LEFT corner-frame tick at col 0 of the (centered, 1fr) title. STUDIO_NO_ANIM freezes it."""
+        banner whenever an ultra theme is active (every tab — the topbar is always visible). Kept
+        deliberately quiet (slow, long wavelength). Deterministic in _ultra_t; STUDIO_NO_ANIM freezes it."""
         name = getattr(self, "_ultra_theme", None)
         if not name or ultra_art is None:
             return
@@ -1713,18 +1701,8 @@ class Studio(App):
             eff = ultra_art.EFFECTS.get(name) or {}
             art = ultra_art.electron_text(self.TOPBAR_TITLE, self._ultra_t, eff.get("base", "#cccccc"),
                                           eff.get("hot", "#ffffff"), mode="wave", speed=1, wavelen=14, amp=0.6)
-            if not art:
-                return
-            tick = self._corner("⌜")                    # top-left tick at col 0; keep the title centered
-            try:
-                w = int(self.query_one("#topbartitle").content_size.width)
-            except Exception:
-                w = 0
-            vis = len(self.TOPBAR_TITLE)
-            if tick and w > vis + 3:
-                lp = (w - 1 - vis) // 2
-                art = tick + " " * lp + art + " " * (w - 1 - vis - lp)
-            self.query_one("#topbartitle", Static).update(Text.from_markup(art))
+            if art:
+                self.query_one("#topbartitle", Static).update(Text.from_markup(art))
         except Exception:
             pass
 
@@ -2491,16 +2469,9 @@ class Studio(App):
         st = "PAUSED" if m.paused else ("RUNNING" if a else "idle")
         _eta = self._queue_eta()
         _etastr = ("  " + tmark("accent", "(~%s to empty)" % fmt(_eta))) if _eta > 1 else ""
-        _statusline = f"  ▌ QUEUED {q}{_etastr}    ▶ {st}    ✓ DONE {d}    ▽ SUSP {s}     │     {self._gpu_str}{self._stall_note}"
-        _bl = self._corner("⌞")
-        if _bl:      # ULTRA corner frame: bottom-left/right on the (full-width) status line's empty ends
-            try:
-                _pad = int(self.size.width) - 2 - len(_plain(_statusline))
-                _statusline = _bl + _statusline + (" " * _pad if _pad > 0 else " ") + self._corner("⌟")
-            except Exception:
-                pass
-        self.query_one("#status", Static).update(_statusline)
-        self.query_one("#statusmeter", Static).update(self._meter() + self._corner("⌝"))
+        self.query_one("#status", Static).update(
+            f"  ▌ QUEUED {q}{_etastr}    ▶ {st}    ✓ DONE {d}    ▽ SUSP {s}     │     {self._gpu_str}{self._stall_note}")
+        self.query_one("#statusmeter", Static).update(self._meter())
         # (ultra-theme animation runs on its OWN ~15fps timer — see _ultra_frame — not this 0.5s tick)
         # queue + archive tables — rebuilt only when content changes (cursor stays put; no rubber-band)
         _dt = lambda ts: time.strftime("%m-%d %H:%M", time.localtime(ts)) if ts else "—"
