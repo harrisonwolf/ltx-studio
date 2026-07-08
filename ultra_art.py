@@ -28,6 +28,7 @@ RAMPS = {
     "RED":   ["#7a1010", "#b01818", "#e02020", "#ff3030", "#ff6a4a"],   # T-800 eyes
     "SYNTH": ["#ffd24a", "#ff9a3d", "#ff6a5a", "#ff3d7a", "#ff2d95"],   # synthwave sun (top->bottom)
     "SYNTHB": ["#7a2a7e", "#c42678", "#ff2d95", "#ff6ab0", "#5cffe0"],  # synthwave border breathe (magenta->cyan)
+    "GREEN":  ["#0c3a16", "#177a2a", "#2eae3f", "#5bff77", "#b8ffc4"],  # matrix rain (deep -> bright green)
 }
 
 # Per-ultra-theme "breakout" effects (the flourish that escapes the decoration box, opt-in per theme):
@@ -38,6 +39,7 @@ EFFECTS = {
     "ultra-dragon":    {"border": "GOLD",   "mode": "electron", "base": "#c9a24a", "hot": "#fff3c4"},
     "ultra-skynet":    {"border": "RED",    "mode": "electron", "base": "#b0b8c0", "hot": "#ff6a5a"},
     "ultra-synthwave": {"border": "SYNTHB", "mode": "wave",     "base": "#e0a0d0", "hot": "#5cffe0"},
+    "ultra-matrix":    {"border": "GREEN",  "mode": "electron", "base": "#5ab86a", "hot": "#d8ffe0"},
 }
 
 _PAL = {}                   # optional theme palette (set by set_palette); reserved for future re-tint
@@ -366,16 +368,49 @@ def _synthwave(beat, width=None):
         return ""
 
 
+# ---------------------------------------------------------------- matrix (procedural code rain) ---
+_MTX_CHARS = "ｱｶｻﾀﾅﾊﾏﾔﾗﾜ0123456789ﾂｸｼﾈﾘ:=*+"   # half-width katakana + digits (all single-cell)
+
+
+def _matrix_rain(beat, width=None):
+    """Falling green code: every column runs a drop at a varied speed — a white-green LEADING glyph
+    with a fading green trail behind it; glyphs flicker on a slow (int) clock while the drops fall
+    smoothly (float clock). Fills the box width. PURE fn of beat (STUDIO_NO_ANIM -> frame 0)."""
+    try:
+        W = min(max(int(width or 32), 8), 44)
+        H = 8
+        b = float(beat)
+        bi = int(b)
+        nch = len(_MTX_CHARS)
+        grid = [[" "] * W for _ in range(H)]
+        for x in range(W):
+            speed = 0.7 + ((x * 37) % 5) * 0.16         # 0.70 .. 1.34 cells/unit
+            trail = 2 + ((x * 13) % 3)                  # 2 .. 4
+            period = H + trail + 3
+            head = (b * speed + (x * 11) % period) % period
+            for k in range(trail + 1):
+                y = int(head) - k
+                if 0 <= y < H:
+                    col = "#d8ffe0" if k == 0 else _lerp("#0c3a16", "#39ff58", 1.0 - k / float(trail + 1))
+                    g = _MTX_CHARS[(x * 13 + y * 7 + bi) % nch]     # occasional in-place glyph flicker
+                    grid[y][x] = "[%s]%s[/%s]" % (col, g, col)
+        return "\n".join("".join(r) for r in grid)
+    except Exception:
+        return ""
+
+
 # ---------------------------------------------------------------- public API ----------------------
 THEMES = {
     "ultra-dragon": lambda b, w=None: render_sprite(DRAGON, b, cols=w),
     "ultra-skynet": lambda b, w=None: render_sprite(T800, b, cols=w),
     "ultra-synthwave": lambda b, w=None: _synthwave(b, width=w),
+    "ultra-matrix": lambda b, w=None: _matrix_rain(b, width=w),
 }
 TITLES = {
     "ultra-dragon": "「 年 · YEAR OF THE DRAGON 」",
     "ultra-skynet": "「 SKYNET · T-800 」",
     "ultra-synthwave": "「 OUTRUN · SYNTHWAVE 」",
+    "ultra-matrix": "「 THE MATRIX · 電 」",
 }
 
 

@@ -16,7 +16,7 @@ TAG = re.compile(r"\[/?[^\]]*\]")
 def plain(s): return TAG.sub("", s)
 
 NAMES = list(ultra_art.THEMES)
-check("three ultra decorations", len(NAMES) == 3)
+check("four ultra decorations", len(NAMES) == 4)
 check("THEMES == ULTRA_NAMES", set(NAMES) == set(studio_themes.ULTRA_NAMES))
 check("every ultra theme has a decoration + title",
       all(ultra_art.is_ultra(n) and n in ultra_art.TITLES for n in studio_themes.ULTRA_NAMES))
@@ -32,16 +32,19 @@ for n in NAMES:
     frames = {ultra_art.render(n, b) for b in range(0, 12)}
     check("%s: animates (distinct frames)" % n, len(frames) > 1, frames)
 
-# theme-specific atmosphere: each theme has its OWN glyph SET (embers / HUD reticles / stars) that
-# twinkles in and out — assert the themed glyphs appear and the field is not static
+# theme-specific atmosphere: sprite/scene themes each have their OWN glyph SET (embers / HUD reticles
+# / stars); matrix's whole decoration is procedural code rain, checked separately below.
 _SPARKLE = {"ultra-dragon": "✸✦⋆", "ultra-skynet": "+⌖⊹", "ultra-synthwave": "✧✩·"}
-check("every theme has a UNIQUE atmosphere glyph set", len({_SPARKLE[n] for n in NAMES}) == len(NAMES))
-for n in NAMES:
-    gset = _SPARKLE[n]
+check("each atmosphere glyph set is UNIQUE", len(set(_SPARKLE.values())) == len(_SPARKLE))
+for n, gset in _SPARKLE.items():
     hits = [any(g in (ultra_art.render(n, b * 0.3) or "") for g in gset) for b in range(0, 30)]
     check("%s: has twinkling themed atmosphere" % n, any(hits))
     check("%s: atmosphere twinkles (frames vary)" % n,
           len({ultra_art.render(n, b * 0.3) for b in range(0, 30)}) > 1)
+# matrix: procedural falling code -> its glyphs appear and the rain FALLS (frames vary across time)
+_mtx = [ultra_art.render("ultra-matrix", b * 0.3, width=30) or "" for b in range(0, 20)]
+check("matrix: renders code glyphs", any(any(c in f for c in ultra_art._MTX_CHARS) for f in _mtx))
+check("matrix: rain falls (frames vary)", len(set(_mtx)) > 1)
 
 # safety: no raise, width-fit (<=48 budget), balanced markup, at every size/beat
 for n in NAMES:

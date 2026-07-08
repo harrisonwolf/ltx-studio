@@ -342,11 +342,44 @@ PIPBOY_XMAS = Theme(
         "selection": "#12241a",                          # evergreen lift
     },
 )
+# Film noir — a rain-slicked 1940s detective picture: cool silver light in deep shadow, with ONE
+# blood-red neon note (the accent) and a lone streetlamp amber. Cool grayscale, high contrast.
+PIPBOY_NOIR = Theme(
+    name="pipboy-noir",
+    primary="#8a9098", secondary="#565c64", accent="#e5384a",
+    foreground="#c4cad2", background="#060708", surface="#0c0e12", panel="#13161c",
+    success="#a8c8d8", warning="#d9b96a", error="#ff4356", dark=True,
+    variables={
+        "block-cursor-foreground": "#060708", "block-cursor-background": "#e5384a",
+        "footer-key-foreground": "#eef2f6", "footer-description-foreground": "#c4cad2",
+        "border": "#383e46", "border-strong": "#22262c",
+        "surface-deep": "#040506", "text-bright": "#eef2f6",
+        "accent-2": "#d9b96a", "tertiary": "#767c84",    # lone streetlamp amber · mid steel
+        "selection": "#191d23",                          # cool graphite lift
+    },
+)
+# Cherry blossom at night — soft rose petals and cream against near-black branches, with a young
+# moss-leaf green as the one cool counterpoint. Gentle and pretty (the calm one).
+PIPBOY_SAKURA = Theme(
+    name="pipboy-sakura",
+    primary="#c86f8a", secondary="#96506a", accent="#ffb3d0",
+    foreground="#e6bccb", background="#0a0608", surface="#150a10", panel="#1d0e16",
+    success="#a6cf86", warning="#ffcf5c", error="#ff6d8a", dark=True,
+    variables={
+        "block-cursor-foreground": "#0a0608", "block-cursor-background": "#ffb3d0",
+        "footer-key-foreground": "#fff0f5", "footer-description-foreground": "#e6bccb",
+        "border": "#6a3a4e", "border-strong": "#3f222e",
+        "surface-deep": "#080406", "text-bright": "#fff0f5",
+        "accent-2": "#9fcf7a", "tertiary": "#b87f96",    # young leaf green · mid rose
+        "selection": "#241420",                          # rose-graphite lift
+    },
+)
 EXTRA_THEMES = (PIPBOY, PIPBOY_AMBER, PIPBOY_VFD, PIPBOY_VAULT, PIPBOY_VIOLET,
                 PIPBOY_NIXIE, PIPBOY_NUKA, PIPBOY_GAMEBOY, PIPBOY_TUBE, PIPBOY_THERMAL,
                 PIPBOY_RADIUM, PIPBOY_USA, PIPBOY_TRON,
                 PIPBOY_MATRIX, PIPBOY_SKYNET, PIPBOY_MIAMI, PIPBOY_HAZMAT,
-                PIPBOY_CYBERPUNK, PIPBOY_XMAS)
+                PIPBOY_CYBERPUNK, PIPBOY_XMAS,
+                PIPBOY_NOIR, PIPBOY_SAKURA)
 
 # ---- ULTRA-THEMES tier (2026-07-07): opt-in, DECORATED/ANIMATED themes shown in a separate picker
 #      section. The Theme objects below carry only colors (near-black canvas, wash-compliant, like any
@@ -398,7 +431,23 @@ ULTRA_SYNTHWAVE = Theme(
         "selection": "#1c1236",                          # indigo lift
     },
 )
-ULTRA_THEMES = (ULTRA_DRAGON, ULTRA_SKYNET, ULTRA_SYNTHWAVE)
+# The Matrix — digital rain: bright spring-green code falling on pure black (ultra_art draws the
+# classic falling-code columns — a bright/white leading glyph with a fading green trail).
+ULTRA_MATRIX = Theme(
+    name="ultra-matrix",
+    primary="#2e9a3f", secondary="#1c6a2c", accent="#5bff77",
+    foreground="#6ee87f", background="#020402", surface="#061006", panel="#081a08",
+    success="#b8ffc4", warning="#ffcf5c", error="#ff6d6d", dark=True,
+    variables={
+        "block-cursor-foreground": "#020402", "block-cursor-background": "#5bff77",
+        "footer-key-foreground": "#b8ffc4", "footer-description-foreground": "#6ee87f",
+        "border": "#156b26", "border-strong": "#0c4418",
+        "surface-deep": "#010301", "text-bright": "#b8ffc4",
+        "accent-2": "#d8ffe0", "tertiary": "#3a9a4a",    # white-green leading glyph · dim trailing green
+        "selection": "#0e2c14",                          # rain-graphite lift
+    },
+)
+ULTRA_THEMES = (ULTRA_DRAGON, ULTRA_SKYNET, ULTRA_SYNTHWAVE, ULTRA_MATRIX)
 # Single source of truth for "is this the animated tier" — used by the picker (sectioning) and by
 # studio._on_theme_changed (show/hide the decoration). ultra_art.THEMES maps the same names to art.
 ULTRA_NAMES = frozenset(t.name for t in ULTRA_THEMES)
