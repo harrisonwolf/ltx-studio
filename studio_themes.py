@@ -552,8 +552,23 @@ ULTRA_AURORA = Theme(
         "selection": "#123420",                          # aurora-green lift (> panel)
     },
 )
+# Camcorder tape — VHS blue/white with a red REC dot; tracking-noise nostalgia. SP.
+ULTRA_VHS = Theme(
+    name="ultra-vhs",
+    primary="#3f6ac8", secondary="#2a4a8a", accent="#ff3a3a",
+    foreground="#a8b8d8", background="#05070e", surface="#0c1018", panel="#12182a",
+    success="#7ad0a0", warning="#ffcf5c", error="#ff3a3a", dark=True,
+    variables={
+        "block-cursor-foreground": "#05070e", "block-cursor-background": "#ff3a3a",
+        "footer-key-foreground": "#eef2f8", "footer-description-foreground": "#a8b8d8",
+        "border": "#2a3a6a", "border-strong": "#182246",
+        "surface-deep": "#030509", "text-bright": "#eef2f8",
+        "accent-2": "#eef2f8", "tertiary": "#6a7aa0",    # tape white · faded blue
+        "selection": "#1a2648",                          # vhs-blue lift (> panel)
+    },
+)
 ULTRA_THEMES = (ULTRA_DRAGON, ULTRA_SKYNET, ULTRA_SYNTHWAVE, ULTRA_MATRIX, ULTRA_ARCADE, ULTRA_TV,
-                ULTRA_CASSETTE, ULTRA_SONAR, ULTRA_SCOPE, ULTRA_KAIJU, ULTRA_AURORA)
+                ULTRA_CASSETTE, ULTRA_SONAR, ULTRA_SCOPE, ULTRA_KAIJU, ULTRA_AURORA, ULTRA_VHS)
 # Single source of truth for "is this the animated tier" — used by the picker (sectioning) and by
 # studio._on_theme_changed (show/hide the decoration). ultra_art.THEMES maps the same names to art.
 ULTRA_NAMES = frozenset(t.name for t in ULTRA_THEMES)

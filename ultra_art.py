@@ -70,6 +70,8 @@ EFFECTS = {
                         "bgpulse": ("#06080c", "#0a1018")},   # black -> faint atomic-blue swell
     "ultra-aurora":    {"border": "AURORA", "mode": "wave",     "base": "#4ac080", "hot": "#b8ffd8",
                         "bgpulse": ("#030f0a", "#06180c")},   # black -> faint aurora-green swell
+    "ultra-vhs":       {"border": "VHSB",   "mode": "electron", "base": "#7a8ab8", "hot": "#eef2f8",
+                        "bgpulse": ("#05070e", "#080b18")},   # black -> faint vhs-blue swell
 }
 
 _PAL = {}                   # optional theme palette (set by set_palette); reserved for future re-tint
@@ -698,6 +700,42 @@ def _aurora(beat, width=None):
         return ""
 
 
+# ---------------------------------------------------------------- vhs (camcorder viewfinder) ------
+def _vhs(beat, width=None):
+    """A camcorder viewfinder: a blinking ● REC + a ticking SP timestamp, a ▶ PLAY tag, and a band of
+    bluish TRACKING NOISE that rolls up the frame now and then (with clean gaps). Pure fn of beat."""
+    try:
+        W = min(max(int(width or 32), 18), 44); H = 8
+        b = float(beat); bi = int(b)
+        red, white, blue = "#ff3a3a", "#eef2f8", "#3f6ac8"
+        grid = [[" "] * W for _ in range(H)]
+        def put(y, x, ch, c):
+            if 0 <= x < W and 0 <= y < H:
+                grid[y][x] = "[%s]%s[/%s]" % (c, ch, c)
+        if bi % 2 == 0:
+            put(0, 1, "●", red)                          # REC dot blinks ~1Hz
+        for i, ch in enumerate("REC"):
+            put(0, 3 + i, ch, white)
+        ts = "SP %d:%02d" % (bi // 60 % 10, bi % 60)     # ticking timestamp (top-right)
+        for i, ch in enumerate(ts):
+            put(0, W - len(ts) - 1 + i, ch, white)
+        for i, ch in enumerate("▶ PLAY"):
+            put(H - 1, 1 + i, ch, blue)
+        band = (H - 2) - (bi % (H + 6))                  # tracking band rolls up, with a gap
+        for dy in (0, 1):
+            y = band + dy
+            if 1 <= y < H - 1:
+                for x in range(W):
+                    h = (x * 92821 + y * 68917 + bi * 40503) & 0xff
+                    if h % 2 == 0:
+                        v = 0x50 + (h % 0x80)
+                        c = "#%02x%02x%02x" % (v, v, min(255, v + 0x20))
+                        put(y, x, "▒░▓"[(h >> 3) % 3], c)
+        return "\n".join("".join(r) for r in grid)
+    except Exception:
+        return ""
+
+
 # ---------------------------------------------------------------- public API ----------------------
 THEMES = {
     "ultra-dragon": lambda b, w=None: render_sprite(DRAGON, b, cols=w),
@@ -711,6 +749,7 @@ THEMES = {
     "ultra-scope": lambda b, w=None: _scope(b, width=w),
     "ultra-kaiju": lambda b, w=None: _kaiju(b, width=w),
     "ultra-aurora": lambda b, w=None: _aurora(b, width=w),
+    "ultra-vhs": lambda b, w=None: _vhs(b, width=w),
 }
 TITLES = {
     "ultra-dragon": "「 年 · YEAR OF THE DRAGON 」",
@@ -724,6 +763,7 @@ TITLES = {
     "ultra-scope": "「 OSCILLOSCOPE · CH1 」",
     "ultra-kaiju": "「 怪獣 · TOKYO ALERT 」",
     "ultra-aurora": "「 AURORA · 69°N 」",
+    "ultra-vhs": "「 ● REC · SP 」",
 }
 
 
