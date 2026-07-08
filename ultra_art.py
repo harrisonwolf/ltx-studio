@@ -203,6 +203,40 @@ def electron_text(text, beat, base, hot, mode="electron", speed=2, tail=6, wavel
         return None
 
 
+def render_electrons(text, heads, base, hot, tail=6):
+    """Render `text` in the dim resting `base` color with one or more bright ELECTRON comets at the
+    given `heads` (each a float position over the non-space character index; a comet's crest is
+    brightest and fades to `base` over `tail` chars BEHIND it). `heads` may be empty (all base — the
+    calm between fires). PURE fn (no clock, no random — the studio owns the stochastic scheduling, so
+    this stays deterministic/testable). Brackets escaped; spaces/newlines uncolored. Never raises."""
+    try:
+        lines = str(text).split("\n")
+        positions = [(li, ci) for li, l in enumerate(lines) for ci, ch in enumerate(l) if ch != " "]
+        bright = [0.0] * len(positions)
+        for h in (heads or ()):
+            for gi in range(len(positions)):
+                d = h - gi                                # >0 = this char is behind the comet head
+                if 0.0 <= d < tail:
+                    f = 1.0 - d / float(max(1, tail))
+                    if f > bright[gi]:
+                        bright[gi] = f
+        gcol = {pos: (_lerp(base, hot, bright[gi]) if bright[gi] > 0 else base)
+                for gi, pos in enumerate(positions)}
+        out = []
+        for li, l in enumerate(lines):
+            buf = []
+            for ci, ch in enumerate(l):
+                if ch == " ":
+                    buf.append(" ")
+                    continue
+                c = gcol.get((li, ci), base)
+                buf.append("[%s]%s[/%s]" % (c, ("\\[" if ch == "[" else ch), c))
+            out.append("".join(buf))
+        return "\n".join(out)
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------- sprite specs --------------------
 # Dragon head (side profile, facing right) — gold body with a crimson eye/whiskers; the gold "G"
 # pixels shimmer as a bright crest sweeps across them.

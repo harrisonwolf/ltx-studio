@@ -50,7 +50,7 @@ for n in NAMES:
     check("%s: fits 48-col budget (max=%d)" % (n, worst), worst <= 48)
     check("%s: balanced markup" % n, balanced)
 
-# ---- breakout effects: border-breathe glow() + INFO electron/wave electron_text() ----
+# ---- breakout effects: continuous border-breathe glow() + topbar wave electron_text() ----
 check("EFFECTS covers exactly the ultra tier", set(ultra_art.EFFECTS) == set(studio_themes.ULTRA_NAMES))
 check("glow: non-ultra -> None", ultra_art.glow("pipboy", 0) is None)
 _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -58,18 +58,28 @@ for n in NAMES:
     cols = [ultra_art.glow(n, b) for b in range(0, 12)]
     check("%s: glow valid hex" % n, all(_HEX.match(c or "") for c in cols), cols)
     check("%s: glow breathes (distinct)" % n, len(set(cols)) > 1)
+# glow is now CONTINUOUS (float clock) -> a fine sweep yields many shades, not a 5-color snap
+_fine = {ultra_art.glow("ultra-synthwave", b * 0.1) for b in range(0, 90)}
+check("glow interpolates continuously (>>5 shades over a cycle)", len(_fine) > 20, len(_fine))
 
 _ITXT = "PIP-OS v8 :: JOB CONTROL\nConfigure a run and QUEUE it. cfg [1..7]"
-for n in NAMES:
-    eff = ultra_art.EFFECTS[n]
-    frames = [ultra_art.electron_text(_ITXT, b, eff["base"], eff["hot"], mode=eff["mode"]) for b in range(0, 10)]
-    check("%s: electron never None" % n, all(f is not None for f in frames))
-    check("%s: electron moves" % n, len({repr(f) for f in frames}) > 1)
-    check("%s: electron preserves plain text (bracket-safe)" % n,
-          all(_RT.from_markup(f).plain == _ITXT for f in frames))
-    check("%s: electron balanced markup" % n, all(f.count("[") == f.count("]") for f in frames))
-check("electron: pure (beat 4 reproducible)",
-      ultra_art.electron_text(_ITXT, 4, "#886644", "#ffeeaa") == ultra_art.electron_text(_ITXT, 4, "#886644", "#ffeeaa"))
+# electron_text (the TOPBAR wave) — smooth float clock, bracket-safe, balanced
+_wave = [ultra_art.electron_text(_ITXT, b * 0.13, "#e0a0d0", "#5cffe0", mode="wave") for b in range(0, 12)]
+check("topbar wave never None", all(f is not None for f in _wave))
+check("topbar wave moves (float clock)", len({repr(f) for f in _wave}) > 1)
+check("topbar wave preserves plain text (bracket-safe)", all(_RT.from_markup(f).plain == _ITXT for f in _wave))
+check("topbar wave balanced markup", all(f.count("[") == f.count("]") for f in _wave))
+
+# render_electrons (the INFO touring electrons) — PURE fn of (text, heads)
+check("electrons: empty heads -> all base (one color)",
+      len(set(re.findall(r"#[0-9a-f]{6}", ultra_art.render_electrons(_ITXT, [], "#c9a24a", "#fff3c4")))) == 1)
+_ea = ultra_art.render_electrons(_ITXT, [5.0], "#c9a24a", "#fff3c4")
+_eb = ultra_art.render_electrons(_ITXT, [15.0], "#c9a24a", "#fff3c4")
+check("electrons: comet moves with head", _ea != _eb)
+check("electrons: pure (same heads reproducible)", _ea == ultra_art.render_electrons(_ITXT, [5.0], "#c9a24a", "#fff3c4"))
+check("electrons: preserves plain text (bracket-safe)", _RT.from_markup(_ea).plain == _ITXT)
+check("electrons: balanced markup", _ea.count("[") == _eb.count("]") or _ea.count("[") == _ea.count("]"))
+check("electrons: multiple comets render (overlap)", ultra_art.render_electrons(_ITXT, [5.0, 20.0], "#c9a24a", "#fff3c4") is not None)
 
 # freeze switch: STUDIO_NO_ANIM pins every theme to frame 0 (headless/reduce-motion)
 os.environ["STUDIO_NO_ANIM"] = "1"

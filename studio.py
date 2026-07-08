@@ -1185,7 +1185,10 @@ class Studio(App):
         self._ultra_phase = None         # last painted SPRITE frame (coarse repaint guard)
         self._ultra_t = 0.0              # continuous animation clock (float; advanced by the fast timer)
         self._ultra_timer = None         # dedicated ~15fps timer, live ONLY while an ultra theme shows
-        self._info_base = INFO           # markup an ultra theme's electron/wave animates over (see _set_info)
+        self._electron_starts = []       # _ultra_t at which each in-flight INFO electron was fired
+        self._electron_next = 0.0        # _ultra_t at which to fire the next electron (random schedule)
+        self._info_calm = False          # True once the calm (electron-less) INFO base is painted -> skip idle repaints
+        self._info_base = INFO           # markup an ultra theme's electron animates over (see _set_info)
         self.consult = ConsultDaemon()
 
     TOPBAR_TITLE = "VAULT-TEC  PIP-BOY 3000  ::  L T X   S T U D I O  ::  JOB CONTROL"
@@ -1448,8 +1451,10 @@ class Studio(App):
             self._ultra_phase = None                     # force a repaint at the current beat
             if on:
                 decor.border_title = ultra_art.TITLES.get(name, "« ULTRA »")
+                self._ultra_t = 0.0                      # fresh clock + electron schedule for this theme
+                self._electron_starts, self._electron_next = [], 0.0   # first electron fires ~immediately
                 self._paint_ultra()                      # first frame: sprite + rail border breathe
-                self._animate_ultra_info(force=True)     # light up the INFO text immediately
+                self._animate_ultra_info(force=True)     # paint the INFO base (calm until the first fire)
                 self._animate_ultra_topbar()             # topbar ambient wave
                 # spin up the dedicated ~15fps animation timer (skip under reduce-motion/tests)
                 if not os.environ.get("STUDIO_NO_ANIM"):
@@ -1608,16 +1613,23 @@ class Studio(App):
         self._refresh_field_visual(wid)
 
     _ULTRA_FPS = 15                  # dedicated ultra-animation frame rate (smooth; only while ultra active)
+    # INFO electron: a single bright pulse TOURS the whole box, then it's done. Fired at random gaps
+    # (a short mandatory minimum so two never fire together; capped so it never goes quiet too long) —
+    # gaps < the tour length let a new electron start while one is still running. Times in seconds.
+    _ELECTRON_TOUR_S = 3.0
+    _ELECTRON_MIN_GAP_S = 1.5
+    _ELECTRON_MAX_GAP_S = 25.0
 
     def _ultra_frame(self):
         """The ~15fps ultra animation frame (its own timer, live only while an ultra theme shows).
-        Advances the continuous clock and repaints the SMOOTH surfaces every frame — topbar wave (all
-        tabs), rail-border breathe + INFO electron/wave (NEW RUN tab). The pixel sprite self-gates to
-        a coarser rate inside _paint_ultra. Fully guarded; never breaks."""
+        Advances the continuous clock, steps the stochastic INFO-electron scheduler, and repaints the
+        smooth surfaces — topbar wave (all tabs), rail-border breathe + INFO electrons (NEW RUN tab).
+        The pixel sprite self-gates to a coarser rate inside _paint_ultra. Fully guarded; never breaks."""
         name = getattr(self, "_ultra_theme", None)
         if not name or ultra_art is None:
             return
         self._ultra_t += 2.0 / max(1, self._ULTRA_FPS)   # 2 units/sec (unchanged speed), fine steps
+        self._step_electrons()
         try:
             self._animate_ultra_topbar()
             if self.query_one(TabbedContent).active == "tab-new":
@@ -1625,6 +1637,22 @@ class Studio(App):
                 self._animate_ultra_info()
         except Exception:
             pass
+
+    def _step_electrons(self):
+        """Advance the INFO-electron schedule (units of _ultra_t; 2 units = 1s): drop finished tours,
+        and fire a fresh electron once the (random) next-fire time is reached, then draw the next gap
+        in [MIN, MAX] seconds. Overlap is allowed (a gap shorter than the tour), but MIN keeps a
+        mandatory delay so two never start on the same frame. Uses random -> the STOCHASTIC part lives
+        here (studio state); ultra_art.render_electrons stays a pure fn for deterministic tests."""
+        if not getattr(self, "_ultra_theme", None):
+            return
+        tour_u = self._ELECTRON_TOUR_S * 2.0
+        self._electron_starts = [s for s in self._electron_starts
+                                 if (self._ultra_t - s) <= tour_u * 1.12]   # +margin for the tail to exit
+        if self._ultra_t >= self._electron_next:
+            self._electron_starts.append(self._ultra_t)
+            gap = random.uniform(self._ELECTRON_MIN_GAP_S, self._ELECTRON_MAX_GAP_S) * 2.0
+            self._electron_next = self._ultra_t + gap
 
     def _paint_ultra(self):
         """Rail-border breathe (EVERY frame — smooth) + the pixel decoration (repainted only when its
@@ -1684,10 +1712,11 @@ class Studio(App):
             pass
 
     def _animate_ultra_info(self, force=False):
-        """Breakout #2 — run the active ultra theme's electron/wave over the INFO panel's base text,
-        every beat (so it visibly travels). No-op unless an ultra theme is active, the NEW RUN tab is
-        showing, and the panel still displays its base text (a transient one-off message is left
-        untouched — the animator only ever repaints `_info_base`). Deterministic in _beat; guarded."""
+        """Breakout #2 — paint the INFO panel's base text in the theme's dim resting color with any
+        in-flight ELECTRON comets (one tours the whole box per fire; see _step_electrons for the random
+        schedule). No-op unless an ultra theme is active, the NEW RUN tab is showing, and the panel
+        still displays its base text (a transient one-off message is left untouched). Deterministic
+        given (_ultra_t, _electron_starts); guarded."""
         name = getattr(self, "_ultra_theme", None)
         base = getattr(self, "_info_base", None)
         if not name or ultra_art is None or not base:
@@ -1703,11 +1732,17 @@ class Studio(App):
                         return
                 except Exception:
                     return
+                if not self._electron_starts and self._info_calm:
+                    return                                # nothing in flight + calm base already up -> idle
+            n_chars = sum(1 for ln in plain.split("\n") for ch in ln if ch != " ") or 1
+            tour_u = self._ELECTRON_TOUR_S * 2.0
+            heads = [((self._ultra_t - s) / tour_u) * n_chars for s in self._electron_starts]
             eff = ultra_art.EFFECTS.get(name) or {}
-            art = ultra_art.electron_text(plain, self._ultra_t, eff.get("base", "#cccccc"),
-                                          eff.get("hot", "#ffffff"), mode=eff.get("mode", "electron"))
+            art = ultra_art.render_electrons(plain, heads, eff.get("base", "#cccccc"),
+                                             eff.get("hot", "#ffffff"))
             if art:
                 w.update(Text.from_markup(art))
+                self._info_calm = not self._electron_starts
         except Exception:
             pass
 

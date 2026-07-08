@@ -137,13 +137,29 @@ async def main():
         def _bord():
             b = ipanel.styles.border
             return str(b.top[1].hex) if b and b.top else None
-        app._ultra_t = 0.0; app._ultra_phase = None; app._paint_ultra(); app._animate_ultra_info(); app._animate_ultra_topbar()
-        _b0, _info0 = _bord(), repr(app.query_one("#newinfo").render())
+        app._ultra_t = 0.0; app._ultra_phase = None; app._paint_ultra(); app._animate_ultra_topbar()
+        _b0 = _bord()
         _t0 = repr(app.query_one("#topbartitle").render())
-        app._ultra_t = 6.0; app._ultra_phase = None; app._paint_ultra(); app._animate_ultra_info(); app._animate_ultra_topbar()
+        app._ultra_t = 6.0; app._ultra_phase = None; app._paint_ultra(); app._animate_ultra_topbar()
         check("ultra: info-panel border breathes across ticks", _b0 != _bord(), (_b0, _bord()))
-        check("ultra: INFO electron/wave moves across ticks", _info0 != repr(app.query_one("#newinfo").render()))
         check("ultra: topbar ambient wave moves across ticks", _t0 != repr(app.query_one("#topbartitle").render()))
+        # INFO now fires DISCRETE electrons on a random schedule; inject one and confirm its comet TOURS
+        app._electron_starts = [6.0]
+        app._ultra_t = 6.1; app._animate_ultra_info(); _e0 = repr(app.query_one("#newinfo").render())
+        app._ultra_t = 6.9; app._animate_ultra_info(); _e1 = repr(app.query_one("#newinfo").render())
+        check("ultra: INFO electron comet tours the text", _e0 != _e1)
+        # scheduler invariants over ~60s of frames: gaps within [MIN, 25s], concurrency stays bounded
+        app._electron_starts, app._electron_next, app._ultra_t = [], 0.0, 0.0
+        _fires, _maxc = [], 0
+        for _ in range(60 * app._ULTRA_FPS):
+            app._ultra_t += 2.0 / app._ULTRA_FPS
+            _n = len(app._electron_starts); app._step_electrons()
+            if len(app._electron_starts) > _n: _fires.append(app._ultra_t)
+            _maxc = max(_maxc, len(app._electron_starts))
+        _gaps = [(_fires[i + 1] - _fires[i]) / 2.0 for i in range(len(_fires) - 1)]
+        check("ultra: electron gaps within [MIN, 25s]",
+              all(app._ELECTRON_MIN_GAP_S - 0.3 <= g <= app._ELECTRON_MAX_GAP_S + 0.3 for g in _gaps), _gaps)
+        check("ultra: electron tours prune (bounded concurrency)", 1 <= _maxc <= 4, _maxc)
         # smoothness: a SMALL clock step (sub-beat) already changes the border (continuous glow, not
         # a 5-color snap) -> proves the interpolation the 15fps timer relies on
         app._ultra_t = 6.0; app._ultra_phase = None; app._paint_ultra(); _bsmall = _bord()
