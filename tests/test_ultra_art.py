@@ -52,18 +52,7 @@ for n in NAMES:
     check("%s: fits 48-col budget (max=%d)" % (n, worst), worst <= 48)
     check("%s: balanced markup" % n, balanced)
 
-# ADDITIVE full-page canvas breath: EVERY ultra theme opts in, in its own hue; base==theme bg;
-# peak near-black (<=24/channel). Non-ultra -> None. (Borders are independent; not asserted here.)
-for t in studio_themes.ULTRA_THEMES:
-    eff = ultra_art.EFFECTS.get(t.name) or {}
-    check("%s: opts into the canvas breath" % t.name, "bgpulse" in eff)
-    if "bgpulse" in eff:
-        base, peak = eff["bgpulse"]
-        check("%s: canvas base == theme bg" % t.name, base.lower() == t.background.lower())
-        check("%s: canvas peak near-black (<=24/ch)" % t.name, maxch(peak) <= 24)
-check("bg_pulse: non-ultra theme -> None", ultra_art.bg_pulse("pipboy", 3) is None)
-_bp = [ultra_art.bg_pulse(NAMES[0], b * 0.5) for b in range(0, 40)]
-check("bg_pulse: moves", all(_bp) and len(set(_bp)) > 3)
+# (The whole-canvas "full-page touch" was removed — being redesigned; awaiting approval. No bg_pulse.)
 
 # EFFECTS covers exactly the ultra tier; border glow is valid + breathes, per theme
 check("EFFECTS covers exactly the ultra tier", set(ultra_art.EFFECTS) == set(studio_themes.ULTRA_NAMES))
@@ -92,9 +81,7 @@ os.environ["STUDIO_NO_ANIM"] = "1"
 try:
     for n in NAMES:
         check("%s: STUDIO_NO_ANIM freezes to frame 0" % n, ultra_art.render(n, 9) == ultra_art.render(n, 0))
-    check("glow + bg_pulse frozen under STUDIO_NO_ANIM",
-          ultra_art.glow(NAMES[0], 9) == ultra_art.glow(NAMES[0], 0)
-          and ultra_art.bg_pulse(NAMES[0], 9) == ultra_art.bg_pulse(NAMES[0], 0))
+    check("glow frozen under STUDIO_NO_ANIM", ultra_art.glow(NAMES[0], 9) == ultra_art.glow(NAMES[0], 0))
 finally:
     del os.environ["STUDIO_NO_ANIM"]
 

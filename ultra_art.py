@@ -40,42 +40,25 @@ RAMPS = {
 }
 
 # Per-ultra-theme "breakout" effects (the flourish that escapes the decoration box, opt-in per theme):
-#   border  = which RAMP the panel borders breathe through (triangle wave — independent; NOT touched here)
+#   border = which RAMP the panel borders breathe through (independent triangle wave).
 #   mode/base/hot = the INFO-panel running-light: "electron" (a bright comet + tail travels the text)
 #     or "wave" (a smooth traveling brightness wave). base = readable resting color, hot = the crest.
-#   bgpulse = (base, peak) for the ever-so-subtle WHOLE-CANVAS breath — the ADDITIVE full-page touch.
-#     Every ultra theme opts in, each toward its OWN hue; base MUST equal the theme background, and the
-#     peak stays <=24/channel so even the swell is near-black. This is the ONLY strictly-additive full-
-#     page surface (canvas bg) — it changes nothing else (borders/decoration/topbar/electrons untouched).
+# (The whole-canvas "full-page touch" was removed 2026-07-07 — being redesigned; awaiting approval.)
 EFFECTS = {
-    "ultra-dragon":    {"border": "GOLD",   "mode": "electron", "base": "#c9a24a", "hot": "#fff3c4",
-                        "bgpulse": ("#0c0404", "#180a06")},   # black -> faint crimson-warm swell
-    "ultra-skynet":    {"border": "RED",    "mode": "electron", "base": "#b0b8c0", "hot": "#ff6a5a",
-                        "bgpulse": ("#060708", "#0e1218")},   # black -> faint cold steel-blue swell
-    "ultra-synthwave": {"border": "SYNTHB", "mode": "wave", "base": "#e0a0d0", "hot": "#5cffe0",
-                        "bgpulse": ("#08040f", "#0c0618")},   # black -> faint indigo swell (unchanged)
-    "ultra-matrix":    {"border": "GREEN",  "mode": "electron", "base": "#5ab86a", "hot": "#d8ffe0",
-                        "bgpulse": ("#020402", "#06180a")},   # black -> faint green swell
-    "ultra-arcade":    {"border": "GREEN",  "mode": "electron", "base": "#5ab86a", "hot": "#d8ffe0",
-                        "bgpulse": ("#030a04", "#06180a")},   # black -> faint green swell
-    "ultra-tv":        {"border": "TVB",    "mode": "wave",     "base": "#9aa4ae", "hot": "#f0f4f8",
-                        "bgpulse": ("#05070a", "#0a0e18")},   # black -> faint cool broadcast swell
-    "ultra-cassette":  {"border": "CHROME", "mode": "electron", "base": "#b8a06a", "hot": "#fff0c0",
-                        "bgpulse": ("#0a0803", "#180f04")},   # black -> faint warm chrome swell
-    "ultra-sonar":     {"border": "CYAN",   "mode": "wave",     "base": "#4ac0d0", "hot": "#c4faff",
-                        "bgpulse": ("#020a0c", "#041418")},   # black -> faint abyssal-cyan swell
-    "ultra-scope":     {"border": "GREEN",  "mode": "wave",     "base": "#4ac0a0", "hot": "#c4ffe8",
-                        "bgpulse": ("#020c08", "#061808")},   # black -> faint phosphor-green swell
-    "ultra-kaiju":     {"border": "ATOMIC", "mode": "electron", "base": "#6a8aa8", "hot": "#eaf6ff",
-                        "bgpulse": ("#06080c", "#0a1018")},   # black -> faint atomic-blue swell
-    "ultra-aurora":    {"border": "AURORA", "mode": "wave",     "base": "#4ac080", "hot": "#b8ffd8",
-                        "bgpulse": ("#030f0a", "#06180c")},   # black -> faint aurora-green swell
-    "ultra-vhs":       {"border": "VHSB",   "mode": "electron", "base": "#7a8ab8", "hot": "#eef2f8",
-                        "bgpulse": ("#05070e", "#080b18")},   # black -> faint vhs-blue swell
-    "ultra-bladerunner": {"border": "AMBER2", "mode": "electron", "base": "#c89a5a", "hot": "#ffe0a0",
-                        "bgpulse": ("#060810", "#0c0e18")},   # black -> faint amber/teal swell
-    "ultra-vaporwave": {"border": "ORCHID", "mode": "wave",     "base": "#d888c8", "hot": "#ffd0ec",
-                        "bgpulse": ("#0a060e", "#100818")},   # black -> faint orchid swell
+    "ultra-dragon":    {"border": "GOLD",   "mode": "electron", "base": "#c9a24a", "hot": "#fff3c4"},
+    "ultra-skynet":    {"border": "RED",    "mode": "electron", "base": "#b0b8c0", "hot": "#ff6a5a"},
+    "ultra-synthwave": {"border": "SYNTHB", "mode": "wave",     "base": "#e0a0d0", "hot": "#5cffe0"},
+    "ultra-matrix":    {"border": "GREEN",  "mode": "electron", "base": "#5ab86a", "hot": "#d8ffe0"},
+    "ultra-arcade":    {"border": "GREEN",  "mode": "electron", "base": "#5ab86a", "hot": "#d8ffe0"},
+    "ultra-tv":        {"border": "TVB",    "mode": "wave",     "base": "#9aa4ae", "hot": "#f0f4f8"},
+    "ultra-cassette":  {"border": "CHROME", "mode": "electron", "base": "#b8a06a", "hot": "#fff0c0"},
+    "ultra-sonar":     {"border": "CYAN",   "mode": "wave",     "base": "#4ac0d0", "hot": "#c4faff"},
+    "ultra-scope":     {"border": "GREEN",  "mode": "wave",     "base": "#4ac0a0", "hot": "#c4ffe8"},
+    "ultra-kaiju":     {"border": "ATOMIC", "mode": "electron", "base": "#6a8aa8", "hot": "#eaf6ff"},
+    "ultra-aurora":    {"border": "AURORA", "mode": "wave",     "base": "#4ac080", "hot": "#b8ffd8"},
+    "ultra-vhs":       {"border": "VHSB",   "mode": "electron", "base": "#7a8ab8", "hot": "#eef2f8"},
+    "ultra-bladerunner": {"border": "AMBER2", "mode": "electron", "base": "#c89a5a", "hot": "#ffe0a0"},
+    "ultra-vaporwave": {"border": "ORCHID", "mode": "wave",     "base": "#d888c8", "hot": "#ffd0ec"},
 }
 
 _PAL = {}                   # optional theme palette (set by set_palette); reserved for future re-tint
@@ -223,19 +206,6 @@ def glow(theme_name, beat):
     lo = int(pos)
     hi = min(n - 1, lo + 1)
     return _lerp(ramp[lo], ramp[hi], pos - lo)
-
-
-def bg_pulse(theme_name, beat):
-    """An ever-so-subtle breathing of the whole canvas background for themes that opt in
-    (EFFECTS[name]['bgpulse'] = (base_hex, peak_hex)). A slow, small sine swell — a hazy dim glow that
-    never leaves near-black. Returns a hex, or None if the theme doesn't opt in. Pure fn; frozen->base."""
-    eff = EFFECTS.get(theme_name)
-    if not eff or "bgpulse" not in eff:
-        return None
-    base, peak = eff["bgpulse"]
-    b = 0.0 if _frozen() else float(beat)
-    f = 0.5 + 0.5 * math.sin(b * 0.2)                  # ~16s swell (b is 2 units/sec)
-    return _lerp(base, peak, f)
 
 
 def electron_text(text, beat, base, hot, mode="electron", speed=2, tail=6, wavelen=7, amp=1.0):
