@@ -248,7 +248,7 @@ async def short_live():
         plist = app2.screen.query_one("#thlist")
         _last = next((plist.get_option_at_index(i).id for i in range(plist.option_count - 1, -1, -1)
                       if plist.get_option_at_index(i).id), None)
-        check("picker still lists the ultra tier (scrollable to synthwave)", _last == "ultra-synthwave", _last)
+        check("picker lists + scrolls to the last ultra theme", _last == sorted(studio.ULTRA_NAMES)[-1], _last)
     state["active"] = None
 
 asyncio.run(main())
