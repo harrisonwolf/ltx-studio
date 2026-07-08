@@ -62,6 +62,8 @@ EFFECTS = {
                         "bgpulse": ("#05070a", "#0a0e18")},   # black -> faint cool broadcast swell
     "ultra-cassette":  {"border": "CHROME", "mode": "electron", "base": "#b8a06a", "hot": "#fff0c0",
                         "bgpulse": ("#0a0803", "#180f04")},   # black -> faint warm chrome swell
+    "ultra-sonar":     {"border": "CYAN",   "mode": "wave",     "base": "#4ac0d0", "hot": "#c4faff",
+                        "bgpulse": ("#020a0c", "#041418")},   # black -> faint abyssal-cyan swell
 }
 
 _PAL = {}                   # optional theme palette (set by set_palette); reserved for future re-tint
@@ -538,6 +540,46 @@ def _cassette(beat, width=None):
         return ""
 
 
+# ---------------------------------------------------------------- sonar (submarine scope) ---------
+def _sonar(beat, width=None):
+    """A sonar scope: a radial sweep line rotating around the center with a FADING afterglow trail,
+    faint range rings, and a target blip that PINGS (brightens) as the sweep passes it. Pure fn."""
+    try:
+        W = min(max(int(width or 32), 16), 44); H = 8
+        b = float(beat)
+        cx, cy = (W - 1) / 2.0, (H - 1) / 2.0
+        R = min(cx, cy * 2.0)
+        sweep = (b * 0.45) % (2 * math.pi)
+        arc = 1.5
+        dimc, ring, hot = "#0e4450", "#1aa0b8", "#c4faff"
+        ba, br = 0.9, R * 0.62                           # target blip (fixed polar position)
+        grid = [[" "] * W for _ in range(H)]
+        for y in range(H):
+            for x in range(W):
+                dx, dy = x - cx, (y - cy) * 2.0
+                r = math.hypot(dx, dy)
+                if r > R + 0.5:
+                    continue
+                cell = None
+                if abs(r - R) < 0.6 or abs(r - R * 0.55) < 0.6:
+                    cell = (ring, "·")                   # range rings
+                d = (sweep - math.atan2(dy, dx)) % (2 * math.pi)
+                if d < arc:                              # sweep + afterglow
+                    f = 1.0 - d / arc
+                    cell = (_lerp(dimc, hot, f), "█" if d < 0.2 else ("▓" if f > 0.5 else "▒"))
+                if cell:
+                    grid[y][x] = "[%s]%s[/%s]" % (cell[0], cell[1], cell[0])
+        bx = int(round(cx + br * math.cos(ba))); by = int(round(cy + br * math.sin(ba) / 2.0))
+        pf = 1.0 - min(1.0, ((sweep - ba) % (2 * math.pi)) / 1.2)
+        bc = _lerp("#1a6a54", "#7cffc8", pf)             # blip: faint always, bright on ping
+        if 0 <= bx < W and 0 <= by < H:
+            grid[by][bx] = "[%s]◉[/%s]" % (bc, bc)
+        grid[int(round(cy))][int(round(cx))] = "[%s]+[/%s]" % (ring, ring)
+        return "\n".join("".join(r) for r in grid)
+    except Exception:
+        return ""
+
+
 # ---------------------------------------------------------------- public API ----------------------
 THEMES = {
     "ultra-dragon": lambda b, w=None: render_sprite(DRAGON, b, cols=w),
@@ -547,6 +589,7 @@ THEMES = {
     "ultra-arcade": lambda b, w=None: _arcade(b, width=w),
     "ultra-tv": lambda b, w=None: _tv(b, width=w),
     "ultra-cassette": lambda b, w=None: _cassette(b, width=w),
+    "ultra-sonar": lambda b, w=None: _sonar(b, width=w),
 }
 TITLES = {
     "ultra-dragon": "「 年 · YEAR OF THE DRAGON 」",
@@ -556,6 +599,7 @@ TITLES = {
     "ultra-arcade": "「 SPACE INVADERS · INSERT COIN 」",
     "ultra-tv": "「 SMPTE · PLEASE STAND BY 」",
     "ultra-cassette": "「 MIXTAPE · SIDE A 」",
+    "ultra-sonar": "「 SONAR · DEPTH 340 」",
 }
 
 

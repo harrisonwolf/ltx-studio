@@ -492,8 +492,23 @@ ULTRA_CASSETTE = Theme(
         "selection": "#241c0e",
     },
 )
+# Submarine sonar — abyssal cyan-green scope, a sweeping line, a pinging contact. DEPTH 340.
+ULTRA_SONAR = Theme(
+    name="ultra-sonar",
+    primary="#1aa0b8", secondary="#12707f", accent="#5cffe0",
+    foreground="#7ad0d8", background="#020a0c", surface="#06171a", panel="#0a2226",
+    success="#7cffc8", warning="#ffcf5c", error="#ff6d6d", dark=True,
+    variables={
+        "block-cursor-foreground": "#020a0c", "block-cursor-background": "#5cffe0",
+        "footer-key-foreground": "#c4faff", "footer-description-foreground": "#7ad0d8",
+        "border": "#147a8a", "border-strong": "#0c4a54",
+        "surface-deep": "#010708", "text-bright": "#c4faff",
+        "accent-2": "#7cffb0", "tertiary": "#4a9aa0",    # contact-blip green · deep teal
+        "selection": "#0c2a30",
+    },
+)
 ULTRA_THEMES = (ULTRA_DRAGON, ULTRA_SKYNET, ULTRA_SYNTHWAVE, ULTRA_MATRIX, ULTRA_ARCADE, ULTRA_TV,
-                ULTRA_CASSETTE)
+                ULTRA_CASSETTE, ULTRA_SONAR)
 # Single source of truth for "is this the animated tier" — used by the picker (sectioning) and by
 # studio._on_theme_changed (show/hide the decoration). ultra_art.THEMES maps the same names to art.
 ULTRA_NAMES = frozenset(t.name for t in ULTRA_THEMES)
