@@ -169,8 +169,17 @@ async def main():
         check("ultra: whole rail breathes (all 4 borders)",
               all(app.query_one("#" + w).styles.border and app.query_one("#" + w).styles.border.top
                   for w, _ in app._ULTRA_BORDERS))
+        # corner frame (approved full-page touch): four ticks on ultra, byte-identical off it
+        app.tick(); app._animate_ultra_topbar(); await pilot.pause()
+        _cornertext = (str(app.query_one("#topbartitle").render()) + str(app.query_one("#statusmeter").render())
+                       + str(app.query_one("#status").render()))
+        check("ultra: corner frame present (⌜⌝⌞⌟)", all(g in _cornertext for g in "⌜⌝⌞⌟"), _cornertext[:20])
         app.theme = "pipboy"; await pilot.pause()
         check("normal theme hides the decoration", not dec.has_class("-on"))
+        app.tick(); await pilot.pause()
+        _ct2 = (str(app.query_one("#topbartitle").render()) + str(app.query_one("#statusmeter").render())
+                + str(app.query_one("#status").render()))
+        check("normal theme has NO corner frame", not any(g in _ct2 for g in "⌜⌝⌞⌟"))
         check("ultra->normal restores a non-glow border", _bord() not in ("#FF2D95", "#FF6AB0", "#C42678"), _bord())
         check("ultra->normal restores the plain topbar title",
               str(app.query_one("#topbartitle").render()).strip() == studio.Studio.TOPBAR_TITLE.strip())
