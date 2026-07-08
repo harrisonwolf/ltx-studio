@@ -60,6 +60,8 @@ EFFECTS = {
                         "bgpulse": ("#030a04", "#06180a")},   # black -> faint green swell
     "ultra-tv":        {"border": "TVB",    "mode": "wave",     "base": "#9aa4ae", "hot": "#f0f4f8",
                         "bgpulse": ("#05070a", "#0a0e18")},   # black -> faint cool broadcast swell
+    "ultra-cassette":  {"border": "CHROME", "mode": "electron", "base": "#b8a06a", "hot": "#fff0c0",
+                        "bgpulse": ("#0a0803", "#180f04")},   # black -> faint warm chrome swell
 }
 
 _PAL = {}                   # optional theme palette (set by set_palette); reserved for future re-tint
@@ -503,6 +505,39 @@ def _tv(beat, width=None):
         return ""
 
 
+# ---------------------------------------------------------------- cassette (walkman) --------------
+def _cassette(beat, width=None):
+    """A mixtape: a chrome cassette shell with two hubs spinning (4-frame spoke), and a green->red VU
+    meter bouncing along the bottom. Pure fn of beat."""
+    try:
+        W = min(max(int(width or 32), 18), 44); H = 8
+        b = float(beat); bi = int(b)
+        chrome, dim, hot = "#d9b96a", "#7a5a1a", "#fff0c0"
+        red, grn = "#ff7a4a", "#5ade7a"
+        grid = [[" "] * W for _ in range(H)]
+        def put(y, x, ch, c):
+            if 0 <= x < W and 0 <= y < H:
+                grid[y][x] = "[%s]%s[/%s]" % (c, ch, c)
+        x0, x1 = 2, W - 3
+        for x in range(x0 + 1, x1):
+            put(1, x, "─", chrome); put(6, x, "─", chrome)
+        for y in range(2, 6):
+            put(y, x0, "│", chrome); put(y, x1, "│", chrome)
+        put(1, x0, "╭", chrome); put(1, x1, "╮", chrome); put(6, x0, "╰", chrome); put(6, x1, "╯", chrome)
+        for x in range(x0 + 2, x1 - 1):
+            put(2, x, "─", dim)                          # label strip
+        spoke = "│╱─╲"[bi % 4]                           # both hubs spin
+        for cx in (x0 + (x1 - x0) // 3, x0 + 2 * (x1 - x0) // 3):
+            put(4, cx - 1, "(", chrome); put(4, cx, spoke, hot); put(4, cx + 1, ")", chrome)
+        lv = "▁▂▃▄▅▆▇"                                   # bouncing VU meter along the bottom
+        for i in range(x0, x1 + 1):
+            f = 0.5 + 0.5 * math.sin(b * 0.5 + i * 0.4)
+            put(7, i, lv[int(f * (len(lv) - 1))], red if f > 0.72 else grn)
+        return "\n".join("".join(r) for r in grid)
+    except Exception:
+        return ""
+
+
 # ---------------------------------------------------------------- public API ----------------------
 THEMES = {
     "ultra-dragon": lambda b, w=None: render_sprite(DRAGON, b, cols=w),
@@ -511,6 +546,7 @@ THEMES = {
     "ultra-matrix": lambda b, w=None: _matrix_rain(b, width=w),
     "ultra-arcade": lambda b, w=None: _arcade(b, width=w),
     "ultra-tv": lambda b, w=None: _tv(b, width=w),
+    "ultra-cassette": lambda b, w=None: _cassette(b, width=w),
 }
 TITLES = {
     "ultra-dragon": "「 年 · YEAR OF THE DRAGON 」",
@@ -519,6 +555,7 @@ TITLES = {
     "ultra-matrix": "「 THE MATRIX · 電 」",
     "ultra-arcade": "「 SPACE INVADERS · INSERT COIN 」",
     "ultra-tv": "「 SMPTE · PLEASE STAND BY 」",
+    "ultra-cassette": "「 MIXTAPE · SIDE A 」",
 }
 
 

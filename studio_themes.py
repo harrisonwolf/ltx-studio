@@ -477,7 +477,23 @@ ULTRA_TV = Theme(
         "selection": "#131820",
     },
 )
-ULTRA_THEMES = (ULTRA_DRAGON, ULTRA_SKYNET, ULTRA_SYNTHWAVE, ULTRA_MATRIX, ULTRA_ARCADE, ULTRA_TV)
+# Walkman mixtape — chrome shell + tape-gold, green/red VU, spinning reels. SIDE A.
+ULTRA_CASSETTE = Theme(
+    name="ultra-cassette",
+    primary="#b09a5a", secondary="#7a684a", accent="#ffe08a",
+    foreground="#d8c89a", background="#0a0803", surface="#14100a", panel="#1c160c",
+    success="#5ade7a", warning="#ffcf5c", error="#ff7a4a", dark=True,
+    variables={
+        "block-cursor-foreground": "#0a0803", "block-cursor-background": "#ffe08a",
+        "footer-key-foreground": "#fff0c0", "footer-description-foreground": "#d8c89a",
+        "border": "#6a5628", "border-strong": "#40340f",
+        "surface-deep": "#080602", "text-bright": "#fff0c0",
+        "accent-2": "#ff7a4a", "tertiary": "#a89468",    # VU-red tape warmth · aged chrome
+        "selection": "#241c0e",
+    },
+)
+ULTRA_THEMES = (ULTRA_DRAGON, ULTRA_SKYNET, ULTRA_SYNTHWAVE, ULTRA_MATRIX, ULTRA_ARCADE, ULTRA_TV,
+                ULTRA_CASSETTE)
 # Single source of truth for "is this the animated tier" — used by the picker (sectioning) and by
 # studio._on_theme_changed (show/hide the decoration). ultra_art.THEMES maps the same names to art.
 ULTRA_NAMES = frozenset(t.name for t in ULTRA_THEMES)
