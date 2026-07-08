@@ -18,7 +18,7 @@ one system:
                           DEPTH lift (one value-step above panel, NOT border-strong, NOT the hero)
                           used by the DataTable row cursor; the highlighted queue card re-lights
                           its OWN frame in the hero accent. Two channels, never a muddy flood.
-Curated 10 (cut white/plasma/midnight/wasteland/ice/radium as duplicates; added nixie + thermal).
+Curated 11 (cut white/plasma/midnight/wasteland/ice as duplicates; added nixie + thermal; radium kept).
 """
 
 from textual.theme import Theme
@@ -197,8 +197,26 @@ PIPBOY_THERMAL = Theme(
         "selection": "#2a2430",                          # neutral iron lift
     },
 )
+# --- 1940s radium watch-dial lume — phosphorescent yellow-green glow on a near-black dial with a
+#     warm brass casing. Distinct from gameboy: this is GLOW-ON-BLACK (a real near-black canvas, wash
+#     compliant), not gameboy's flat lit LCD glass. Restored by request (user's favorite). ---
+PIPBOY_RADIUM = Theme(
+    name="pipboy-radium",
+    primary="#9ab83c", secondary="#7d9a2e", accent="#eeff9a",
+    foreground="#c9d96f", background="#0c0d04", surface="#121306", panel="#171908",
+    success="#e3f2b8", warning="#ffb347", error="#ff6d6d", dark=True,
+    variables={
+        "block-cursor-foreground": "#0c0d04", "block-cursor-background": "#eeff9a",
+        "footer-key-foreground": "#e3f2b8", "footer-description-foreground": "#c9d96f",
+        "border": "#5f6f22", "border-strong": "#3d4a14",
+        "surface-deep": "#080902", "text-bright": "#dcea8a",
+        "accent-2": "#ffb347", "tertiary": "#a3b855",    # brass casing · olive lume
+        "selection": "#2a2c15",                          # olive-graphite lift (glow, wash-compliant)
+    },
+)
 EXTRA_THEMES = (PIPBOY, PIPBOY_AMBER, PIPBOY_VFD, PIPBOY_VAULT, PIPBOY_VIOLET,
-                PIPBOY_NIXIE, PIPBOY_NUKA, PIPBOY_GAMEBOY, PIPBOY_TUBE, PIPBOY_THERMAL)
+                PIPBOY_NIXIE, PIPBOY_NUKA, PIPBOY_GAMEBOY, PIPBOY_TUBE, PIPBOY_THERMAL,
+                PIPBOY_RADIUM)
 
 # Cut themes -> nearest kept sibling, so a persisted stale choice migrates to a deliberate
 # near-equivalent instead of a hard reset to the default green. Applied in Studio.on_mount.
@@ -208,7 +226,6 @@ THEME_MIGRATE = {
     "pipboy-midnight": "pipboy",          # ultra-dim green -> flagship green
     "pipboy-wasteland": "pipboy-amber",   # sepia/tan       -> amber gold
     "pipboy-ice": "pipboy-vfd",           # pale cyan       -> teal VFD
-    "pipboy-radium": "pipboy-gameboy",    # yellow-green    -> lime DMG (truest hue match)
 }
 
 # T20: studio-side semantic palette for INLINE Rich markup in dynamic content (queue cards, the

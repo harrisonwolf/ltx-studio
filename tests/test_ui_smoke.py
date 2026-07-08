@@ -124,7 +124,9 @@ async def main():
         dim_card = app._queue_card(active, "QUEUED · #1", "#6dffab", 60, selected=False)
         check("selected card = heavy ignited frame", "┏" in sel_card and "┃" in sel_card)
         check("unselected card = quiet rounded frame", "╭" in dim_card and "┏" not in dim_card)
-        check("cut theme migrates (radium->gameboy)", studio.THEME_MIGRATE.get("pipboy-radium") == "pipboy-gameboy")
+        check("cut theme migrates (ice->vfd)", studio.THEME_MIGRATE.get("pipboy-ice") == "pipboy-vfd")
+        check("restored theme not migrated (radium kept)", "pipboy-radium" not in studio.THEME_MIGRATE
+              and any(t.name == "pipboy-radium" for t in studio.EXTRA_THEMES))
         # picking a sound persists but NEVER auditions (no unexpected audio — user rule)
         sound_calls.clear()
         app.query_one("#snd_done", Select).value = "bell.wav"

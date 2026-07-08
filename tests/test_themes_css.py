@@ -11,7 +11,7 @@ def check(name, cond, detail=""):
     print(("PASS" if cond else "FAIL"), "::", name, ("" if cond else str(detail)))
 
 themes = studio.EXTRA_THEMES
-check("10 curated themes, unique names", len(themes) == 10 and len({t.name for t in themes}) == 10)
+check("11 curated themes, unique names", len(themes) == 11 and len({t.name for t in themes}) == 11)
 CUSTOM = ("border", "border-strong", "surface-deep", "text-bright", "accent-2", "tertiary",
           "block-cursor-foreground", "block-cursor-background", "selection")
 for t in themes:
