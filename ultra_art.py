@@ -38,7 +38,10 @@ RAMPS = {
 EFFECTS = {
     "ultra-dragon":    {"border": "GOLD",   "mode": "electron", "base": "#c9a24a", "hot": "#fff3c4"},
     "ultra-skynet":    {"border": "RED",    "mode": "electron", "base": "#b0b8c0", "hot": "#ff6a5a"},
-    "ultra-synthwave": {"border": "SYNTHB", "mode": "wave",     "base": "#e0a0d0", "hot": "#5cffe0"},
+    # bgpulse (opt-in, synthwave only for now): an ever-so-subtle breathing of the WHOLE canvas
+    # background between (base, peak) — tiny amplitude, a hazy indigo swell that stays near-black.
+    "ultra-synthwave": {"border": "SYNTHB", "mode": "wave", "base": "#e0a0d0", "hot": "#5cffe0",
+                        "bgpulse": ("#08040f", "#0c0618")},   # peak stays <=24/channel: near-black even at the top
     "ultra-matrix":    {"border": "GREEN",  "mode": "electron", "base": "#5ab86a", "hot": "#d8ffe0"},
 }
 
@@ -186,6 +189,19 @@ def glow(theme_name, beat):
     lo = int(pos)
     hi = min(n - 1, lo + 1)
     return _lerp(ramp[lo], ramp[hi], pos - lo)
+
+
+def bg_pulse(theme_name, beat):
+    """An ever-so-subtle breathing of the whole canvas background for themes that opt in
+    (EFFECTS[name]['bgpulse'] = (base_hex, peak_hex)). A slow, small sine swell — a hazy dim glow that
+    never leaves near-black. Returns a hex, or None if the theme doesn't opt in. Pure fn; frozen->base."""
+    eff = EFFECTS.get(theme_name)
+    if not eff or "bgpulse" not in eff:
+        return None
+    base, peak = eff["bgpulse"]
+    b = 0.0 if _frozen() else float(beat)
+    f = 0.5 + 0.5 * math.sin(b * 0.2)                  # ~16s swell (b is 2 units/sec)
+    return _lerp(base, peak, f)
 
 
 def electron_text(text, beat, base, hot, mode="electron", speed=2, tail=6, wavelen=7, amp=1.0):

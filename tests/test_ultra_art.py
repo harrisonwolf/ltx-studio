@@ -64,6 +64,21 @@ for n in NAMES:
     check("%s: fits 48-col budget (max=%d)" % (n, worst), worst <= 48)
     check("%s: balanced markup" % n, balanced)
 
+# bg_pulse: ever-so-subtle canvas breathing (opt-in per theme; synthwave only). Moves, stays
+# near-black even at peak (<=24/channel), None for themes that don't opt in, frozen under NO_ANIM.
+def _maxch(h):
+    h = h.lstrip("#"); return max(int(h[i:i + 2], 16) for i in (0, 2, 4))
+_bp = [ultra_art.bg_pulse("ultra-synthwave", b * 0.5) for b in range(0, 40)]
+check("bg_pulse: synthwave opts in + moves", all(_bp) and len(set(_bp)) > 3)
+check("bg_pulse: peak stays near-black (<=24/ch)", max(_maxch(v) for v in _bp) <= 24)
+check("bg_pulse: non-opt-in theme -> None", ultra_art.bg_pulse("ultra-dragon", 3) is None)
+os.environ["STUDIO_NO_ANIM"] = "1"
+try:
+    check("bg_pulse: frozen under STUDIO_NO_ANIM",
+          ultra_art.bg_pulse("ultra-synthwave", 9) == ultra_art.bg_pulse("ultra-synthwave", 0))
+finally:
+    del os.environ["STUDIO_NO_ANIM"]
+
 # ---- breakout effects: continuous border-breathe glow() + topbar wave electron_text() ----
 check("EFFECTS covers exactly the ultra tier", set(ultra_art.EFFECTS) == set(studio_themes.ULTRA_NAMES))
 check("glow: non-ultra -> None", ultra_art.glow("pipboy", 0) is None)

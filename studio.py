@@ -1436,6 +1436,13 @@ class Studio(App):
                 field_visuals.set_palette(pal)
             if readout is not None:
                 readout.set_palette(pal)
+            # reset the canvas background to THIS theme's static bg on every change (matches the CSS
+            # `Screen { background: $background }`); a bg-pulsing ultra theme re-overrides it per frame.
+            # (An inline override persists across theme changes, so it must be re-synced here.)
+            try:
+                self.screen_stack[0].styles.background = theme.background or "#06120b"
+            except Exception:
+                pass
             self._qsig = None            # queue cards re-render in the new palette next tick
             self.update_est()            # plan line + readout strip refresh now
             # the shown schematic caches its markup with the OLD palette -> re-render it in the new
@@ -1629,6 +1636,14 @@ class Studio(App):
         self._ultra_t += 2.0 / max(1, self._ULTRA_FPS)   # 2 units/sec (unchanged speed), fine steps
         self._step_electrons()
         try:
+            # ever-so-subtle breathing of the whole canvas background (opt-in per theme; synthwave).
+            # Target the BASE screen so open modals (e.g. the picker) aren't tinted.
+            bgc = ultra_art.bg_pulse(name, self._ultra_t)
+            if bgc:
+                try:
+                    self.screen_stack[0].styles.background = bgc
+                except Exception:
+                    pass
             self._animate_ultra_topbar()
             if self.query_one(TabbedContent).active == "tab-new":
                 self._paint_ultra()

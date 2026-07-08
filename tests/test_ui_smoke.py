@@ -169,8 +169,17 @@ async def main():
         check("ultra: whole rail breathes (all 4 borders)",
               all(app.query_one("#" + w).styles.border and app.query_one("#" + w).styles.border.top
                   for w, _ in app._ULTRA_BORDERS))
+        # synthwave's ever-so-subtle CANVAS breathing: the base screen bg pulses off #08040f. Sample two
+        # points ~a quarter-cycle apart (the sine is flat at its crest, so adjacent frames barely differ)
+        _canvas = app.screen_stack[0]
+        def _cbg(): return _canvas.styles.background.hex.lower()
+        app._ultra_t = 0.0; app._ultra_frame(); _c1 = _cbg()
+        app._ultra_t = 7.7; app._ultra_frame(); _c2 = _cbg()
+        check("ultra-synthwave: canvas background pulses", _c1 != _c2 and "#08040f" not in (_c1, _c2), (_c1, _c2))
         app.theme = "pipboy"; await pilot.pause()
         check("normal theme hides the decoration", not dec.has_class("-on"))
+        check("ultra->normal restores the plain canvas bg (no pulse stuck)",
+              _canvas.styles.background.hex.lower() == "#06120b", _canvas.styles.background.hex)
         check("ultra->normal restores a non-glow border", _bord() not in ("#FF2D95", "#FF6AB0", "#C42678"), _bord())
         check("ultra->normal restores the plain topbar title",
               str(app.query_one("#topbartitle").render()).strip() == studio.Studio.TOPBAR_TITLE.strip())
