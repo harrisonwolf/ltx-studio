@@ -18,7 +18,7 @@ one system:
                           DEPTH lift (one value-step above panel, NOT border-strong, NOT the hero)
                           used by the DataTable row cursor; the highlighted queue card re-lights
                           its OWN frame in the hero accent. Two channels, never a muddy flood.
-Curated 11 (cut white/plasma/midnight/wasteland/ice as duplicates; added nixie + thermal; radium kept).
+Curated 13 (11 emissive/reference themes + concrete named: usa, tron).
 """
 
 from textual.theme import Theme
@@ -214,9 +214,44 @@ PIPBOY_RADIUM = Theme(
         "selection": "#2a2c15",                          # olive-graphite lift (glow, wash-compliant)
     },
 )
+# --- CONCRETE / NAMED themes (2026-07-07, user asked for recognizable subjects, not abstractions):
+#     each is a real, nameable thing rendered in the terminal-black language (identity in the
+#     accents; canvas stays near-black). ---
+# Old Glory at night — a flag lit in the dark: navy field (structure), red stripe (the hero/focus),
+# white stars (bright text + counterpoint).
+PIPBOY_USA = Theme(
+    name="pipboy-usa",
+    primary="#3a63c8", secondary="#2b4a9a", accent="#ef3e46",
+    foreground="#c3ccea", background="#04050c", surface="#080a14", panel="#0c0f1e",
+    success="#eaf0ff", warning="#ffcf5c", error="#ff6d6d", dark=True,
+    variables={
+        "block-cursor-foreground": "#04050c", "block-cursor-background": "#ef3e46",
+        "footer-key-foreground": "#eaf0ff", "footer-description-foreground": "#c3ccea",
+        "border": "#2b4a9a", "border-strong": "#1a2f66",
+        "surface-deep": "#030409", "text-bright": "#eef1ff",
+        "accent-2": "#eef1ff", "tertiary": "#7f8fc8",    # white stars · steel-blue field
+        "selection": "#131a33",                          # navy-graphite lift
+    },
+)
+# TRON — the Grid: electric cyan circuitry (structure + focus) with neon-orange programs (Clu) as
+# the one counterpoint, on black glass. The cyan/orange pairing is what makes it read as TRON, not VFD.
+PIPBOY_TRON = Theme(
+    name="pipboy-tron",
+    primary="#1fb6d4", secondary="#158a9a", accent="#7df0ff",
+    foreground="#8fd8e6", background="#03080c", surface="#061318", panel="#08191f",
+    success="#b8fff2", warning="#ffcf5c", error="#ff6d6d", dark=True,
+    variables={
+        "block-cursor-foreground": "#03080c", "block-cursor-background": "#7df0ff",
+        "footer-key-foreground": "#b8fff2", "footer-description-foreground": "#8fd8e6",
+        "border": "#157a8a", "border-strong": "#0d4a56",
+        "surface-deep": "#020a0d", "text-bright": "#a8f0ff",
+        "accent-2": "#ff9a3d", "tertiary": "#4fb0c0",    # neon-orange programs (Clu) · grid teal
+        "selection": "#102a33",                          # cyan-graphite lift
+    },
+)
 EXTRA_THEMES = (PIPBOY, PIPBOY_AMBER, PIPBOY_VFD, PIPBOY_VAULT, PIPBOY_VIOLET,
                 PIPBOY_NIXIE, PIPBOY_NUKA, PIPBOY_GAMEBOY, PIPBOY_TUBE, PIPBOY_THERMAL,
-                PIPBOY_RADIUM)
+                PIPBOY_RADIUM, PIPBOY_USA, PIPBOY_TRON)
 
 # Cut themes -> nearest kept sibling, so a persisted stale choice migrates to a deliberate
 # near-equivalent instead of a hard reset to the default green. Applied in Studio.on_mount.

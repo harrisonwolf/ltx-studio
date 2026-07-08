@@ -58,6 +58,13 @@ async def main():
         before = (fv.region, ro.region, ip.region)
         app.query_one("#cfg").focus(); await pilot.pause()
         check("schematic title names the shown dial", "GUIDANCE" in str(fv.border_title), fv.border_title)
+        # theme change must re-tint the SHOWN schematic in place (it used to keep the old-palette markup
+        # until a dial was refocused). Assert the rendered markup actually changes color across themes.
+        _sch_a = repr(fv.render())                  # repr() carries the color spans; str() is plain text
+        app.theme = "pipboy-usa"; await pilot.pause()
+        _sch_b = repr(fv.render())
+        check("theme change re-renders the shown schematic", _sch_a != _sch_b, "schematic did not re-tint")
+        app.theme = "pipboy"; await pilot.pause()
         app.query_one("#name").focus(); await pilot.pause()
         check("sticky schematic keeps its label on visual-less focus", "GUIDANCE" in str(fv.border_title))
         check("rail: boxes unmoving across focus", before == (fv.region, ro.region, ip.region))

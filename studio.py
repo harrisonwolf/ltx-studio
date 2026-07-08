@@ -1411,6 +1411,9 @@ class Studio(App):
                 readout.set_palette(pal)
             self._qsig = None            # queue cards re-render in the new palette next tick
             self.update_est()            # plan line + readout strip refresh now
+            # the shown schematic caches its markup with the OLD palette -> re-render it in the new
+            # one (sticky-panel rule: re-tint the last dial illustrated, even if nothing is focused)
+            self._show_field_visual(getattr(self, "_visual_wid", None))
         except Exception:
             pass
 
@@ -1563,6 +1566,7 @@ class Studio(App):
             _t.no_wrap = True
             panel.update(_t)
             self._visual_set = True
+            self._visual_wid = wid          # remember it so a theme change can re-tint this schematic
             try:      # the border title always names WHICH dial is illustrated (sticky panels can
                 panel.border_title = "« SCHEMATIC — %s »" % _dial_title(wid)   # outlive their focus)
             except Exception:
