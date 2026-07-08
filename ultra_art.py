@@ -115,30 +115,37 @@ def render_sprite(spec, beat, palette=None, cols=None):
                 return _glow_color(x, bi, glow, span)
             return pal.get(ch)                          # unknown -> None (transparent) = safe
 
+        sglyphs = (spark or {}).get("glyphs") or "·"    # per-theme atmosphere glyph SET (varied)
+
         def sparkle(x, orow):                           # a twinkling atmosphere glyph in a transparent cell
-            if not spark or (x * 7 + orow * 13) % 11:
+            # scrambled hash (not a linear modulus) -> an organic scatter, not a visible grid; ~1/15 cells
+            if not spark or ((x * 2246822519 + orow * 3266489917) & 0x7fffffff) % 15:
                 return " "
             tw = 0.5 + 0.5 * math.sin(bf * 0.8 + x * 1.7 + orow * 2.3)
             if tw < 0.5:
                 return " "
+            g = sglyphs[(x * 3 + orow * 2) % len(sglyphs)]   # a given spot keeps its glyph; only brightness twinkles
             c = _lerp(spark.get("dim", "#333333"), spark.get("hot", "#ffffff"), (tw - 0.5) / 0.5)
-            return "[%s]%s[/%s]" % (c, spark.get("glyph", "·"), c)
+            return "[%s]%s[/%s]" % (c, g, c)
 
         if len(rows) % 2:
             rows.append("")
+        wide = cols if (cols and cols > span) else span   # fill the whole box so sparkles drift AROUND the sprite
+        pad = (wide - span) // 2                           # centered sprite; the surrounding void gets atmosphere
         out = []
         for i in range(0, len(rows), 2):
             orow = i // 2
             top, bot = rows[i], rows[i + 1]
             cells = []
-            for x in range(span):
-                tc = color(top[x] if x < len(top) else " ", x)
-                bc = color(bot[x] if x < len(bot) else " ", x)
-                cells.append(sparkle(x, orow) if (tc is None and bc is None) else _cell(tc, bc))
-            line = "".join(cells)
-            if cols and cols > span:
-                line = " " * ((cols - span) // 2) + line
-            out.append(line)
+            for X in range(wide):
+                x = X - pad
+                if 0 <= x < span:
+                    tc = color(top[x] if x < len(top) else " ", x)
+                    bc = color(bot[x] if x < len(bot) else " ", x)
+                    cells.append(sparkle(X, orow) if (tc is None and bc is None) else _cell(tc, bc))
+                else:
+                    cells.append(sparkle(X, orow))          # the space around the sprite -> drifting sparkles
+            out.append("".join(cells))
         return "\n".join(out)
     except Exception:
         return ""
@@ -275,7 +282,8 @@ DRAGON = {
         ".....rr........",
     ],
     "glow": {"chars": "G", "ramp": "GOLD", "mode": "sweep"},
-    "sparkle": {"glyph": "·", "hot": "#ffd24a", "dim": "#5a3a08"},   # gold embers drifting off the dragon
+    # gold embers/sparks spat off the dragon — a heavy firework spark, a four-point ember, a small mote
+    "sparkle": {"glyphs": "✸✦⋆", "hot": "#ffd24a", "dim": "#5a3a08"},
 }
 
 # T-800 skull (front view) — chrome steel with two red eye clusters that pulse in unison.
@@ -301,7 +309,8 @@ T800 = {
         "....kSkSk.....",
     ],
     "glow": {"chars": "R", "ramp": "RED", "mode": "pulse"},
-    "sparkle": {"glyph": "·", "hot": "#ff5a3a", "dim": "#3a1210"},   # red HUD data-specks around the skull
+    # red targeting-HUD marks scanning around the skull — a crosshair, a position reticle, a tick
+    "sparkle": {"glyphs": "+⌖⊹", "hot": "#ff5a3a", "dim": "#3a1210"},
 }
 
 
@@ -336,8 +345,9 @@ def _synthwave(beat, width=None):
                     if row[x] == " " and (x * 5 + y * 11) % 13 == 0:
                         tw = 0.5 + 0.5 * math.sin(bf * 0.7 + x * 1.3 + y * 2.1)
                         if tw > 0.55:
+                            g = "✧✩·"[(x + y) % 3]      # bright four-point, open five-point, distant speck
                             c = _lerp("#243a66", "#bfe8ff", (tw - 0.55) / 0.45)
-                            row[x] = "[%s]·[/%s]" % (c, c)
+                            row[x] = "[%s]%s[/%s]" % (c, g, c)
             else:                                       # ---- PERSPECTIVE GRID ----
                 d = y - hz + 1                          # depth 1..4
                 bright = ((d + scroll) % 3 == 0)        # one scrolling bright rule

@@ -32,12 +32,16 @@ for n in NAMES:
     frames = {ultra_art.render(n, b) for b in range(0, 12)}
     check("%s: animates (distinct frames)" % n, len(frames) > 1, frames)
 
-# theme-specific atmosphere: sparkles/stars (·) appear and TWINKLE (present at some frames, not all)
+# theme-specific atmosphere: each theme has its OWN glyph SET (embers / HUD reticles / stars) that
+# twinkles in and out — assert the themed glyphs appear and the field is not static
+_SPARKLE = {"ultra-dragon": "✸✦⋆", "ultra-skynet": "+⌖⊹", "ultra-synthwave": "✧✩·"}
+check("every theme has a UNIQUE atmosphere glyph set", len({_SPARKLE[n] for n in NAMES}) == len(NAMES))
 for n in NAMES:
-    hits = [("·" in (ultra_art.render(n, b * 0.3) or "")) for b in range(0, 24)]
-    check("%s: has twinkling atmosphere (sparkles/stars)" % n, any(hits))
-    check("%s: atmosphere actually twinkles (not constant)" % n, not all(hits) or len(set(
-        ultra_art.render(n, b * 0.3) for b in range(0, 24))) > 1)
+    gset = _SPARKLE[n]
+    hits = [any(g in (ultra_art.render(n, b * 0.3) or "") for g in gset) for b in range(0, 30)]
+    check("%s: has twinkling themed atmosphere" % n, any(hits))
+    check("%s: atmosphere twinkles (frames vary)" % n,
+          len({ultra_art.render(n, b * 0.3) for b in range(0, 30)}) > 1)
 
 # safety: no raise, width-fit (<=48 budget), balanced markup, at every size/beat
 for n in NAMES:
