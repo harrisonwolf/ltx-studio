@@ -5,6 +5,7 @@ import sys, os, re
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import ultra_art
 import studio_themes
+from rich.text import Text as _RT      # authoritative markup->plain (handles \[ escapes correctly)
 
 ok = True
 def check(name, cond, detail=""):
@@ -49,12 +50,36 @@ for n in NAMES:
     check("%s: fits 48-col budget (max=%d)" % (n, worst), worst <= 48)
     check("%s: balanced markup" % n, balanced)
 
+# ---- breakout effects: border-breathe glow() + INFO electron/wave electron_text() ----
+check("EFFECTS covers exactly the ultra tier", set(ultra_art.EFFECTS) == set(studio_themes.ULTRA_NAMES))
+check("glow: non-ultra -> None", ultra_art.glow("pipboy", 0) is None)
+_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+for n in NAMES:
+    cols = [ultra_art.glow(n, b) for b in range(0, 12)]
+    check("%s: glow valid hex" % n, all(_HEX.match(c or "") for c in cols), cols)
+    check("%s: glow breathes (distinct)" % n, len(set(cols)) > 1)
+
+_ITXT = "PIP-OS v8 :: JOB CONTROL\nConfigure a run and QUEUE it. cfg [1..7]"
+for n in NAMES:
+    eff = ultra_art.EFFECTS[n]
+    frames = [ultra_art.electron_text(_ITXT, b, eff["base"], eff["hot"], mode=eff["mode"]) for b in range(0, 10)]
+    check("%s: electron never None" % n, all(f is not None for f in frames))
+    check("%s: electron moves" % n, len({repr(f) for f in frames}) > 1)
+    check("%s: electron preserves plain text (bracket-safe)" % n,
+          all(_RT.from_markup(f).plain == _ITXT for f in frames))
+    check("%s: electron balanced markup" % n, all(f.count("[") == f.count("]") for f in frames))
+check("electron: pure (beat 4 reproducible)",
+      ultra_art.electron_text(_ITXT, 4, "#886644", "#ffeeaa") == ultra_art.electron_text(_ITXT, 4, "#886644", "#ffeeaa"))
+
 # freeze switch: STUDIO_NO_ANIM pins every theme to frame 0 (headless/reduce-motion)
 os.environ["STUDIO_NO_ANIM"] = "1"
 try:
     for n in NAMES:
         check("%s: STUDIO_NO_ANIM freezes to frame 0" % n,
               ultra_art.render(n, 9) == ultra_art.render(n, 0))
+    check("glow frozen under STUDIO_NO_ANIM", ultra_art.glow("ultra-dragon", 9) == ultra_art.glow("ultra-dragon", 0))
+    check("electron frozen under STUDIO_NO_ANIM",
+          ultra_art.electron_text(_ITXT, 9, "#886644", "#ffeeaa") == ultra_art.electron_text(_ITXT, 0, "#886644", "#ffeeaa"))
 finally:
     del os.environ["STUDIO_NO_ANIM"]
 

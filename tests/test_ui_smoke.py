@@ -130,8 +130,20 @@ async def main():
         dec = app.query_one("#ultradecor")
         check("ultra theme lights the decoration", dec.has_class("-on"))
         check("ultra decoration renders art", bool(str(dec.render()).strip()))
+        # breakout effects: borders breathe + INFO text runs an electron/wave. Drive two KNOWN beats
+        # (reset _ultra_phase so the phase-gated border actually repaints) -> deterministic, not flaky.
+        ipanel = app.query_one("#infopanel")
+        def _bord():
+            b = ipanel.styles.border
+            return str(b.top[1].hex) if b and b.top else None
+        app._beat = 0; app._ultra_phase = None; app._paint_ultra(); app._animate_ultra_info()
+        _b0, _info0 = _bord(), repr(app.query_one("#newinfo").render())
+        app._beat = 6; app._ultra_phase = None; app._paint_ultra(); app._animate_ultra_info()
+        check("ultra: info-panel border breathes across ticks", _b0 != _bord(), (_b0, _bord()))
+        check("ultra: INFO electron/wave moves across ticks", _info0 != repr(app.query_one("#newinfo").render()))
         app.theme = "pipboy"; await pilot.pause()
         check("normal theme hides the decoration", not dec.has_class("-on"))
+        check("ultra->normal restores a non-glow border", _bord() not in ("#FF2D95", "#FF6AB0", "#C42678"), _bord())
         # theme overhaul: $selection resolves for CSS (pipboy defines it; builtins fall back to panel),
         # and the selected queue card re-lights its OWN frame in heavy box-art vs rounded when not
         cssv = app.get_css_variables()

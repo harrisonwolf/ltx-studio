@@ -74,6 +74,11 @@ def _demark(s):
     Substitutes visually-equal-width parens, so card/panel width math stays exact."""
     return str(s).replace("[", "(").replace("]", ")")
 
+_MARKUP_RE = re.compile(r"\[/?[^\]]*\]")
+def _plain(s):
+    """Strip Rich markup tags -> visible text (used to re-animate the INFO panel over its base text)."""
+    return _MARKUP_RE.sub("", str(s))
+
 FP_PY = sys.executable
 AD_REPO = "/home/wolve/video_gen/AnimateDiff"
 AD_PY = os.path.join(AD_REPO, "venv/bin/python")
@@ -1178,6 +1183,7 @@ class Studio(App):
         self._gpu_str = ""
         self._ultra_theme = None         # active ultra-theme name, or None (drives the decoration box)
         self._ultra_phase = None         # last painted shimmer phase (repaint guard)
+        self._info_base = INFO           # markup an ultra theme's electron/wave animates over (see _set_info)
         self.consult = ConsultDaemon()
 
     def compose(self) -> ComposeResult:
@@ -1438,7 +1444,22 @@ class Studio(App):
             self._ultra_phase = None                     # force a repaint at the current beat
             if on:
                 decor.border_title = ultra_art.TITLES.get(name, "« ULTRA »")
-                self._paint_ultra()
+                self._paint_ultra()                      # sprite + start the border breathe
+                self._animate_ultra_info(force=True)     # light up the INFO text immediately
+            else:
+                # left the ultra tier -> restore the two glowed panels' borders to THIS theme's static
+                # colors (del styles.border does not revert to CSS cleanly) and un-animate the INFO panel
+                for wid, col in (("ultradecor", theme.accent or "#6dffab"),
+                                 ("infopanel", v.get("border") or theme.secondary or "#1f9a52")):
+                    try:
+                        self.query_one("#" + wid).styles.border = ("round", col)
+                    except Exception:
+                        pass
+                if getattr(self, "_info_base", None):
+                    try:
+                        self.query_one("#newinfo", Static).update(self._info_base)
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -1557,7 +1578,7 @@ class Studio(App):
     def on_descendant_focus(self):
         wid = getattr(self.focused, "id", None)
         if wid in HELP:
-            self.query_one("#newinfo", Static).update(HELP[wid])
+            self._set_info(HELP[wid])
         # STICKY panels: the schematic + help boxes are persistent dashboard fixtures, not
         # transient tooltips. Focusing a button/table/etc must NOT blank them — only a field
         # that HAS a visual replaces the schematic (_refresh_field_visual no-ops otherwise).
@@ -1588,6 +1609,56 @@ class Studio(App):
             if art:
                 t = Text.from_markup(art); t.no_wrap = True
                 decor.update(t)
+            # breakout #1 — the decoration + info panel BORDERS breathe through the theme's ramp (slow,
+            # phase-gated ~1s, so it reads as a glow, not a strobe). Reset in _on_theme_changed off-path.
+            col = ultra_art.glow(name, self._beat)
+            if col:
+                for wid in ("ultradecor", "infopanel"):
+                    try:
+                        self.query_one("#" + wid).styles.border = ("round", col)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    def _animate_ultra_info(self, force=False):
+        """Breakout #2 — run the active ultra theme's electron/wave over the INFO panel's base text,
+        every beat (so it visibly travels). No-op unless an ultra theme is active, the NEW RUN tab is
+        showing, and the panel still displays its base text (a transient one-off message is left
+        untouched — the animator only ever repaints `_info_base`). Deterministic in _beat; guarded."""
+        name = getattr(self, "_ultra_theme", None)
+        base = getattr(self, "_info_base", None)
+        if not name or ultra_art is None or not base:
+            return
+        try:
+            if self.query_one(TabbedContent).active != "tab-new":
+                return
+            w = self.query_one("#newinfo", Static)
+            plain = _plain(base)
+            if not force:      # only animate when the panel currently shows the base (not a transient msg)
+                try:
+                    if "".join(str(w.render()).split()) != "".join(plain.split()):
+                        return
+                except Exception:
+                    return
+            eff = ultra_art.EFFECTS.get(name) or {}
+            art = ultra_art.electron_text(plain, self._beat, eff.get("base", "#cccccc"),
+                                          eff.get("hot", "#ffffff"), mode=eff.get("mode", "electron"))
+            if art:
+                w.update(Text.from_markup(art))
+        except Exception:
+            pass
+
+    def _set_info(self, markup):
+        """Set the NEW RUN INFO panel AND remember the markup as the base an ultra theme animates over.
+        Transient one-off messages bypass this (call #newinfo.update directly) so the electron/wave
+        leaves them alone. For normal themes this is just a plain update."""
+        self._info_base = markup
+        try:
+            if getattr(self, "_ultra_theme", None) and ultra_art is not None:
+                self._animate_ultra_info(force=True)
+            else:
+                self.query_one("#newinfo", Static).update(markup)
         except Exception:
             pass
 
@@ -2309,7 +2380,8 @@ class Studio(App):
         self.query_one("#status", Static).update(
             f"  ▌ QUEUED {q}{_etastr}    ▶ {st}    ✓ DONE {d}    ▽ SUSP {s}     │     {self._gpu_str}{self._stall_note}")
         self.query_one("#statusmeter", Static).update(self._meter())
-        self._paint_ultra()             # animate the ultra-theme decoration (no-op unless one is active)
+        self._paint_ultra()             # ultra decoration sprite + breathing borders (phase-gated ~1s)
+        self._animate_ultra_info()      # ultra INFO-panel electron/wave (every beat, for visible travel)
         # queue + archive tables — rebuilt only when content changes (cursor stays put; no rubber-band)
         _dt = lambda ts: time.strftime("%m-%d %H:%M", time.localtime(ts)) if ts else "—"
         def _atitle(j):
@@ -3309,7 +3381,7 @@ class Studio(App):
         if b and b.startswith("i_"):        # ⓘ tooltip buttons -> show the dial's help in the focus #newinfo panel
             key = b[2:]
             if key in HELP:
-                self.query_one("#newinfo", Static).update(HELP[key])
+                self._set_info(HELP[key])
             self._show_field_visual(key)
             return
         if b == "queuebtn":

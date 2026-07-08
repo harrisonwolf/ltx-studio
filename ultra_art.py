@@ -16,6 +16,7 @@ Design rules (see plan agile-tumbling-valley):
 - The base UI stays minimal: this only paints when an ultra theme is active AND on an opted-in
   surface. Shimmer lives inside the sprite markup only, never on CSS borders.
 """
+import math
 import os
 
 SHIMMER_PERIOD = 2          # advance the shimmer/scroll one step every 2nd beat (~1.0s at 0.5s tick)
@@ -25,6 +26,17 @@ RAMPS = {
     "GOLD":  ["#b8860b", "#d9a520", "#ffd24a", "#ffe89a", "#fff3c4"],   # dragon gold
     "RED":   ["#7a1010", "#b01818", "#e02020", "#ff3030", "#ff6a4a"],   # T-800 eyes
     "SYNTH": ["#ffd24a", "#ff9a3d", "#ff6a5a", "#ff3d7a", "#ff2d95"],   # synthwave sun (top->bottom)
+    "SYNTHB": ["#7a2a7e", "#c42678", "#ff2d95", "#ff6ab0", "#5cffe0"],  # synthwave border breathe (magenta->cyan)
+}
+
+# Per-ultra-theme "breakout" effects (the flourish that escapes the decoration box, opt-in per theme):
+#   border = which RAMP the panel borders breathe through (triangle wave, ~1s)
+#   mode/base/hot = the INFO-panel running-light: "electron" (a bright comet + tail travels the text)
+#     or "wave" (a smooth traveling brightness wave). base = readable resting color, hot = the crest.
+EFFECTS = {
+    "ultra-dragon":    {"border": "GOLD",   "mode": "electron", "base": "#c9a24a", "hot": "#fff3c4"},
+    "ultra-skynet":    {"border": "RED",    "mode": "electron", "base": "#b0b8c0", "hot": "#ff6a5a"},
+    "ultra-synthwave": {"border": "SYNTHB", "mode": "wave",     "base": "#e0a0d0", "hot": "#5cffe0"},
 }
 
 _PAL = {}                   # optional theme palette (set by set_palette); reserved for future re-tint
@@ -116,6 +128,72 @@ def render_sprite(spec, beat, palette=None, cols=None):
         return "\n".join(out)
     except Exception:
         return ""
+
+
+# ---------------------------------------------------------------- breakout effects ----------------
+def _rgb(h):
+    h = h.lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+def _lerp(a, b, f):
+    """Linear RGB blend a->b at fraction f (clamped)."""
+    f = max(0.0, min(1.0, f))
+    ca, cb = _rgb(a), _rgb(b)
+    return "#%02x%02x%02x" % tuple(int(round(ca[i] + (cb[i] - ca[i]) * f)) for i in range(3))
+
+
+def glow(theme_name, beat):
+    """Breathing border color for an ultra theme at `beat` — a triangle wave up and down its border
+    RAMP (~1s/step). Returns a hex string, or None if `theme_name` has no ultra effect. Pure fn."""
+    eff = EFFECTS.get(theme_name)
+    if not eff:
+        return None
+    b = 0 if _frozen() else int(beat)
+    ramp = RAMPS.get(eff["border"], RAMPS["GOLD"])
+    n = len(ramp)
+    step = b // max(1, SHIMMER_PERIOD)
+    m = 2 * (n - 1) or 1
+    t = step % m
+    idx = t if t < n else m - t                       # triangle 0..n-1..0
+    return ramp[max(0, min(n - 1, idx))]
+
+
+def electron_text(text, beat, base, hot, mode="electron", speed=2, tail=6, wavelen=7):
+    """Overlay a moving running-light on plain `text` and return Rich markup. Two modes:
+      'electron' — a bright crest + fading tail travels through the (non-space) characters.
+      'wave'     — a smooth traveling brightness wave (several soft crests).
+    PURE fn of the integer beat (STUDIO_NO_ANIM -> frame 0). Spaces/newlines pass through uncolored;
+    '[' is escaped so arbitrary help text can't break Rich markup. Never raises (returns None)."""
+    try:
+        b = 0 if _frozen() else int(beat)
+        lines = str(text).split("\n")
+        positions = [(li, ci) for li, l in enumerate(lines) for ci, ch in enumerate(l) if ch != " "]
+        N = len(positions) or 1
+        gcol = {}
+        if mode == "wave":
+            phase = b * 0.6 * max(1, speed)
+            for gi, pos in enumerate(positions):
+                f = 0.5 + 0.5 * math.sin(gi / float(max(1, wavelen)) - phase)
+                gcol[pos] = _lerp(base, hot, f * f)       # square sharpens crests, keeps troughs calm
+        else:                                             # electron comet
+            crest = (b * max(1, speed)) % N
+            for gi, pos in enumerate(positions):
+                d = (crest - gi) % N
+                gcol[pos] = _lerp(base, hot, 1.0 - d / float(max(1, tail))) if d < tail else base
+        out = []
+        for li, l in enumerate(lines):
+            buf = []
+            for ci, ch in enumerate(l):
+                if ch == " ":
+                    buf.append(" ")
+                    continue
+                c = gcol.get((li, ci), base)
+                buf.append("[%s]%s[/%s]" % (c, ("\\[" if ch == "[" else ch), c))
+            out.append("".join(buf))
+        return "\n".join(out)
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------- sprite specs --------------------
