@@ -29,6 +29,14 @@ RAMPS = {
     "SYNTH": ["#ffd24a", "#ff9a3d", "#ff6a5a", "#ff3d7a", "#ff2d95"],   # synthwave sun (top->bottom)
     "SYNTHB": ["#7a2a7e", "#c42678", "#ff2d95", "#ff6ab0", "#5cffe0"],  # synthwave border breathe (magenta->cyan)
     "GREEN":  ["#0c3a16", "#177a2a", "#2eae3f", "#5bff77", "#b8ffc4"],  # matrix rain (deep -> bright green)
+    "TVB":    ["#2a323a", "#4a5560", "#7a8894", "#b8c4d0", "#f0f4f8"],  # broadcast steel -> white
+    "CHROME": ["#3a2e14", "#7a5a1a", "#c89a2a", "#e6c86a", "#fff0c0"],  # cassette chrome/tape-gold
+    "CYAN":   ["#0a3a44", "#127a8a", "#1fb6d4", "#5ce0f0", "#c4faff"],  # sonar / scope cyan
+    "ATOMIC": ["#0a2a44", "#154a7a", "#2a8ad0", "#6ac0ff", "#d0ecff"],  # kaiju atomic-blue
+    "AURORA": ["#0a3a2a", "#177a4a", "#2ec06a", "#6affaa", "#b8ffd8"],  # aurora green->mint
+    "VHSB":   ["#1a2a4a", "#2a4a8a", "#3f6ac8", "#7a9ae0", "#d0e0ff"],  # vhs blue
+    "AMBER2": ["#3a2606", "#7a4e12", "#c8901f", "#ffbf5c", "#ffe6b0"],  # blade-runner amber
+    "ORCHID": ["#3a1a44", "#7a3a8a", "#c060c8", "#ff9ad8", "#ffd0ec"],  # vaporwave pink/orchid
 }
 
 # Per-ultra-theme "breakout" effects (the flourish that escapes the decoration box, opt-in per theme):
@@ -50,6 +58,8 @@ EFFECTS = {
                         "bgpulse": ("#020402", "#06180a")},   # black -> faint green swell
     "ultra-arcade":    {"border": "GREEN",  "mode": "electron", "base": "#5ab86a", "hot": "#d8ffe0",
                         "bgpulse": ("#030a04", "#06180a")},   # black -> faint green swell
+    "ultra-tv":        {"border": "TVB",    "mode": "wave",     "base": "#9aa4ae", "hot": "#f0f4f8",
+                        "bgpulse": ("#05070a", "#0a0e18")},   # black -> faint cool broadcast swell
 }
 
 _PAL = {}                   # optional theme palette (set by set_palette); reserved for future re-tint
@@ -458,6 +468,41 @@ def _arcade(beat, width=None):
         return ""
 
 
+# ---------------------------------------------------------------- tv (SMPTE test card) ------------
+def _tv(beat, width=None):
+    """SMPTE color bars (7 bars + a lower pluge), a faint tracking line rolling up, and a brief STATIC
+    SNOW burst every ~15s. The bars are the flair; the theme canvas stays near-black. Pure fn of beat."""
+    try:
+        W = min(max(int(width or 32), 14), 44); H = 8
+        b = float(beat); bi = int(b)
+        grid = [[" "] * W for _ in range(H)]
+        if (bi % 30) < 2:                                # brief static burst
+            for y in range(H):
+                for x in range(W):
+                    h = (x * 92821 + y * 68917 + bi * 40503) & 0x1ff
+                    if h % 3 == 0:
+                        v = 0x38 + (h % 0x90)
+                        c = "#%02x%02x%02x" % (v, v, v)
+                        grid[y][x] = "[%s]%s[/%s]" % (c, "░▒▓"[(h >> 3) % 3], c)
+        else:
+            bars = ["#dcdcdc", "#c8c81a", "#1ac8c8", "#1ac01a", "#c81ac8", "#c81a1a", "#1a1ad0"]
+            low = ["#1a1ad0", "#0b0b0b", "#c81ac8", "#0b0b0b", "#1ac8c8", "#0b0b0b", "#dcdcdc"]
+            nb = len(bars)
+            for y in range(H):
+                pal = bars if y < H - 2 else low
+                for x in range(W):
+                    c = pal[min(nb - 1, x * nb // W)]
+                    grid[y][x] = "[%s]█[/%s]" % (c, c)
+            ty = bi % (H * 3)
+            if ty < H:
+                for x in range(W):
+                    if (x + bi) % 6 < 2:
+                        grid[ty][x] = "[#f0f4f8]▁[/#f0f4f8]"
+        return "\n".join("".join(r) for r in grid)
+    except Exception:
+        return ""
+
+
 # ---------------------------------------------------------------- public API ----------------------
 THEMES = {
     "ultra-dragon": lambda b, w=None: render_sprite(DRAGON, b, cols=w),
@@ -465,6 +510,7 @@ THEMES = {
     "ultra-synthwave": lambda b, w=None: _synthwave(b, width=w),
     "ultra-matrix": lambda b, w=None: _matrix_rain(b, width=w),
     "ultra-arcade": lambda b, w=None: _arcade(b, width=w),
+    "ultra-tv": lambda b, w=None: _tv(b, width=w),
 }
 TITLES = {
     "ultra-dragon": "「 年 · YEAR OF THE DRAGON 」",
@@ -472,6 +518,7 @@ TITLES = {
     "ultra-synthwave": "「 OUTRUN · SYNTHWAVE 」",
     "ultra-matrix": "「 THE MATRIX · 電 」",
     "ultra-arcade": "「 SPACE INVADERS · INSERT COIN 」",
+    "ultra-tv": "「 SMPTE · PLEASE STAND BY 」",
 }
 
 

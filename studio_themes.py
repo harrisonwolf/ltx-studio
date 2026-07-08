@@ -462,7 +462,22 @@ ULTRA_ARCADE = Theme(
         "selection": "#0e2c14",
     },
 )
-ULTRA_THEMES = (ULTRA_DRAGON, ULTRA_SKYNET, ULTRA_SYNTHWAVE, ULTRA_MATRIX, ULTRA_ARCADE)
+# SMPTE test card — broadcast steel-blue chrome, the white/red/cyan of the bars, "PLEASE STAND BY".
+ULTRA_TV = Theme(
+    name="ultra-tv",
+    primary="#6a7a8a", secondary="#4a5560", accent="#e6e6e6",
+    foreground="#b8c0c8", background="#05070a", surface="#0c1015", panel="#12171e",
+    success="#a8d8c0", warning="#d8c81a", error="#d02020", dark=True,
+    variables={
+        "block-cursor-foreground": "#05070a", "block-cursor-background": "#e6e6e6",
+        "footer-key-foreground": "#f0f4f8", "footer-description-foreground": "#b8c0c8",
+        "border": "#3a4652", "border-strong": "#232a32",
+        "surface-deep": "#030507", "text-bright": "#f0f4f8",
+        "accent-2": "#1ac8c8", "tertiary": "#7a828a",    # test-card cyan · broadcast grey
+        "selection": "#131820",
+    },
+)
+ULTRA_THEMES = (ULTRA_DRAGON, ULTRA_SKYNET, ULTRA_SYNTHWAVE, ULTRA_MATRIX, ULTRA_ARCADE, ULTRA_TV)
 # Single source of truth for "is this the animated tier" — used by the picker (sectioning) and by
 # studio._on_theme_changed (show/hide the decoration). ultra_art.THEMES maps the same names to art.
 ULTRA_NAMES = frozenset(t.name for t in ULTRA_THEMES)
