@@ -171,6 +171,9 @@ def _lerp(a, b, f):
     return "#%02x%02x%02x" % tuple(int(round(ca[i] + (cb[i] - ca[i]) * f)) for i in range(3))
 
 
+# TEXT_GLOW trims the running-light sweep speed (1.0 = original, 0.8 = 20% slower). It scales a
+# float phase, so the animation stays smooth at any speed (never choppier).
+TEXT_GLOW = 0.8
 def electron_text(text, beat, base, hot, mode="electron", speed=2, tail=6, wavelen=7, amp=1.0):
     """Overlay a moving running-light on plain `text` and return Rich markup. Two modes:
       'electron' — a bright crest + fading tail travels through the (non-space) characters.
@@ -185,12 +188,12 @@ def electron_text(text, beat, base, hot, mode="electron", speed=2, tail=6, wavel
         N = len(positions) or 1
         gcol = {}
         if mode == "wave":
-            phase = b * 0.6 * max(1, speed)
+            phase = b * 0.6 * TEXT_GLOW * max(1, speed)
             for gi, pos in enumerate(positions):
                 f = 0.5 + 0.5 * math.sin(gi / float(max(1, wavelen)) - phase)
                 gcol[pos] = _lerp(base, hot, f * f * amp)  # square sharpens crests; amp softens the swing
         else:                                             # electron comet
-            crest = (b * max(1, speed)) % N
+            crest = (b * TEXT_GLOW * max(1, speed)) % N
             for gi, pos in enumerate(positions):
                 d = (crest - gi) % N
                 gcol[pos] = _lerp(base, hot, 1.0 - d / float(max(1, tail))) if d < tail else base
@@ -556,11 +559,11 @@ def _vhs(beat, width=None):
         def put(y, x, ch, c):
             if 0 <= x < W and 0 <= y < H:
                 grid[y][x] = "[%s]%s[/%s]" % (c, ch, c)
-        if (bi // 8) % 2 == 0:                           # ● REC blinks ~1Hz (was ~7.5Hz)
+        if bi % 2 == 0:                           # ● REC blinks ~1Hz (was ~7.5Hz)
             put(0, 1, "●", red)
         for i, ch in enumerate("REC"):
             put(0, 3 + i, ch, white)
-        t = bi // 15                                     # REAL elapsed seconds at the 15 fps clock
+        t = int(b / 2.0)                                     # REAL elapsed seconds (_ultra_t advances 2 units/sec, so /2)
         ts = "SP %d:%02d" % (t // 60, t % 60)            # accurate recording clock (top-right)
         for i, ch in enumerate(ts):
             put(0, W - len(ts) - 1 + i, ch, white)
