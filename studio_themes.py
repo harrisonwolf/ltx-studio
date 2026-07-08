@@ -447,7 +447,22 @@ ULTRA_MATRIX = Theme(
         "selection": "#0e2c14",                          # rain-graphite lift
     },
 )
-ULTRA_THEMES = (ULTRA_DRAGON, ULTRA_SKYNET, ULTRA_SYNTHWAVE, ULTRA_MATRIX)
+# Space Invaders cabinet — phosphor-green invaders marching on black, a magenta UFO, INSERT COIN.
+ULTRA_ARCADE = Theme(
+    name="ultra-arcade",
+    primary="#33aa44", secondary="#237a30", accent="#ff2d95",
+    foreground="#7ae88a", background="#030a04", surface="#08160a", panel="#0c1e0f",
+    success="#b8ffc4", warning="#ffcf5c", error="#ff5c5c", dark=True,
+    variables={
+        "block-cursor-foreground": "#030a04", "block-cursor-background": "#ff2d95",
+        "footer-key-foreground": "#b8ffc4", "footer-description-foreground": "#7ae88a",
+        "border": "#1f7a2e", "border-strong": "#124a1c",
+        "surface-deep": "#020702", "text-bright": "#d8ffe0",
+        "accent-2": "#46e8ff", "tertiary": "#4a9a5a",    # magenta UFO hero · electric-cyan · dim invader green
+        "selection": "#0e2c14",
+    },
+)
+ULTRA_THEMES = (ULTRA_DRAGON, ULTRA_SKYNET, ULTRA_SYNTHWAVE, ULTRA_MATRIX, ULTRA_ARCADE)
 # Single source of truth for "is this the animated tier" — used by the picker (sectioning) and by
 # studio._on_theme_changed (show/hide the decoration). ultra_art.THEMES maps the same names to art.
 ULTRA_NAMES = frozenset(t.name for t in ULTRA_THEMES)

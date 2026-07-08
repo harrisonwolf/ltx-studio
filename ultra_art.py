@@ -48,6 +48,8 @@ EFFECTS = {
                         "bgpulse": ("#08040f", "#0c0618")},   # black -> faint indigo swell (unchanged)
     "ultra-matrix":    {"border": "GREEN",  "mode": "electron", "base": "#5ab86a", "hot": "#d8ffe0",
                         "bgpulse": ("#020402", "#06180a")},   # black -> faint green swell
+    "ultra-arcade":    {"border": "GREEN",  "mode": "electron", "base": "#5ab86a", "hot": "#d8ffe0",
+                        "bgpulse": ("#030a04", "#06180a")},   # black -> faint green swell
 }
 
 _PAL = {}                   # optional theme palette (set by set_palette); reserved for future re-tint
@@ -421,18 +423,55 @@ def _matrix_rain(beat, width=None):
         return ""
 
 
+# ---------------------------------------------------------------- arcade (space invaders) ---------
+def _arcade(beat, width=None):
+    """Space Invaders: 3 rows of little green invaders marching side-to-side (2-frame leg wiggle), a
+    magenta UFO streaking across the top now and then, a white cannon firing the odd bullet. Pure fn."""
+    try:
+        W = min(max(int(width or 32), 10), 44)
+        H = 8
+        b = float(beat); bi = int(b)
+        green, mag, white = "#39ff5a", "#ff2d95", "#eafff0"
+        grid = [[" "] * W for _ in range(H)]
+        def put(y, x, ch, c):
+            if 0 <= x < W and 0 <= y < H:
+                grid[y][x] = "[%s]%s[/%s]" % (c, ch, c)
+        m = bi % 8
+        dx = m if m <= 4 else 8 - m                     # triangle march 0..4..0
+        legs = "▙▟" if (bi % 2) else "▛▜"               # 2-frame leg wiggle
+        for ry in (1, 2, 3):
+            x = 2 + dx
+            while x + 1 < W - 1:
+                put(ry, x, legs[0], green); put(ry, x + 1, legs[1], green)
+                x += 4
+        ut = b % (W + 26)                               # UFO passes, with a long gap between
+        if ut < W + 2:
+            for i, ch in enumerate("◖▬◗"):
+                put(0, int(ut) - 2 + i, ch, mag)
+        cx = W // 2
+        for i, ch in enumerate("▟█▙"):
+            put(H - 1, cx - 1 + i, ch, white)
+        by = (H - 2) - (bi % (H + 4))                   # a lone bullet rising from the cannon
+        put(by, cx, "│", white)
+        return "\n".join("".join(r) for r in grid)
+    except Exception:
+        return ""
+
+
 # ---------------------------------------------------------------- public API ----------------------
 THEMES = {
     "ultra-dragon": lambda b, w=None: render_sprite(DRAGON, b, cols=w),
     "ultra-skynet": lambda b, w=None: render_sprite(T800, b, cols=w),
     "ultra-synthwave": lambda b, w=None: _synthwave(b, width=w),
     "ultra-matrix": lambda b, w=None: _matrix_rain(b, width=w),
+    "ultra-arcade": lambda b, w=None: _arcade(b, width=w),
 }
 TITLES = {
     "ultra-dragon": "「 年 · YEAR OF THE DRAGON 」",
     "ultra-skynet": "「 SKYNET · T-800 」",
     "ultra-synthwave": "「 OUTRUN · SYNTHWAVE 」",
     "ultra-matrix": "「 THE MATRIX · 電 」",
+    "ultra-arcade": "「 SPACE INVADERS · INSERT COIN 」",
 }
 
 
