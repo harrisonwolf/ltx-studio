@@ -32,17 +32,22 @@ RAMPS = {
 }
 
 # Per-ultra-theme "breakout" effects (the flourish that escapes the decoration box, opt-in per theme):
-#   border = which RAMP the panel borders breathe through (triangle wave, ~1s)
+#   border  = which RAMP the panel borders breathe through (triangle wave — independent; NOT touched here)
 #   mode/base/hot = the INFO-panel running-light: "electron" (a bright comet + tail travels the text)
 #     or "wave" (a smooth traveling brightness wave). base = readable resting color, hot = the crest.
+#   bgpulse = (base, peak) for the ever-so-subtle WHOLE-CANVAS breath — the ADDITIVE full-page touch.
+#     Every ultra theme opts in, each toward its OWN hue; base MUST equal the theme background, and the
+#     peak stays <=24/channel so even the swell is near-black. This is the ONLY strictly-additive full-
+#     page surface (canvas bg) — it changes nothing else (borders/decoration/topbar/electrons untouched).
 EFFECTS = {
-    "ultra-dragon":    {"border": "GOLD",   "mode": "electron", "base": "#c9a24a", "hot": "#fff3c4"},
-    "ultra-skynet":    {"border": "RED",    "mode": "electron", "base": "#b0b8c0", "hot": "#ff6a5a"},
-    # bgpulse (opt-in, synthwave only for now): an ever-so-subtle breathing of the WHOLE canvas
-    # background between (base, peak) — tiny amplitude, a hazy indigo swell that stays near-black.
+    "ultra-dragon":    {"border": "GOLD",   "mode": "electron", "base": "#c9a24a", "hot": "#fff3c4",
+                        "bgpulse": ("#0c0404", "#180a06")},   # black -> faint crimson-warm swell
+    "ultra-skynet":    {"border": "RED",    "mode": "electron", "base": "#b0b8c0", "hot": "#ff6a5a",
+                        "bgpulse": ("#060708", "#0e1218")},   # black -> faint cold steel-blue swell
     "ultra-synthwave": {"border": "SYNTHB", "mode": "wave", "base": "#e0a0d0", "hot": "#5cffe0",
-                        "bgpulse": ("#08040f", "#0c0618")},   # peak stays <=24/channel: near-black even at the top
-    "ultra-matrix":    {"border": "GREEN",  "mode": "electron", "base": "#5ab86a", "hot": "#d8ffe0"},
+                        "bgpulse": ("#08040f", "#0c0618")},   # black -> faint indigo swell (unchanged)
+    "ultra-matrix":    {"border": "GREEN",  "mode": "electron", "base": "#5ab86a", "hot": "#d8ffe0",
+                        "bgpulse": ("#020402", "#06180a")},   # black -> faint green swell
 }
 
 _PAL = {}                   # optional theme palette (set by set_palette); reserved for future re-tint

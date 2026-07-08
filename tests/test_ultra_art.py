@@ -64,14 +64,21 @@ for n in NAMES:
     check("%s: fits 48-col budget (max=%d)" % (n, worst), worst <= 48)
     check("%s: balanced markup" % n, balanced)
 
-# bg_pulse: ever-so-subtle canvas breathing (opt-in per theme; synthwave only). Moves, stays
-# near-black even at peak (<=24/channel), None for themes that don't opt in, frozen under NO_ANIM.
+# bg_pulse: the strictly-ADDITIVE full-page touch — EVERY ultra theme breathes its whole canvas in its
+# own hue; base == theme bg; peak stays near-black (<=24/channel); non-ultra -> None; frozen under NO_ANIM.
+# (Borders are NOT involved — they keep their own independent triangle breathe; nothing existing changed.)
 def _maxch(h):
     h = h.lstrip("#"); return max(int(h[i:i + 2], 16) for i in (0, 2, 4))
+_TB = {"ultra-dragon": studio_themes.ULTRA_DRAGON, "ultra-skynet": studio_themes.ULTRA_SKYNET,
+       "ultra-synthwave": studio_themes.ULTRA_SYNTHWAVE, "ultra-matrix": studio_themes.ULTRA_MATRIX}
+for n in NAMES:
+    eff = ultra_art.EFFECTS[n]
+    check("%s: opts into the canvas breath" % n, "bgpulse" in eff)
+    check("%s: canvas base == theme bg" % n, eff["bgpulse"][0].lower() == _TB[n].background.lower())
+    check("%s: canvas peak near-black (<=24/ch)" % n, _maxch(eff["bgpulse"][1]) <= 24)
 _bp = [ultra_art.bg_pulse("ultra-synthwave", b * 0.5) for b in range(0, 40)]
-check("bg_pulse: synthwave opts in + moves", all(_bp) and len(set(_bp)) > 3)
-check("bg_pulse: peak stays near-black (<=24/ch)", max(_maxch(v) for v in _bp) <= 24)
-check("bg_pulse: non-opt-in theme -> None", ultra_art.bg_pulse("ultra-dragon", 3) is None)
+check("bg_pulse: moves", all(_bp) and len(set(_bp)) > 3)
+check("bg_pulse: non-ultra theme -> None", ultra_art.bg_pulse("pipboy", 3) is None)
 os.environ["STUDIO_NO_ANIM"] = "1"
 try:
     check("bg_pulse: frozen under STUDIO_NO_ANIM",
