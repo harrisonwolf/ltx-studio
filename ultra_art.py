@@ -72,6 +72,8 @@ EFFECTS = {
                         "bgpulse": ("#030f0a", "#06180c")},   # black -> faint aurora-green swell
     "ultra-vhs":       {"border": "VHSB",   "mode": "electron", "base": "#7a8ab8", "hot": "#eef2f8",
                         "bgpulse": ("#05070e", "#080b18")},   # black -> faint vhs-blue swell
+    "ultra-bladerunner": {"border": "AMBER2", "mode": "electron", "base": "#c89a5a", "hot": "#ffe0a0",
+                        "bgpulse": ("#060810", "#0c0e18")},   # black -> faint amber/teal swell
 }
 
 _PAL = {}                   # optional theme palette (set by set_palette); reserved for future re-tint
@@ -736,6 +738,38 @@ def _vhs(beat, width=None):
         return ""
 
 
+# ---------------------------------------------------------------- bladerunner (off-world) ---------
+def _bladerunner(beat, width=None):
+    """Off-world rain city: a dark skyline with amber/teal neon signs flickering on the towers, heavy
+    diagonal rain falling, and a faint searchlight beam sweeping the sky. Pure fn of beat."""
+    try:
+        W = min(max(int(width or 32), 20), 44); H = 8
+        b = float(beat)
+        dark, amber, teal, rain = "#0e1420", "#ffae3a", "#2fd0d0", "#3a5a6a"
+        grid = [[" "] * W for _ in range(H)]
+        def put(y, x, ch, c):
+            if 0 <= x < W and 0 <= y < H:
+                grid[y][x] = "[%s]%s[/%s]" % (c, ch, c)
+        sx = int(round((0.5 + 0.5 * math.sin(b * 0.15)) * (W - 1)))   # searchlight sweep
+        for y in range(0, H - 2):
+            put(y, sx, "│", _lerp("#0c1420", "#5a7a8a", 0.45))
+        for x in range(W):                              # skyline towers + flickering neon signs
+            ht = 1 + ((x * 53 + 11) % 4)
+            for k in range(ht):
+                put(H - 1 - k, x, "█", dark)
+            if (x * 17) % 9 == 0:
+                flick = 0.55 + 0.45 * math.sin(b * 0.9 + x)
+                put(H - ht, x, "▀", _lerp("#141008", amber if (x // 9) % 2 == 0 else teal, flick))
+        for i in range(W // 2):                         # diagonal rain
+            col = (i * 7 + 3) % W
+            y = int((b * (1.1 + ((i * 13) % 4) * 0.35) + i * 3) % (H + 3)) - 1
+            if 0 <= y < H - 1 and grid[y][col] == " ":
+                put(y, col, "╱", _lerp(rain, teal, 0.35))
+        return "\n".join("".join(r) for r in grid)
+    except Exception:
+        return ""
+
+
 # ---------------------------------------------------------------- public API ----------------------
 THEMES = {
     "ultra-dragon": lambda b, w=None: render_sprite(DRAGON, b, cols=w),
@@ -750,6 +784,7 @@ THEMES = {
     "ultra-kaiju": lambda b, w=None: _kaiju(b, width=w),
     "ultra-aurora": lambda b, w=None: _aurora(b, width=w),
     "ultra-vhs": lambda b, w=None: _vhs(b, width=w),
+    "ultra-bladerunner": lambda b, w=None: _bladerunner(b, width=w),
 }
 TITLES = {
     "ultra-dragon": "「 年 · YEAR OF THE DRAGON 」",
@@ -764,6 +799,7 @@ TITLES = {
     "ultra-kaiju": "「 怪獣 · TOKYO ALERT 」",
     "ultra-aurora": "「 AURORA · 69°N 」",
     "ultra-vhs": "「 ● REC · SP 」",
+    "ultra-bladerunner": "「 OFF-WORLD · 2019 」",
 }
 
 

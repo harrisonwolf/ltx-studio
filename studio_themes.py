@@ -567,8 +567,24 @@ ULTRA_VHS = Theme(
         "selection": "#1a2648",                          # vhs-blue lift (> panel)
     },
 )
+# Off-world rain city — amber neon + teal on a rain-slicked night. 2019.
+ULTRA_BLADERUNNER = Theme(
+    name="ultra-bladerunner",
+    primary="#a87a30", secondary="#705018", accent="#ffae3a",
+    foreground="#c0a878", background="#060810", surface="#0e1218", panel="#161a22",
+    success="#7ad0c0", warning="#ffae3a", error="#ff6d6d", dark=True,
+    variables={
+        "block-cursor-foreground": "#060810", "block-cursor-background": "#ffae3a",
+        "footer-key-foreground": "#ffe0a0", "footer-description-foreground": "#c0a878",
+        "border": "#6a5220", "border-strong": "#40320f",
+        "surface-deep": "#030509", "text-bright": "#ffe0a0",
+        "accent-2": "#2fd0d0", "tertiary": "#8a7a58",    # teal neon · rain-worn brass
+        "selection": "#1a2230",                          # rain-blue lift (> panel)
+    },
+)
 ULTRA_THEMES = (ULTRA_DRAGON, ULTRA_SKYNET, ULTRA_SYNTHWAVE, ULTRA_MATRIX, ULTRA_ARCADE, ULTRA_TV,
-                ULTRA_CASSETTE, ULTRA_SONAR, ULTRA_SCOPE, ULTRA_KAIJU, ULTRA_AURORA, ULTRA_VHS)
+                ULTRA_CASSETTE, ULTRA_SONAR, ULTRA_SCOPE, ULTRA_KAIJU, ULTRA_AURORA, ULTRA_VHS,
+                ULTRA_BLADERUNNER)
 # Single source of truth for "is this the animated tier" — used by the picker (sectioning) and by
 # studio._on_theme_changed (show/hide the decoration). ultra_art.THEMES maps the same names to art.
 ULTRA_NAMES = frozenset(t.name for t in ULTRA_THEMES)
