@@ -126,10 +126,11 @@ def render_sprite(spec, beat, palette=None, cols=None):
         sglyphs = (spark or {}).get("glyphs") or "·"    # per-theme atmosphere glyph SET (varied)
 
         def sparkle(x, orow):                           # a twinkling atmosphere glyph in a transparent cell
-            # scrambled hash (not a linear modulus) -> an organic scatter, not a visible grid; ~1/15 cells
-            if not spark or ((x * 2246822519 + orow * 3266489917) & 0x7fffffff) % 15:
+            # scrambled hash (not a linear modulus) -> an organic scatter, not a grid. ~1/26 cells (sparse
+            # -> calm, not busy); each glyph pulses SLOWLY (~10s) and staggered -> soothing, not blinking.
+            if not spark or ((x * 2246822519 + orow * 3266489917) & 0x7fffffff) % 26:
                 return " "
-            tw = 0.5 + 0.5 * math.sin(bf * 0.8 + x * 1.7 + orow * 2.3)
+            tw = 0.5 + 0.5 * math.sin(bf * 0.3 + x * 1.7 + orow * 2.3)
             if tw < 0.5:
                 return " "
             g = sglyphs[(x * 3 + orow * 2) % len(sglyphs)]   # a given spot keeps its glyph; only brightness twinkles
@@ -360,9 +361,9 @@ def _synthwave(beat, width=None):
                     dx = x - cx
                     if dx * dx + dy * dy * 3 <= (r * r + r) * 3:
                         row[x] = "[%s]█[/%s]" % (col, col)
-                for x in range(W):                      # twinkling stars in the empty night sky
-                    if row[x] == " " and (x * 5 + y * 11) % 13 == 0:
-                        tw = 0.5 + 0.5 * math.sin(bf * 0.7 + x * 1.3 + y * 2.1)
+                for x in range(W):                      # a few slow, soothing stars in the empty night sky
+                    if row[x] == " " and (x * 5 + y * 11) % 21 == 0:
+                        tw = 0.5 + 0.5 * math.sin(bf * 0.3 + x * 1.3 + y * 2.1)
                         if tw > 0.55:
                             g = "✧✩·"[(x + y) % 3]      # bright four-point, open five-point, distant speck
                             c = _lerp("#243a66", "#bfe8ff", (tw - 0.55) / 0.45)
