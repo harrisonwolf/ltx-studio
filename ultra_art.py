@@ -145,28 +145,35 @@ def _lerp(a, b, f):
 
 def glow(theme_name, beat):
     """Breathing border color for an ultra theme at `beat` — a triangle wave up and down its border
-    RAMP (~1s/step). Returns a hex string, or None if `theme_name` has no ultra effect. Pure fn."""
+    RAMP, INTERPOLATED continuously between ramp stops so a fast (float) clock breathes smoothly
+    instead of snapping through 5 colors. Returns a hex string, or None if not an ultra theme. Pure
+    fn of a float beat (STUDIO_NO_ANIM -> frame 0)."""
     eff = EFFECTS.get(theme_name)
     if not eff:
         return None
-    b = 0 if _frozen() else int(beat)
+    b = 0.0 if _frozen() else float(beat)
     ramp = RAMPS.get(eff["border"], RAMPS["GOLD"])
     n = len(ramp)
-    step = b // max(1, SHIMMER_PERIOD)
-    m = 2 * (n - 1) or 1
-    t = step % m
-    idx = t if t < n else m - t                       # triangle 0..n-1..0
-    return ramp[max(0, min(n - 1, idx))]
+    if n == 1:
+        return ramp[0]
+    u = b / max(1, SHIMMER_PERIOD)                     # continuous phase
+    m = 2 * (n - 1)                                    # triangle period
+    t = u % m
+    pos = t if t <= (n - 1) else (m - t)              # continuous triangle 0..n-1..0
+    lo = int(pos)
+    hi = min(n - 1, lo + 1)
+    return _lerp(ramp[lo], ramp[hi], pos - lo)
 
 
 def electron_text(text, beat, base, hot, mode="electron", speed=2, tail=6, wavelen=7):
     """Overlay a moving running-light on plain `text` and return Rich markup. Two modes:
       'electron' — a bright crest + fading tail travels through the (non-space) characters.
       'wave'     — a smooth traveling brightness wave (several soft crests).
-    PURE fn of the integer beat (STUDIO_NO_ANIM -> frame 0). Spaces/newlines pass through uncolored;
-    '[' is escaped so arbitrary help text can't break Rich markup. Never raises (returns None)."""
+    PURE fn of a FLOAT beat (STUDIO_NO_ANIM -> frame 0) — a fine-grained clock makes the wave/comet
+    travel smoothly. Spaces/newlines pass through uncolored; '[' is escaped so arbitrary help text
+    can't break Rich markup. Never raises (returns None)."""
     try:
-        b = 0 if _frozen() else int(beat)
+        b = 0.0 if _frozen() else float(beat)
         lines = str(text).split("\n")
         positions = [(li, ci) for li, l in enumerate(lines) for ci, ch in enumerate(l) if ch != " "]
         N = len(positions) or 1

@@ -1182,7 +1182,9 @@ class Studio(App):
         self._beat = 0
         self._gpu_str = ""
         self._ultra_theme = None         # active ultra-theme name, or None (drives the decoration box)
-        self._ultra_phase = None         # last painted shimmer phase (repaint guard)
+        self._ultra_phase = None         # last painted SPRITE frame (coarse repaint guard)
+        self._ultra_t = 0.0              # continuous animation clock (float; advanced by the fast timer)
+        self._ultra_timer = None         # dedicated ~15fps timer, live ONLY while an ultra theme shows
         self._info_base = INFO           # markup an ultra theme's electron/wave animates over (see _set_info)
         self.consult = ConsultDaemon()
 
@@ -1446,10 +1448,24 @@ class Studio(App):
             self._ultra_phase = None                     # force a repaint at the current beat
             if on:
                 decor.border_title = ultra_art.TITLES.get(name, "« ULTRA »")
-                self._paint_ultra()                      # sprite + start the rail border breathe
+                self._paint_ultra()                      # first frame: sprite + rail border breathe
                 self._animate_ultra_info(force=True)     # light up the INFO text immediately
-                self._animate_ultra_topbar()             # start the topbar ambient wave
+                self._animate_ultra_topbar()             # topbar ambient wave
+                # spin up the dedicated ~15fps animation timer (skip under reduce-motion/tests)
+                if not os.environ.get("STUDIO_NO_ANIM"):
+                    try:
+                        if self._ultra_timer is None:
+                            self._ultra_timer = self.set_interval(1.0 / self._ULTRA_FPS, self._ultra_frame)
+                        else:
+                            self._ultra_timer.resume()
+                    except Exception:
+                        pass
             else:
+                if self._ultra_timer is not None:        # leaving the ultra tier -> stop the fast timer
+                    try:
+                        self._ultra_timer.pause()
+                    except Exception:
+                        pass
                 # left the ultra tier -> restore every glowed rail border to THIS theme's static color
                 # (del styles.border does not revert to CSS cleanly), un-animate the INFO + topbar
                 _slotcol = {"primary": theme.primary or "#2fae5f",
@@ -1591,20 +1607,47 @@ class Studio(App):
         # that HAS a visual replaces the schematic (_refresh_field_visual no-ops otherwise).
         self._refresh_field_visual(wid)
 
+    _ULTRA_FPS = 15                  # dedicated ultra-animation frame rate (smooth; only while ultra active)
+
+    def _ultra_frame(self):
+        """The ~15fps ultra animation frame (its own timer, live only while an ultra theme shows).
+        Advances the continuous clock and repaints the SMOOTH surfaces every frame — topbar wave (all
+        tabs), rail-border breathe + INFO electron/wave (NEW RUN tab). The pixel sprite self-gates to
+        a coarser rate inside _paint_ultra. Fully guarded; never breaks."""
+        name = getattr(self, "_ultra_theme", None)
+        if not name or ultra_art is None:
+            return
+        self._ultra_t += 2.0 / max(1, self._ULTRA_FPS)   # 2 units/sec (unchanged speed), fine steps
+        try:
+            self._animate_ultra_topbar()
+            if self.query_one(TabbedContent).active == "tab-new":
+                self._paint_ultra()
+                self._animate_ultra_info()
+        except Exception:
+            pass
+
     def _paint_ultra(self):
-        """Repaint the ultra-theme pixel decoration. No-op unless an ultra theme is active AND the
-        NEW RUN tab is showing; skips when the shimmer phase hasn't advanced (~1 paint/sec). The
-        frame is deterministic (= self._beat); fully guarded so it can never break the tick."""
+        """Rail-border breathe (EVERY frame — smooth) + the pixel decoration (repainted only when its
+        coarse integer frame advances, ~2/s — it's 8-bit, no benefit from higher). No-op unless an
+        ultra theme is active AND the NEW RUN tab is showing. Deterministic in _ultra_t; guarded."""
         name = getattr(self, "_ultra_theme", None)
         if not name or ultra_art is None:
             return
         try:
             if self.query_one(TabbedContent).active != "tab-new":
                 return
+            # the whole rail's BORDERS breathe together (continuous interpolated glow -> smooth)
+            col = ultra_art.glow(name, self._ultra_t)
+            if col:
+                for wid, _slot in self._ULTRA_BORDERS:
+                    try:
+                        self.query_one("#" + wid).styles.border = ("round", col)
+                    except Exception:
+                        pass
             decor = self.query_one("#ultradecor", Static)
             if not decor.has_class("-on"):
                 return
-            phase = self._beat // max(1, getattr(ultra_art, "SHIMMER_PERIOD", 2))
+            phase = int(self._ultra_t)                    # sprite repaints ~2/s (pixel art stays chunky)
             if phase == self._ultra_phase:
                 return
             self._ultra_phase = phase
@@ -1612,19 +1655,10 @@ class Studio(App):
                 w = int(decor.content_size.width)
             except Exception:
                 w = 0
-            art = ultra_art.render(name, self._beat, width=(w if w >= 8 else None))
+            art = ultra_art.render(name, self._ultra_t, width=(w if w >= 8 else None))
             if art:
                 t = Text.from_markup(art); t.no_wrap = True
                 decor.update(t)
-            # breakout #1 — the whole NEW RUN rail's BORDERS breathe together through the theme's ramp
-            # (slow, phase-gated ~1s -> a gentle glow, not a strobe). Reset in _on_theme_changed off-path.
-            col = ultra_art.glow(name, self._beat)
-            if col:
-                for wid, _slot in self._ULTRA_BORDERS:
-                    try:
-                        self.query_one("#" + wid).styles.border = ("round", col)
-                    except Exception:
-                        pass
         except Exception:
             pass
 
@@ -1636,13 +1670,13 @@ class Studio(App):
     def _animate_ultra_topbar(self):
         """Gentle ambient life for a second-monitor idle: a slow soft wave drifts through the TOPBAR
         banner whenever an ultra theme is active (every tab — the topbar is always visible). Kept
-        deliberately quiet (slow, long wavelength). Deterministic in _beat; STUDIO_NO_ANIM freezes it."""
+        deliberately quiet (slow, long wavelength). Deterministic in _ultra_t; STUDIO_NO_ANIM freezes it."""
         name = getattr(self, "_ultra_theme", None)
         if not name or ultra_art is None:
             return
         try:
             eff = ultra_art.EFFECTS.get(name) or {}
-            art = ultra_art.electron_text(self.TOPBAR_TITLE, self._beat, eff.get("base", "#cccccc"),
+            art = ultra_art.electron_text(self.TOPBAR_TITLE, self._ultra_t, eff.get("base", "#cccccc"),
                                           eff.get("hot", "#ffffff"), mode="wave", speed=1, wavelen=14)
             if art:
                 self.query_one("#topbartitle", Static).update(Text.from_markup(art))
@@ -1670,7 +1704,7 @@ class Studio(App):
                 except Exception:
                     return
             eff = ultra_art.EFFECTS.get(name) or {}
-            art = ultra_art.electron_text(plain, self._beat, eff.get("base", "#cccccc"),
+            art = ultra_art.electron_text(plain, self._ultra_t, eff.get("base", "#cccccc"),
                                           eff.get("hot", "#ffffff"), mode=eff.get("mode", "electron"))
             if art:
                 w.update(Text.from_markup(art))
@@ -2408,9 +2442,7 @@ class Studio(App):
         self.query_one("#status", Static).update(
             f"  ▌ QUEUED {q}{_etastr}    ▶ {st}    ✓ DONE {d}    ▽ SUSP {s}     │     {self._gpu_str}{self._stall_note}")
         self.query_one("#statusmeter", Static).update(self._meter())
-        self._paint_ultra()             # ultra decoration sprite + breathing rail borders (phase-gated ~1s)
-        self._animate_ultra_info()      # ultra INFO-panel electron/wave (every beat, for visible travel)
-        self._animate_ultra_topbar()    # ultra TOPBAR gentle ambient wave (every beat, all tabs)
+        # (ultra-theme animation runs on its OWN ~15fps timer — see _ultra_frame — not this 0.5s tick)
         # queue + archive tables — rebuilt only when content changes (cursor stays put; no rubber-band)
         _dt = lambda ts: time.strftime("%m-%d %H:%M", time.localtime(ts)) if ts else "—"
         def _atitle(j):
