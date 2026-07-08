@@ -20,7 +20,7 @@ import math
 import os
 
 SHIMMER_PERIOD = 2          # sprite shimmer/scroll cadence (pixel art — stays chunky)
-BREATH_W = 0.16            # shared page-breath angular freq: borders + canvas swell on ONE sine (~20s cycle)
+GLOW_PERIOD = 5             # border-breathe divisor: bigger = slower, more gradual swell (~20s full cycle)
 
 # ordered emission ramps: deep -> hot. sweep/pulse index into these.
 RAMPS = {
@@ -32,20 +32,17 @@ RAMPS = {
 }
 
 # Per-ultra-theme "breakout" effects (the flourish that escapes the decoration box, opt-in per theme):
-#   border  = which RAMP the panel borders breathe through (on the SHARED page-breath sine)
+#   border = which RAMP the panel borders breathe through (triangle wave, ~1s)
 #   mode/base/hot = the INFO-panel running-light: "electron" (a bright comet + tail travels the text)
 #     or "wave" (a smooth traveling brightness wave). base = readable resting color, hot = the crest.
-#   bgpulse = (base, peak) for the WHOLE-CANVAS breath, IN SYNC with the border glow (one page-heartbeat).
-#     base MUST equal the theme's background; peak stays <=24/channel so even the swell is near-black.
 EFFECTS = {
-    "ultra-dragon":    {"border": "GOLD",   "mode": "electron", "base": "#c9a24a", "hot": "#fff3c4",
-                        "bgpulse": ("#0c0404", "#180a06")},   # black -> faint crimson-warm swell
-    "ultra-skynet":    {"border": "RED",    "mode": "electron", "base": "#b0b8c0", "hot": "#ff6a5a",
-                        "bgpulse": ("#060708", "#0e1218")},   # black -> faint cold steel-blue swell
+    "ultra-dragon":    {"border": "GOLD",   "mode": "electron", "base": "#c9a24a", "hot": "#fff3c4"},
+    "ultra-skynet":    {"border": "RED",    "mode": "electron", "base": "#b0b8c0", "hot": "#ff6a5a"},
+    # bgpulse (opt-in, synthwave only for now): an ever-so-subtle breathing of the WHOLE canvas
+    # background between (base, peak) — tiny amplitude, a hazy indigo swell that stays near-black.
     "ultra-synthwave": {"border": "SYNTHB", "mode": "wave", "base": "#e0a0d0", "hot": "#5cffe0",
-                        "bgpulse": ("#08040f", "#0c0618")},   # black -> faint indigo swell
-    "ultra-matrix":    {"border": "GREEN",  "mode": "electron", "base": "#5ab86a", "hot": "#d8ffe0",
-                        "bgpulse": ("#020402", "#06180a")},   # black -> faint green swell
+                        "bgpulse": ("#08040f", "#0c0618")},   # peak stays <=24/channel: near-black even at the top
+    "ultra-matrix":    {"border": "GREEN",  "mode": "electron", "base": "#5ab86a", "hot": "#d8ffe0"},
 }
 
 _PAL = {}                   # optional theme palette (set by set_palette); reserved for future re-tint
@@ -186,8 +183,10 @@ def glow(theme_name, beat):
     n = len(ramp)
     if n == 1:
         return ramp[0]
-    f = 0.5 + 0.5 * math.sin(b * BREATH_W)             # THE shared page-breath phase (== bg_pulse)
-    pos = f * (n - 1)                                  # dim(0) -> bright(n-1) -> dim, smoothly
+    u = b / max(1, GLOW_PERIOD)                        # continuous phase (GLOW_PERIOD slows the swell)
+    m = 2 * (n - 1)                                    # triangle period
+    t = u % m
+    pos = t if t <= (n - 1) else (m - t)              # continuous triangle 0..n-1..0
     lo = int(pos)
     hi = min(n - 1, lo + 1)
     return _lerp(ramp[lo], ramp[hi], pos - lo)
@@ -202,7 +201,7 @@ def bg_pulse(theme_name, beat):
         return None
     base, peak = eff["bgpulse"]
     b = 0.0 if _frozen() else float(beat)
-    f = 0.5 + 0.5 * math.sin(b * BREATH_W)             # SAME phase as the border glow -> whole page in unison
+    f = 0.5 + 0.5 * math.sin(b * 0.2)                  # ~16s swell (b is 2 units/sec)
     return _lerp(base, peak, f)
 
 
