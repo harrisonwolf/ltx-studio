@@ -64,6 +64,8 @@ EFFECTS = {
                         "bgpulse": ("#0a0803", "#180f04")},   # black -> faint warm chrome swell
     "ultra-sonar":     {"border": "CYAN",   "mode": "wave",     "base": "#4ac0d0", "hot": "#c4faff",
                         "bgpulse": ("#020a0c", "#041418")},   # black -> faint abyssal-cyan swell
+    "ultra-scope":     {"border": "GREEN",  "mode": "wave",     "base": "#4ac0a0", "hot": "#c4ffe8",
+                        "bgpulse": ("#020c08", "#061808")},   # black -> faint phosphor-green swell
 }
 
 _PAL = {}                   # optional theme palette (set by set_palette); reserved for future re-tint
@@ -580,6 +582,43 @@ def _sonar(beat, width=None):
         return ""
 
 
+# ---------------------------------------------------------------- scope (oscilloscope) ------------
+def _scope(beat, width=None):
+    """An oscilloscope: a live waveform (two summed sines) scrolling across a faint graticule, the
+    leading edge bright, connected vertically so it reads as a continuous trace. Pure fn of beat."""
+    try:
+        W = min(max(int(width or 32), 16), 44); H = 8
+        b = float(beat)
+        grid_c, trace, hot = "#0e4450", "#3fd0a0", "#c4ffe8"
+        cy = (H - 1) / 2.0
+        A = cy - 0.5
+        grid = [[" "] * W for _ in range(H)]
+        midy = int(round(cy))
+        for x in range(W):                               # faint graticule
+            if x % 6 == 3:
+                for y in range(H):
+                    grid[y][x] = "[%s]·[/%s]" % (grid_c, grid_c)
+            if grid[midy][x] == " ":
+                grid[midy][x] = "[%s]·[/%s]" % (grid_c, grid_c)
+        ph = b * 0.6
+        prev = None
+        for x in range(W):                               # scrolling waveform
+            t = x * 0.5
+            v = 0.7 * math.sin(t - ph) + 0.3 * math.sin(t * 2.3 - ph * 1.4)
+            yi = max(0, min(H - 1, int(round(cy - v * A))))
+            if prev is None:
+                prev = yi
+            lo, hi = sorted((prev, yi))
+            for yy in range(lo, hi + 1):
+                bright = (yy == yi)
+                c = hot if bright else trace
+                grid[yy][x] = "[%s]%s[/%s]" % (c, "●" if bright else "│", c)
+            prev = yi
+        return "\n".join("".join(r) for r in grid)
+    except Exception:
+        return ""
+
+
 # ---------------------------------------------------------------- public API ----------------------
 THEMES = {
     "ultra-dragon": lambda b, w=None: render_sprite(DRAGON, b, cols=w),
@@ -590,6 +629,7 @@ THEMES = {
     "ultra-tv": lambda b, w=None: _tv(b, width=w),
     "ultra-cassette": lambda b, w=None: _cassette(b, width=w),
     "ultra-sonar": lambda b, w=None: _sonar(b, width=w),
+    "ultra-scope": lambda b, w=None: _scope(b, width=w),
 }
 TITLES = {
     "ultra-dragon": "「 年 · YEAR OF THE DRAGON 」",
@@ -600,6 +640,7 @@ TITLES = {
     "ultra-tv": "「 SMPTE · PLEASE STAND BY 」",
     "ultra-cassette": "「 MIXTAPE · SIDE A 」",
     "ultra-sonar": "「 SONAR · DEPTH 340 」",
+    "ultra-scope": "「 OSCILLOSCOPE · CH1 」",
 }
 
 

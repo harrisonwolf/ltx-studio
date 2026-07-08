@@ -507,8 +507,23 @@ ULTRA_SONAR = Theme(
         "selection": "#0c2a30",
     },
 )
+# Oscilloscope — phosphor green-cyan trace on a graticule; analog-synth bench vibe. CH1.
+ULTRA_SCOPE = Theme(
+    name="ultra-scope",
+    primary="#1fb87a", secondary="#147a52", accent="#5cffd0",
+    foreground="#7ad8b8", background="#020c08", surface="#08180f", panel="#0a2216",
+    success="#7cffc8", warning="#ffcf5c", error="#ff6d6d", dark=True,
+    variables={
+        "block-cursor-foreground": "#020c08", "block-cursor-background": "#5cffd0",
+        "footer-key-foreground": "#c4ffe8", "footer-description-foreground": "#7ad8b8",
+        "border": "#148a5a", "border-strong": "#0c4a34",
+        "surface-deep": "#010805", "text-bright": "#c4ffe8",
+        "accent-2": "#c4faff", "tertiary": "#4a9a78",    # bright cyan flash · dim scope green
+        "selection": "#0c2a1c",
+    },
+)
 ULTRA_THEMES = (ULTRA_DRAGON, ULTRA_SKYNET, ULTRA_SYNTHWAVE, ULTRA_MATRIX, ULTRA_ARCADE, ULTRA_TV,
-                ULTRA_CASSETTE, ULTRA_SONAR)
+                ULTRA_CASSETTE, ULTRA_SONAR, ULTRA_SCOPE)
 # Single source of truth for "is this the animated tier" — used by the picker (sectioning) and by
 # studio._on_theme_changed (show/hide the decoration). ultra_art.THEMES maps the same names to art.
 ULTRA_NAMES = frozenset(t.name for t in ULTRA_THEMES)
