@@ -10,8 +10,15 @@ def check(name, cond, detail=""):
     global ok; ok &= bool(cond)
     print(("PASS" if cond else "FAIL"), "::", name, ("" if cond else str(detail)))
 
-themes = studio.EXTRA_THEMES
-check("13 curated themes, unique names", len(themes) == 13 and len({t.name for t in themes}) == 13)
+# both tiers get the SAME structural/wash guarantees; ULTRA_THEMES is a separate registry tuple.
+themes = tuple(studio.EXTRA_THEMES) + tuple(studio.ULTRA_THEMES)
+check("19 standard themes, unique names",
+      len(studio.EXTRA_THEMES) == 19 and len({t.name for t in studio.EXTRA_THEMES}) == 19)
+check("3 ultra themes, unique names",
+      len(studio.ULTRA_THEMES) == 3 and len({t.name for t in studio.ULTRA_THEMES}) == 3)
+check("all theme names unique across tiers", len({t.name for t in themes}) == len(themes))
+check("ULTRA_NAMES matches the ultra tuple",
+      studio.ULTRA_NAMES == frozenset(t.name for t in studio.ULTRA_THEMES))
 CUSTOM = ("border", "border-strong", "surface-deep", "text-bright", "accent-2", "tertiary",
           "block-cursor-foreground", "block-cursor-background", "selection")
 for t in themes:

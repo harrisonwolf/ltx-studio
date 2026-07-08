@@ -21,7 +21,7 @@ from rich.text import Text
 from rich.style import Style
 from studio_core import JobManager, REPO, ARCHIVED
 
-from studio_themes import EXTRA_THEMES, SPAL, tmark, THEME_MIGRATE
+from studio_themes import EXTRA_THEMES, ULTRA_THEMES, ULTRA_NAMES, SPAL, tmark, THEME_MIGRATE
 
 def _run_kind(job):
     """T11: classify a job's PURPOSE from its params, distinct from job.kind (single/chained/
@@ -129,6 +129,10 @@ try:
     import readout   # T22: global READOUT meter strip — additive, degrades to None
 except Exception:
     readout = None
+try:
+    import ultra_art   # ultra-theme animated pixel-art decoration — additive, degrades to None
+except Exception:
+    ultra_art = None
 
 
 def plain_help(key):
@@ -1054,6 +1058,14 @@ class Studio(App):
     #rightcol.-narrow #infopanel { width: 1fr; height: 12; }
     #rightcol.-narrow #fieldvisual { height: 12; }
     #rightcol.-narrow #readout { height: 15; }
+    #rightcol.-narrow #ultradecor { height: 8; }
+    /* ULTRA-THEME decoration: hidden (zero footprint) for every non-ultra theme; shown only when an
+       ultra theme is active. Sits atop the rail so its pixel art reads as a title-card flourish. */
+    #ultradecor { width: 1fr; height: auto; min-height: 7; max-height: 10;
+                  border: round $accent; background: $surface;
+                  padding: 0 1; margin: 0 0 1 0; overflow: hidden;
+                  content-align: center middle; display: none; }
+    #ultradecor.-on { display: block; }
     /* height priority: READOUT is FIXED at 15 (title + six 2-line gauges, exactly) and the
        SCHEMATIC flexes — on short rails the schematic loses hint lines, never the gauges.
        (The old 1fr readout silently clipped SHOTS/QUAL/DRIFT on the portable monitor.) */
@@ -1164,6 +1176,8 @@ class Studio(App):
         self._smart_max_id = None       # job.id the latched max belongs to
         self._beat = 0
         self._gpu_str = ""
+        self._ultra_theme = None         # active ultra-theme name, or None (drives the decoration box)
+        self._ultra_phase = None         # last painted shimmer phase (repaint guard)
         self.consult = ConsultDaemon()
 
     def compose(self) -> ComposeResult:
@@ -1245,6 +1259,7 @@ class Studio(App):
                     with Vertical(id="rightcol"):
                         with Horizontal(id="rctop"):
                             with Vertical(id="rleft"):
+                                yield Static("", id="ultradecor")   # ultra-theme art (hidden unless ultra)
                                 yield Static("", id="fieldvisual")
                                 yield Static("", id="readout")      # T22: global readout meters
                             with VerticalScroll(id="infopanel"):
@@ -1414,16 +1429,27 @@ class Studio(App):
             # the shown schematic caches its markup with the OLD palette -> re-render it in the new
             # one (sticky-panel rule: re-tint the last dial illustrated, even if nothing is focused)
             self._show_field_visual(getattr(self, "_visual_wid", None))
+            # ultra tier: show/hide the animated decoration box (zero footprint for normal themes)
+            name = getattr(theme, "name", "")
+            on = ultra_art is not None and ultra_art.is_ultra(name)
+            decor = self.query_one("#ultradecor", Static)
+            decor.set_class(on, "-on")
+            self._ultra_theme = name if on else None
+            self._ultra_phase = None                     # force a repaint at the current beat
+            if on:
+                decor.border_title = ultra_art.TITLES.get(name, "« ULTRA »")
+                self._paint_ultra()
         except Exception:
             pass
 
     def on_mount(self):
-        for t in EXTRA_THEMES:
+        for t in EXTRA_THEMES + ULTRA_THEMES:
             self.register_theme(t)
         try:      # theme choice persists (picker ENTER writes it); cut names migrate, then fall back
             _th = str(load_studio_config().get("theme") or "")
             _th = THEME_MIGRATE.get(_th, _th)   # a retired theme lands on its nearest kept sibling
-            self.theme = _th if (_th.startswith("pipboy") and _th in self.available_themes) else "pipboy"
+            # accept any REGISTERED theme (pipboy family + ultra tier); unknown -> flagship green
+            self.theme = _th if _th in self.available_themes else "pipboy"
         except Exception:
             self.theme = "pipboy"
         self.query_one("#qtable", DataTable).add_column("queue", key="card")   # single card column (header hidden)
@@ -1536,6 +1562,34 @@ class Studio(App):
         # transient tooltips. Focusing a button/table/etc must NOT blank them — only a field
         # that HAS a visual replaces the schematic (_refresh_field_visual no-ops otherwise).
         self._refresh_field_visual(wid)
+
+    def _paint_ultra(self):
+        """Repaint the ultra-theme pixel decoration. No-op unless an ultra theme is active AND the
+        NEW RUN tab is showing; skips when the shimmer phase hasn't advanced (~1 paint/sec). The
+        frame is deterministic (= self._beat); fully guarded so it can never break the tick."""
+        name = getattr(self, "_ultra_theme", None)
+        if not name or ultra_art is None:
+            return
+        try:
+            if self.query_one(TabbedContent).active != "tab-new":
+                return
+            decor = self.query_one("#ultradecor", Static)
+            if not decor.has_class("-on"):
+                return
+            phase = self._beat // max(1, getattr(ultra_art, "SHIMMER_PERIOD", 2))
+            if phase == self._ultra_phase:
+                return
+            self._ultra_phase = phase
+            try:
+                w = int(decor.content_size.width)
+            except Exception:
+                w = 0
+            art = ultra_art.render(name, self._beat, width=(w if w >= 8 else None))
+            if art:
+                t = Text.from_markup(art); t.no_wrap = True
+                decor.update(t)
+        except Exception:
+            pass
 
     def _show_field_visual(self, wid):
         """Show the BF6-style schematic for `wid` ABOVE the text help, or clear it if the field has
@@ -2255,6 +2309,7 @@ class Studio(App):
         self.query_one("#status", Static).update(
             f"  ▌ QUEUED {q}{_etastr}    ▶ {st}    ✓ DONE {d}    ▽ SUSP {s}     │     {self._gpu_str}{self._stall_note}")
         self.query_one("#statusmeter", Static).update(self._meter())
+        self._paint_ultra()             # animate the ultra-theme decoration (no-op unless one is active)
         # queue + archive tables — rebuilt only when content changes (cursor stays put; no rubber-band)
         _dt = lambda ts: time.strftime("%m-%d %H:%M", time.localtime(ts)) if ts else "—"
         def _atitle(j):

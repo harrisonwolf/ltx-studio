@@ -249,9 +249,159 @@ PIPBOY_TRON = Theme(
         "selection": "#102a33",                          # cyan-graphite lift
     },
 )
+# The Matrix — falling code: bright spring-green rain over pure black, brighter/higher-contrast
+# than the flagship phosphor so it reads as a data stream, not a CRT.
+PIPBOY_MATRIX = Theme(
+    name="pipboy-matrix",
+    primary="#1f8a3a", secondary="#157a2e", accent="#4dff6a",
+    foreground="#6ee87f", background="#030803", surface="#061206", panel="#081a08",
+    success="#b8ffc4", warning="#ffcf5c", error="#ff6d6d", dark=True,
+    variables={
+        "block-cursor-foreground": "#030803", "block-cursor-background": "#4dff6a",
+        "footer-key-foreground": "#b8ffc4", "footer-description-foreground": "#6ee87f",
+        "border": "#176b2a", "border-strong": "#0d4419",
+        "surface-deep": "#020802", "text-bright": "#b8ffc4",
+        "accent-2": "#a0ff5a", "tertiary": "#4a9a5a",    # lime code glint · dim trailing green
+        "selection": "#103018",                          # rain-graphite lift
+    },
+)
+# Skynet HK combat HUD — chrome-steel structure with a combat-red targeting reticle (the plain,
+# colors-only sibling of ultra-skynet).
+PIPBOY_SKYNET = Theme(
+    name="pipboy-skynet",
+    primary="#7a828a", secondary="#5a636a", accent="#ff2a2a",
+    foreground="#b8c0c8", background="#0a0708", surface="#140f10", panel="#1c1416",
+    success="#86d98f", warning="#ffb03a", error="#ff3b3b", dark=True,
+    variables={
+        "block-cursor-foreground": "#0a0708", "block-cursor-background": "#ff2a2a",
+        "footer-key-foreground": "#ffb03a", "footer-description-foreground": "#b8c0c8",
+        "border": "#4a4f55", "border-strong": "#2e3237",
+        "surface-deep": "#070506", "text-bright": "#dfe6ec",
+        "accent-2": "#ffb03a", "tertiary": "#8a929a",    # amber scan · dim steel
+        "selection": "#241a1c",                          # red-graphite lift
+    },
+)
+# Miami / synthwave sunset (static color theme; ultra-synthwave is its animated cousin) — hot
+# magenta + cyan on a deep indigo-black, sunset-orange counterpoint.
+PIPBOY_MIAMI = Theme(
+    name="pipboy-miami",
+    primary="#ff3ca6", secondary="#c42e80", accent="#4de0ff",
+    foreground="#f0a8d0", background="#0a0410", surface="#12081c", panel="#180b26",
+    success="#6dffd8", warning="#ffcf5c", error="#ff5c8a", dark=True,
+    variables={
+        "block-cursor-foreground": "#0a0410", "block-cursor-background": "#4de0ff",
+        "footer-key-foreground": "#6dffd8", "footer-description-foreground": "#f0a8d0",
+        "border": "#6e2a78", "border-strong": "#431a4a",
+        "surface-deep": "#070310", "text-bright": "#ffb8e0",
+        "accent-2": "#ff9a3d", "tertiary": "#b86ba8",    # sunset orange · mid orchid
+        "selection": "#1e1230",                          # indigo lift
+    },
+)
+# Radiation hazard — hi-vis yellow + caution amber on black, trefoil red for stop/error.
+PIPBOY_HAZMAT = Theme(
+    name="pipboy-hazmat",
+    primary="#c8a01a", secondary="#9a7a12", accent="#f2ff1f",
+    foreground="#d9c96a", background="#0a0902", surface="#131005", panel="#1a1607",
+    success="#d4ff6a", warning="#ff9a2a", error="#ff4d3a", dark=True,
+    variables={
+        "block-cursor-foreground": "#0a0902", "block-cursor-background": "#f2ff1f",
+        "footer-key-foreground": "#d4ff6a", "footer-description-foreground": "#d9c96a",
+        "border": "#6f5a14", "border-strong": "#45380c",
+        "surface-deep": "#080702", "text-bright": "#f2e88a",
+        "accent-2": "#ff7a1f", "tertiary": "#b8a04a",    # hazard-stripe orange · dust amber
+        "selection": "#2a2410",                          # amber-graphite lift
+    },
+)
+# Cyberpunk glitch — electric cyan structure, hi-vis yellow hero, glitch-red error/counterpoint.
+PIPBOY_CYBERPUNK = Theme(
+    name="pipboy-cyberpunk",
+    primary="#22d3e0", secondary="#1a9aa4", accent="#f9f002",
+    foreground="#7ae0e8", background="#05080a", surface="#081320", panel="#0b1a2a",
+    success="#6dffb8", warning="#ffb347", error="#ff003c", dark=True,
+    variables={
+        "block-cursor-foreground": "#05080a", "block-cursor-background": "#f9f002",
+        "footer-key-foreground": "#f9f002", "footer-description-foreground": "#7ae0e8",
+        "border": "#157a84", "border-strong": "#0d4a52",
+        "surface-deep": "#04080c", "text-bright": "#c4faff",
+        "accent-2": "#ff003c", "tertiary": "#4faab0",    # glitch red · dim cyan
+        "selection": "#10262e",                          # cyan-graphite lift
+    },
+)
+# Christmas — evergreen structure, cranberry-red hero, gold ornaments.
+PIPBOY_XMAS = Theme(
+    name="pipboy-xmas",
+    primary="#2f8f4f", secondary="#23723d", accent="#ff4d4d",
+    foreground="#a8d9b4", background="#050a06", surface="#0a140c", panel="#0e1a10",
+    success="#b8ffc9", warning="#ffd24a", error="#ff5c5c", dark=True,
+    variables={
+        "block-cursor-foreground": "#050a06", "block-cursor-background": "#ff4d4d",
+        "footer-key-foreground": "#ffd24a", "footer-description-foreground": "#a8d9b4",
+        "border": "#1f6f3a", "border-strong": "#134523",
+        "surface-deep": "#030803", "text-bright": "#d9ffe2",
+        "accent-2": "#ffd24a", "tertiary": "#6aa87d",    # gold ornaments · frost green
+        "selection": "#12241a",                          # evergreen lift
+    },
+)
 EXTRA_THEMES = (PIPBOY, PIPBOY_AMBER, PIPBOY_VFD, PIPBOY_VAULT, PIPBOY_VIOLET,
                 PIPBOY_NIXIE, PIPBOY_NUKA, PIPBOY_GAMEBOY, PIPBOY_TUBE, PIPBOY_THERMAL,
-                PIPBOY_RADIUM, PIPBOY_USA, PIPBOY_TRON)
+                PIPBOY_RADIUM, PIPBOY_USA, PIPBOY_TRON,
+                PIPBOY_MATRIX, PIPBOY_SKYNET, PIPBOY_MIAMI, PIPBOY_HAZMAT,
+                PIPBOY_CYBERPUNK, PIPBOY_XMAS)
+
+# ---- ULTRA-THEMES tier (2026-07-07): opt-in, DECORATED/ANIMATED themes shown in a separate picker
+#      section. The Theme objects below carry only colors (near-black canvas, wash-compliant, like any
+#      theme); the animated 8-bit pixel-art flair lives in ultra_art.py, keyed by theme name. Kept in a
+#      SEPARATE tuple so ULTRA_NAMES is the single source of truth for "is this the ultra tier". ----
+# Year of the Dragon — gold on black-crimson lacquer (ultra_art draws a glimmering dragon head).
+ULTRA_DRAGON = Theme(
+    name="ultra-dragon",
+    primary="#b8860b", secondary="#8a6410", accent="#ffd24a",
+    foreground="#e8c96a", background="#0c0404", surface="#180808", panel="#200a0a",
+    success="#ffe9a0", warning="#ff9a3d", error="#ff5c5c", dark=True,
+    variables={
+        "block-cursor-foreground": "#0c0404", "block-cursor-background": "#ffd24a",
+        "footer-key-foreground": "#ffe9a0", "footer-description-foreground": "#e8c96a",
+        "border": "#7a2418", "border-strong": "#4a1810",
+        "surface-deep": "#080202", "text-bright": "#fff3c4",
+        "accent-2": "#c81e2a", "tertiary": "#b8935a",    # imperial crimson · aged gold
+        "selection": "#2a1810",                          # crimson-gold lift
+    },
+)
+# Skynet / T-800 — chrome steel + glowing red (ultra_art draws a skull with pulsing red eyes).
+ULTRA_SKYNET = Theme(
+    name="ultra-skynet",
+    primary="#8a929a", secondary="#6a727a", accent="#ff2a2a",
+    foreground="#c4ccd4", background="#060708", surface="#0e1114", panel="#14181c",
+    success="#86d98f", warning="#ffb03a", error="#ff3b3b", dark=True,
+    variables={
+        "block-cursor-foreground": "#060708", "block-cursor-background": "#ff2a2a",
+        "footer-key-foreground": "#ff5a3a", "footer-description-foreground": "#c4ccd4",
+        "border": "#3e444a", "border-strong": "#262a2e",
+        "surface-deep": "#040506", "text-bright": "#e8eef2",
+        "accent-2": "#ff5a3a", "tertiary": "#9aa2aa",    # hot ember · dim steel
+        "selection": "#201618",                          # steel-red lift
+    },
+)
+# Synthwave (the showpiece) — deep indigo-black with a magenta/cyan/orange neon sunset (ultra_art
+# draws an animated sun + scrolling perspective grid).
+ULTRA_SYNTHWAVE = Theme(
+    name="ultra-synthwave",
+    primary="#ff2d95", secondary="#c42678", accent="#2de0ff",
+    foreground="#f0a0d8", background="#08040f", surface="#100820", panel="#150b28",
+    success="#5cffe0", warning="#ffcf5c", error="#ff4d8a", dark=True,
+    variables={
+        "block-cursor-foreground": "#08040f", "block-cursor-background": "#2de0ff",
+        "footer-key-foreground": "#5cffe0", "footer-description-foreground": "#f0a0d8",
+        "border": "#7a2a7e", "border-strong": "#481a4e",
+        "surface-deep": "#060310", "text-bright": "#ffb0e4",
+        "accent-2": "#ff8a3d", "tertiary": "#b060b8",    # sunset orange · mid orchid
+        "selection": "#1c1236",                          # indigo lift
+    },
+)
+ULTRA_THEMES = (ULTRA_DRAGON, ULTRA_SKYNET, ULTRA_SYNTHWAVE)
+# Single source of truth for "is this the animated tier" — used by the picker (sectioning) and by
+# studio._on_theme_changed (show/hide the decoration). ultra_art.THEMES maps the same names to art.
+ULTRA_NAMES = frozenset(t.name for t in ULTRA_THEMES)
 
 # Cut themes -> nearest kept sibling, so a persisted stale choice migrates to a deliberate
 # near-equivalent instead of a hard reset to the default green. Applied in Studio.on_mount.

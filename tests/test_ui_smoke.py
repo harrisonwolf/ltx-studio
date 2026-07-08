@@ -115,14 +115,23 @@ async def main():
         app._insp_view = "timing"
         app._render_inspect()
         check("archive TIMING view renders", True)
-        # every curated theme applies (stylesheet-crash guard)
-        for t in studio.EXTRA_THEMES:
+        # every curated theme applies (stylesheet-crash guard) — both tiers
+        for t in tuple(studio.EXTRA_THEMES) + tuple(studio.ULTRA_THEMES):
             try:
                 app.theme = t.name; await pilot.pause()
                 good = True
             except Exception:
                 good = False
             check("theme applies: %s" % t.name, good)
+        # ultra tier: an ultra theme lights the decoration box; a normal theme hides it (zero footprint).
+        # The art only paints on the NEW RUN tab (where the box lives), so activate it first.
+        app.query_one(TabbedContent).active = "tab-new"; await pilot.pause()
+        app.theme = "ultra-synthwave"; await pilot.pause()
+        dec = app.query_one("#ultradecor")
+        check("ultra theme lights the decoration", dec.has_class("-on"))
+        check("ultra decoration renders art", bool(str(dec.render()).strip()))
+        app.theme = "pipboy"; await pilot.pause()
+        check("normal theme hides the decoration", not dec.has_class("-on"))
         # theme overhaul: $selection resolves for CSS (pipboy defines it; builtins fall back to panel),
         # and the selected queue card re-lights its OWN frame in heavy box-art vs rounded when not
         cssv = app.get_css_variables()
@@ -139,12 +148,19 @@ async def main():
         app.query_one("#snd_done", Select).value = "bell.wav"
         await pilot.pause()
         check("sound pick does NOT audition", sound_calls == [], sound_calls)
-        # picker lists only the curated family
+        # picker: two curated sections (pipboy family, then a non-selectable ULTRA-THEMES header +
+        # the ultra tier). Skip the disabled/id-less header when checking curation.
         scr = studio.ThemePickerScreen()
         app.push_screen(scr); await pilot.pause()
-        names = [scr.query_one("#thlist", OptionList).get_option_at_index(i).id
-                 for i in range(scr.query_one("#thlist", OptionList).option_count)]
-        check("picker curated to pipboy family", names and all(n.startswith("pipboy") for n in names))
+        ol = scr.query_one("#thlist", OptionList)
+        opts = [ol.get_option_at_index(i) for i in range(ol.option_count)]
+        real = [o.id for o in opts if o.id and not o.disabled]
+        check("picker curated to pipboy/ultra family",
+              bool(real) and all(n.startswith(("pipboy", "ultra")) for n in real))
+        check("picker ids are all registered themes", all(n in app.available_themes for n in real))
+        check("picker has a non-selectable ultra section header",
+              any(o.disabled and o.id is None for o in opts))
+        check("picker lists the ultra tier", any(n.startswith("ultra") for n in real))
         await pilot.press("escape"); await pilot.pause()
 
 async def short_live():

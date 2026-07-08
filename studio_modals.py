@@ -12,6 +12,11 @@ from textual.widgets.option_list import Option
 
 from preview_art import render_preview
 from studio_config import load_studio_config, save_studio_config
+from studio_themes import ULTRA_NAMES
+try:                       # animated ultra-theme decoration (optional; picker shows a still preview)
+    import ultra_art
+except Exception:
+    ultra_art = None
 
 class FrameScrollScreen(ModalScreen):
     """Scroll through a finished run's saved output frames as terminal art (reuses render_preview).
@@ -117,6 +122,8 @@ class ThemePickerScreen(ModalScreen):
     #thtitle { color: $accent; text-style: bold; height: 1; }
     #thsub { color: $secondary; height: auto; margin: 0 0 1 0; }
     #thlist { height: auto; max-height: 20; border: round $border; background: $surface-deep; }
+    #thpreview { height: auto; content-align: center middle; margin: 1 0 0 0; display: none; }
+    #thpreview.-on { display: block; }
     """
     BINDINGS = [("escape", "cancel", "Revert + close")]
 
@@ -129,20 +136,31 @@ class ThemePickerScreen(ModalScreen):
             yield Static("◐  THEME", id="thtitle")
             yield Static("↑/↓ previews live · ENTER keeps it · ESC reverts", id="thsub")
             yield OptionList(id="thlist")
+            yield Static("", id="thpreview")     # still-frame preview of an ultra theme's decoration
 
     def on_mount(self):
         self.query_one("#thbox").border_title = "« THEME PICKER »"
         self._original_theme = self.app.theme
-        # CURATED list: only the hand-tuned pipboy family (builtin textual themes are cut —
-        # quality over quantity). The active theme is always included so the highlight lands.
-        names = sorted(n for n in self.app.available_themes
-                       if n.startswith("pipboy") or n == self._original_theme)
+        # CURATED list in two SECTIONS: the standard pipboy family first, then a non-selectable
+        # header, then the animated ultra-themes tier (builtin textual themes are cut — quality over
+        # quantity). The active theme is always included so the highlight lands.
+        active = self._original_theme
+        normal = sorted(n for n in self.app.available_themes
+                        if n not in ULTRA_NAMES and n.startswith("pipboy"))
+        ultra = sorted(n for n in self.app.available_themes if n in ULTRA_NAMES)
+        if active and active not in normal and active not in ultra:   # keep a persisted builtin visible
+            normal = sorted(normal + [active])
         opts = self.query_one("#thlist", OptionList)
-        for name in names:
-            opts.add_option(Option(("» " if name == self._original_theme else "  ") + name, id=name))
+        for name in normal:
+            opts.add_option(Option(("» " if name == active else "  ") + name, id=name))
+        if ultra:
+            # disabled + id=None -> arrow nav skips it and neither preview nor persist ever fires
+            opts.add_option(Option("[dim]────── [/][b]ULTRA-THEMES[/][dim] ──────[/]", disabled=True))
+            for name in ultra:
+                opts.add_option(Option(("» " if name == active else "  ") + name, id=name))
         try:
-            opts.highlighted = names.index(self._original_theme)
-        except ValueError:
+            opts.highlighted = opts.get_option_index(active)         # id->index: tolerant of the header
+        except Exception:
             pass
         opts.focus()
 
@@ -152,6 +170,22 @@ class ThemePickerScreen(ModalScreen):
                 self.app.theme = e.option.id     # live preview as you arrow through
             except Exception:
                 pass
+            self._preview_ultra(e.option.id)     # show the ultra decoration (still frame) if any
+
+    def _preview_ultra(self, name):
+        """Show a calm frame-0 still of an ultra theme's decoration below the list (hidden for
+        normal themes). Best-effort — the modal background already shows the live theme."""
+        try:
+            pv = self.query_one("#thpreview", Static)
+        except Exception:
+            return
+        art = ultra_art.render(name, 0) if ultra_art is not None else None
+        if art:
+            from rich.text import Text
+            t = Text.from_markup(art); t.no_wrap = True
+            pv.update(t); pv.add_class("-on")
+        else:
+            pv.update(""); pv.remove_class("-on")
 
     def on_option_list_option_selected(self, e: OptionList.OptionSelected):
         if e.option and e.option.id:
