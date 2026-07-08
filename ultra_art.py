@@ -19,7 +19,8 @@ Design rules (see plan agile-tumbling-valley):
 import math
 import os
 
-SHIMMER_PERIOD = 2          # advance the shimmer/scroll one step every 2nd beat (~1.0s at 0.5s tick)
+SHIMMER_PERIOD = 2          # sprite shimmer/scroll cadence (pixel art — stays chunky)
+GLOW_PERIOD = 5             # border-breathe divisor: bigger = slower, more gradual swell (~20s full cycle)
 
 # ordered emission ramps: deep -> hot. sweep/pulse index into these.
 RAMPS = {
@@ -91,9 +92,10 @@ def _glow_color(x, beat, glow, span):
 
 
 def render_sprite(spec, beat, palette=None, cols=None):
-    """Render sprite `spec` at animation frame `beat` to a Rich-markup string. PURE fn of
-    (spec, beat, palette). `palette` overrides spec['pal'] (theme recolor); `cols` centers the sprite
-    in a box that wide. Unknown/transparent chars ('.'/' ') -> transparent. Never raises."""
+    """Render sprite `spec` at frame `beat` to a Rich-markup string. PURE fn of (spec, beat, palette).
+    The pixels + glow-sweep index off int(beat) (8-bit, chunky); an optional `sparkle` field scatters
+    a few TWINKLING atmosphere glyphs (theme embers / specks) across the transparent cells, animated
+    smoothly off the float clock. `cols` centers the sprite. Never raises."""
     try:
         pal = dict(spec.get("pal", {}))
         if palette:
@@ -102,25 +104,37 @@ def render_sprite(spec, beat, palette=None, cols=None):
         gchars = set(glow.get("chars", ""))
         rows = list(spec.get("rows", []))
         span = max((len(r) for r in rows), default=0)
-        b = int(beat)
+        bi = int(beat)                                  # pixels + glow sweep (chunky)
+        bf = float(beat)                                # sparkle twinkle (smooth)
+        spark = spec.get("sparkle")
 
         def color(ch, x):
             if ch in (".", " ", ""):
                 return None
             if ch in gchars:
-                return _glow_color(x, b, glow, span)
+                return _glow_color(x, bi, glow, span)
             return pal.get(ch)                          # unknown -> None (transparent) = safe
+
+        def sparkle(x, orow):                           # a twinkling atmosphere glyph in a transparent cell
+            if not spark or (x * 7 + orow * 13) % 11:
+                return " "
+            tw = 0.5 + 0.5 * math.sin(bf * 0.8 + x * 1.7 + orow * 2.3)
+            if tw < 0.5:
+                return " "
+            c = _lerp(spark.get("dim", "#333333"), spark.get("hot", "#ffffff"), (tw - 0.5) / 0.5)
+            return "[%s]%s[/%s]" % (c, spark.get("glyph", "·"), c)
 
         if len(rows) % 2:
             rows.append("")
         out = []
         for i in range(0, len(rows), 2):
+            orow = i // 2
             top, bot = rows[i], rows[i + 1]
             cells = []
             for x in range(span):
                 tc = color(top[x] if x < len(top) else " ", x)
                 bc = color(bot[x] if x < len(bot) else " ", x)
-                cells.append(_cell(tc, bc))
+                cells.append(sparkle(x, orow) if (tc is None and bc is None) else _cell(tc, bc))
             line = "".join(cells)
             if cols and cols > span:
                 line = " " * ((cols - span) // 2) + line
@@ -156,7 +170,7 @@ def glow(theme_name, beat):
     n = len(ramp)
     if n == 1:
         return ramp[0]
-    u = b / max(1, SHIMMER_PERIOD)                     # continuous phase
+    u = b / max(1, GLOW_PERIOD)                        # continuous phase (GLOW_PERIOD slows the swell)
     m = 2 * (n - 1)                                    # triangle period
     t = u % m
     pos = t if t <= (n - 1) else (m - t)              # continuous triangle 0..n-1..0
@@ -165,7 +179,7 @@ def glow(theme_name, beat):
     return _lerp(ramp[lo], ramp[hi], pos - lo)
 
 
-def electron_text(text, beat, base, hot, mode="electron", speed=2, tail=6, wavelen=7):
+def electron_text(text, beat, base, hot, mode="electron", speed=2, tail=6, wavelen=7, amp=1.0):
     """Overlay a moving running-light on plain `text` and return Rich markup. Two modes:
       'electron' — a bright crest + fading tail travels through the (non-space) characters.
       'wave'     — a smooth traveling brightness wave (several soft crests).
@@ -182,7 +196,7 @@ def electron_text(text, beat, base, hot, mode="electron", speed=2, tail=6, wavel
             phase = b * 0.6 * max(1, speed)
             for gi, pos in enumerate(positions):
                 f = 0.5 + 0.5 * math.sin(gi / float(max(1, wavelen)) - phase)
-                gcol[pos] = _lerp(base, hot, f * f)       # square sharpens crests, keeps troughs calm
+                gcol[pos] = _lerp(base, hot, f * f * amp)  # square sharpens crests; amp softens the swing
         else:                                             # electron comet
             crest = (b * max(1, speed)) % N
             for gi, pos in enumerate(positions):
@@ -261,6 +275,7 @@ DRAGON = {
         ".....rr........",
     ],
     "glow": {"chars": "G", "ramp": "GOLD", "mode": "sweep"},
+    "sparkle": {"glyph": "·", "hot": "#ffd24a", "dim": "#5a3a08"},   # gold embers drifting off the dragon
 }
 
 # T-800 skull (front view) — chrome steel with two red eye clusters that pulse in unison.
@@ -286,6 +301,7 @@ T800 = {
         "....kSkSk.....",
     ],
     "glow": {"chars": "R", "ramp": "RED", "mode": "pulse"},
+    "sparkle": {"glyph": "·", "hot": "#ff5a3a", "dim": "#3a1210"},   # red HUD data-specks around the skull
 }
 
 
@@ -296,7 +312,8 @@ def _synthwave(beat, width=None):
     try:
         W = min(max(int(width or 32), 8), 44)
         H = 9
-        b = int(beat)
+        b = int(beat)                                   # grid scroll (chunky)
+        bf = float(beat)                                # star twinkle (smooth)
         sun = RAMPS["SYNTH"]
         ns = len(sun)
         cyan, dim = "#2de0ff", "#1f6f88"
@@ -315,6 +332,12 @@ def _synthwave(beat, width=None):
                     dx = x - cx
                     if dx * dx + dy * dy * 3 <= (r * r + r) * 3:
                         row[x] = "[%s]█[/%s]" % (col, col)
+                for x in range(W):                      # twinkling stars in the empty night sky
+                    if row[x] == " " and (x * 5 + y * 11) % 13 == 0:
+                        tw = 0.5 + 0.5 * math.sin(bf * 0.7 + x * 1.3 + y * 2.1)
+                        if tw > 0.55:
+                            c = _lerp("#243a66", "#bfe8ff", (tw - 0.55) / 0.45)
+                            row[x] = "[%s]·[/%s]" % (c, c)
             else:                                       # ---- PERSPECTIVE GRID ----
                 d = y - hz + 1                          # depth 1..4
                 bright = ((d + scroll) % 3 == 0)        # one scrolling bright rule
@@ -357,7 +380,7 @@ def render(theme_name, beat, width=None):
     fn = THEMES.get(theme_name)
     if fn is None:
         return None
-    b = 0 if _frozen() else int(beat)
+    b = 0.0 if _frozen() else float(beat)             # float clock -> smooth sparkle/star twinkle
     try:
         return fn(b, width)
     except Exception:

@@ -1182,7 +1182,6 @@ class Studio(App):
         self._beat = 0
         self._gpu_str = ""
         self._ultra_theme = None         # active ultra-theme name, or None (drives the decoration box)
-        self._ultra_phase = None         # last painted SPRITE frame (coarse repaint guard)
         self._ultra_t = 0.0              # continuous animation clock (float; advanced by the fast timer)
         self._ultra_timer = None         # dedicated ~15fps timer, live ONLY while an ultra theme shows
         self._electron_starts = []       # _ultra_t at which each in-flight INFO electron was fired
@@ -1448,7 +1447,6 @@ class Studio(App):
             decor = self.query_one("#ultradecor", Static)
             decor.set_class(on, "-on")
             self._ultra_theme = name if on else None
-            self._ultra_phase = None                     # force a repaint at the current beat
             if on:
                 decor.border_title = ultra_art.TITLES.get(name, "« ULTRA »")
                 self._ultra_t = 0.0                      # fresh clock + electron schedule for this theme
@@ -1655,9 +1653,10 @@ class Studio(App):
             self._electron_next = self._ultra_t + gap
 
     def _paint_ultra(self):
-        """Rail-border breathe (EVERY frame — smooth) + the pixel decoration (repainted only when its
-        coarse integer frame advances, ~2/s — it's 8-bit, no benefit from higher). No-op unless an
-        ultra theme is active AND the NEW RUN tab is showing. Deterministic in _ultra_t; guarded."""
+        """Rail-border breathe + the decoration scene, repainted every frame (the pixels/scroll stay
+        chunky via int(clock) inside ultra_art; the border-glow and the twinkling sparkles/stars move
+        smoothly off the float clock). No-op unless an ultra theme is active AND the NEW RUN tab is
+        showing. Deterministic in _ultra_t; guarded."""
         name = getattr(self, "_ultra_theme", None)
         if not name or ultra_art is None:
             return
@@ -1675,10 +1674,6 @@ class Studio(App):
             decor = self.query_one("#ultradecor", Static)
             if not decor.has_class("-on"):
                 return
-            phase = int(self._ultra_t)                    # sprite repaints ~2/s (pixel art stays chunky)
-            if phase == self._ultra_phase:
-                return
-            self._ultra_phase = phase
             try:
                 w = int(decor.content_size.width)
             except Exception:
@@ -1705,7 +1700,7 @@ class Studio(App):
         try:
             eff = ultra_art.EFFECTS.get(name) or {}
             art = ultra_art.electron_text(self.TOPBAR_TITLE, self._ultra_t, eff.get("base", "#cccccc"),
-                                          eff.get("hot", "#ffffff"), mode="wave", speed=1, wavelen=14)
+                                          eff.get("hot", "#ffffff"), mode="wave", speed=1, wavelen=14, amp=0.6)
             if art:
                 self.query_one("#topbartitle", Static).update(Text.from_markup(art))
         except Exception:

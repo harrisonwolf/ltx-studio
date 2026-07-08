@@ -32,6 +32,13 @@ for n in NAMES:
     frames = {ultra_art.render(n, b) for b in range(0, 12)}
     check("%s: animates (distinct frames)" % n, len(frames) > 1, frames)
 
+# theme-specific atmosphere: sparkles/stars (·) appear and TWINKLE (present at some frames, not all)
+for n in NAMES:
+    hits = [("·" in (ultra_art.render(n, b * 0.3) or "")) for b in range(0, 24)]
+    check("%s: has twinkling atmosphere (sparkles/stars)" % n, any(hits))
+    check("%s: atmosphere actually twinkles (not constant)" % n, not all(hits) or len(set(
+        ultra_art.render(n, b * 0.3) for b in range(0, 24))) > 1)
+
 # safety: no raise, width-fit (<=48 budget), balanced markup, at every size/beat
 for n in NAMES:
     worst, balanced, raised = 0, True, False

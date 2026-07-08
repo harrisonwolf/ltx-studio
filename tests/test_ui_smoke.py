@@ -132,15 +132,16 @@ async def main():
         check("ultra decoration renders art", bool(str(dec.render()).strip()))
         # breakout effects: borders breathe + INFO text + topbar run an electron/wave. Ultra animation
         # is driven by the continuous _ultra_t clock (its own ~15fps timer); drive two KNOWN clock values
-        # (reset _ultra_phase so the sprite-gated paint runs the border) -> deterministic, not flaky.
+        # (paint at two KNOWN clock values -> deterministic, not flaky) — the decoration repaints every
+        # frame now (continuous glow + smooth sparkle twinkle), so no phase gate to reset.
         ipanel = app.query_one("#infopanel")
         def _bord():
             b = ipanel.styles.border
             return str(b.top[1].hex) if b and b.top else None
-        app._ultra_t = 0.0; app._ultra_phase = None; app._paint_ultra(); app._animate_ultra_topbar()
+        app._ultra_t = 0.0; app._paint_ultra(); app._animate_ultra_topbar()
         _b0 = _bord()
         _t0 = repr(app.query_one("#topbartitle").render())
-        app._ultra_t = 6.0; app._ultra_phase = None; app._paint_ultra(); app._animate_ultra_topbar()
+        app._ultra_t = 30.0; app._paint_ultra(); app._animate_ultra_topbar()
         check("ultra: info-panel border breathes across ticks", _b0 != _bord(), (_b0, _bord()))
         check("ultra: topbar ambient wave moves across ticks", _t0 != repr(app.query_one("#topbartitle").render()))
         # INFO now fires DISCRETE electrons on a random schedule; inject one and confirm its comet TOURS
@@ -162,8 +163,8 @@ async def main():
         check("ultra: electron tours prune (bounded concurrency)", 1 <= _maxc <= 4, _maxc)
         # smoothness: a SMALL clock step (sub-beat) already changes the border (continuous glow, not
         # a 5-color snap) -> proves the interpolation the 15fps timer relies on
-        app._ultra_t = 6.0; app._ultra_phase = None; app._paint_ultra(); _bsmall = _bord()
-        app._ultra_t = 6.2; app._ultra_phase = None; app._paint_ultra()
+        app._ultra_t = 6.0; app._paint_ultra(); _bsmall = _bord()
+        app._ultra_t = 6.4; app._paint_ultra()
         check("ultra: glow interpolates continuously (smooth)", _bsmall != _bord(), (_bsmall, _bord()))
         check("ultra: whole rail breathes (all 4 borders)",
               all(app.query_one("#" + w).styles.border and app.query_one("#" + w).styles.border.top
