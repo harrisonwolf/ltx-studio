@@ -39,15 +39,10 @@ EFFECTS = {
     "ultra-skynet":    {"mode": "electron", "base": "#b0b8c0", "hot": "#ff6a5a"},
     "ultra-synthwave": {"mode": "wave",     "base": "#e0a0d0", "hot": "#5cffe0"},
     "ultra-matrix":    {"mode": "electron", "base": "#5ab86a", "hot": "#d8ffe0"},
-    "ultra-arcade":    {"mode": "electron", "base": "#5ab86a", "hot": "#d8ffe0"},
-    "ultra-tv":        {"mode": "wave",     "base": "#9aa4ae", "hot": "#f0f4f8"},
-    "ultra-cassette":  {"mode": "electron", "base": "#b8a06a", "hot": "#fff0c0"},
     "ultra-sonar":     {"mode": "wave",     "base": "#4ac0d0", "hot": "#c4faff"},
-    "ultra-scope":     {"mode": "wave",     "base": "#4ac0a0", "hot": "#c4ffe8"},
     "ultra-kaiju":     {"mode": "electron", "base": "#6a8aa8", "hot": "#eaf6ff"},
     "ultra-aurora":    {"mode": "wave",     "base": "#4ac080", "hot": "#b8ffd8"},
     "ultra-vhs":       {"mode": "electron", "base": "#7a8ab8", "hot": "#eef2f8"},
-    "ultra-bladerunner": {"mode": "electron", "base": "#c89a5a", "hot": "#ffe0a0"},
     "ultra-vaporwave": {"mode": "wave",     "base": "#d888c8", "hot": "#ffd0ec"},
 }
 
@@ -387,108 +382,50 @@ def _matrix_rain(beat, width=None):
         return ""
 
 
-# ---------------------------------------------------------------- arcade (space invaders) ---------
-def _arcade(beat, width=None):
-    """Space Invaders: 3 rows of little green invaders marching side-to-side (2-frame leg wiggle), a
-    magenta UFO streaking across the top now and then, a white cannon firing the odd bullet. Pure fn."""
-    try:
-        W = min(max(int(width or 32), 10), 44)
-        H = 8
-        b = float(beat); bi = int(b)
-        green, mag, white = "#39ff5a", "#ff2d95", "#eafff0"
-        grid = [[" "] * W for _ in range(H)]
-        def put(y, x, ch, c):
-            if 0 <= x < W and 0 <= y < H:
-                grid[y][x] = "[%s]%s[/%s]" % (c, ch, c)
-        m = bi % 8
-        dx = m if m <= 4 else 8 - m                     # triangle march 0..4..0
-        legs = "▙▟" if (bi % 2) else "▛▜"               # 2-frame leg wiggle
-        for ry in (1, 2, 3):
-            x = 2 + dx
-            while x + 1 < W - 1:
-                put(ry, x, legs[0], green); put(ry, x + 1, legs[1], green)
-                x += 4
-        ut = b % (W + 26)                               # UFO passes, with a long gap between
-        if ut < W + 2:
-            for i, ch in enumerate("◖▬◗"):
-                put(0, int(ut) - 2 + i, ch, mag)
-        cx = W // 2
-        for i, ch in enumerate("▟█▙"):
-            put(H - 1, cx - 1 + i, ch, white)
-        by = (H - 2) - (bi % (H + 4))                   # a lone bullet rising from the cannon
-        put(by, cx, "│", white)
-        return "\n".join("".join(r) for r in grid)
-    except Exception:
-        return ""
-
-
 # ---------------------------------------------------------------- tv (SMPTE test card) ------------
+# UNDER CONSTRUCTION: not registered in EFFECTS/THEMES/TITLES, so it is unreachable from the
+# menu. Kept for a future rework (see the hidden ULTRA_TV in studio_themes.py).
 def _tv(beat, width=None):
-    """SMPTE color bars (7 bars + a lower pluge), a faint tracking line rolling up, and a brief STATIC
-    SNOW burst every ~15s. The bars are the flair; the theme canvas stays near-black. Pure fn of beat."""
+    """A dead broadcast. The MAIN state is the original greyscale standby bars with a faint tracking
+    line rolling up. Every once in a while, at irregular pseudo-random intervals, the colour NO SIGNAL
+    card cuts in for ~0.5-1.5s, then it drops back to the grey. Pure fn of beat (the 15 fps clock)."""
     try:
         W = min(max(int(width or 32), 14), 44); H = 8
-        b = float(beat); bi = int(b)
+        bi = int(beat); nb = 7
         grid = [[" "] * W for _ in range(H)]
-        if (bi % 30) < 2:                                # brief static burst
-            for y in range(H):
-                for x in range(W):
-                    h = (x * 92821 + y * 68917 + bi * 40503) & 0x1ff
-                    if h % 3 == 0:
-                        v = 0x38 + (h % 0x90)
-                        c = "#%02x%02x%02x" % (v, v, v)
-                        grid[y][x] = "[%s]%s[/%s]" % (c, "░▒▓"[(h >> 3) % 3], c)
-        else:
+        WIN = 120
+        hh = (bi // WIN * 2654435761) & 0xffffffff
+        hh = ((hh ^ (hh >> 13)) * 1274126177) & 0xffffffff
+        dur = 8 + (hh >> 3) % 15
+        start = (hh >> 9) % max(1, WIN - dur)
+        color_on = ((hh & 3) != 0) and (start <= bi % WIN < start + dur)
+        if color_on:
             bars = ["#dcdcdc", "#c8c81a", "#1ac8c8", "#1ac01a", "#c81ac8", "#c81a1a", "#1a1ad0"]
-            low = ["#1a1ad0", "#0b0b0b", "#c81ac8", "#0b0b0b", "#1ac8c8", "#0b0b0b", "#dcdcdc"]
-            nb = len(bars)
+            low  = ["#1a1ad0", "#0b0b0b", "#c81ac8", "#0b0b0b", "#1ac8c8", "#0b0b0b", "#dcdcdc"]
             for y in range(H):
                 pal = bars if y < H - 2 else low
                 for x in range(W):
                     c = pal[min(nb - 1, x * nb // W)]
+                    grid[y][x] = "[%s]█[/%s]" % (c, c)
+            msg = " NO SIGNAL "; my = H // 2; mx = max(0, (W - len(msg)) // 2)
+            for i, ch in enumerate(msg):
+                x = mx + i
+                if 0 <= x < W:
+                    grid[my][x] = "[#ff6a6a on #0b0b0b]%s[/]" % ch
+        else:
+            greys = ["#c4c4c4", "#a4a4a4", "#848484", "#646464", "#4a4a4a", "#323232", "#1e1e1e"]
+            for y in range(H):
+                for x in range(W):
+                    c = greys[min(nb - 1, x * nb // W)]
                     grid[y][x] = "[%s]█[/%s]" % (c, c)
             ty = bi % (H * 3)
             if ty < H:
                 for x in range(W):
                     if (x + bi) % 6 < 2:
                         grid[ty][x] = "[#f0f4f8]▁[/#f0f4f8]"
-        return "\n".join("".join(r) for r in grid)
+        return chr(10).join("".join(r) for r in grid)
     except Exception:
         return ""
-
-
-# ---------------------------------------------------------------- cassette (walkman) --------------
-def _cassette(beat, width=None):
-    """A mixtape: a chrome cassette shell with two hubs spinning (4-frame spoke), and a green->red VU
-    meter bouncing along the bottom. Pure fn of beat."""
-    try:
-        W = min(max(int(width or 32), 18), 44); H = 8
-        b = float(beat); bi = int(b)
-        chrome, dim, hot = "#d9b96a", "#7a5a1a", "#fff0c0"
-        red, grn = "#ff7a4a", "#5ade7a"
-        grid = [[" "] * W for _ in range(H)]
-        def put(y, x, ch, c):
-            if 0 <= x < W and 0 <= y < H:
-                grid[y][x] = "[%s]%s[/%s]" % (c, ch, c)
-        x0, x1 = 2, W - 3
-        for x in range(x0 + 1, x1):
-            put(1, x, "─", chrome); put(6, x, "─", chrome)
-        for y in range(2, 6):
-            put(y, x0, "│", chrome); put(y, x1, "│", chrome)
-        put(1, x0, "╭", chrome); put(1, x1, "╮", chrome); put(6, x0, "╰", chrome); put(6, x1, "╯", chrome)
-        for x in range(x0 + 2, x1 - 1):
-            put(2, x, "─", dim)                          # label strip
-        spoke = "│╱─╲"[bi % 4]                           # both hubs spin
-        for cx in (x0 + (x1 - x0) // 3, x0 + 2 * (x1 - x0) // 3):
-            put(4, cx - 1, "(", chrome); put(4, cx, spoke, hot); put(4, cx + 1, ")", chrome)
-        lv = "▁▂▃▄▅▆▇"                                   # bouncing VU meter along the bottom
-        for i in range(x0, x1 + 1):
-            f = 0.5 + 0.5 * math.sin(b * 0.5 + i * 0.4)
-            put(7, i, lv[int(f * (len(lv) - 1))], red if f > 0.72 else grn)
-        return "\n".join("".join(r) for r in grid)
-    except Exception:
-        return ""
-
 
 # ---------------------------------------------------------------- sonar (submarine scope) ---------
 def _sonar(beat, width=None):
@@ -525,43 +462,6 @@ def _sonar(beat, width=None):
         if 0 <= bx < W and 0 <= by < H:
             grid[by][bx] = "[%s]◉[/%s]" % (bc, bc)
         grid[int(round(cy))][int(round(cx))] = "[%s]+[/%s]" % (ring, ring)
-        return "\n".join("".join(r) for r in grid)
-    except Exception:
-        return ""
-
-
-# ---------------------------------------------------------------- scope (oscilloscope) ------------
-def _scope(beat, width=None):
-    """An oscilloscope: a live waveform (two summed sines) scrolling across a faint graticule, the
-    leading edge bright, connected vertically so it reads as a continuous trace. Pure fn of beat."""
-    try:
-        W = min(max(int(width or 32), 16), 44); H = 8
-        b = float(beat)
-        grid_c, trace, hot = "#0e4450", "#3fd0a0", "#c4ffe8"
-        cy = (H - 1) / 2.0
-        A = cy - 0.5
-        grid = [[" "] * W for _ in range(H)]
-        midy = int(round(cy))
-        for x in range(W):                               # faint graticule
-            if x % 6 == 3:
-                for y in range(H):
-                    grid[y][x] = "[%s]·[/%s]" % (grid_c, grid_c)
-            if grid[midy][x] == " ":
-                grid[midy][x] = "[%s]·[/%s]" % (grid_c, grid_c)
-        ph = b * 0.6
-        prev = None
-        for x in range(W):                               # scrolling waveform
-            t = x * 0.5
-            v = 0.7 * math.sin(t - ph) + 0.3 * math.sin(t * 2.3 - ph * 1.4)
-            yi = max(0, min(H - 1, int(round(cy - v * A))))
-            if prev is None:
-                prev = yi
-            lo, hi = sorted((prev, yi))
-            for yy in range(lo, hi + 1):
-                bright = (yy == yi)
-                c = hot if bright else trace
-                grid[yy][x] = "[%s]%s[/%s]" % (c, "●" if bright else "│", c)
-            prev = yi
         return "\n".join("".join(r) for r in grid)
     except Exception:
         return ""
@@ -644,8 +544,10 @@ def _aurora(beat, width=None):
 
 # ---------------------------------------------------------------- vhs (camcorder viewfinder) ------
 def _vhs(beat, width=None):
-    """A camcorder viewfinder: a blinking ● REC + a ticking SP timestamp, a ▶ PLAY tag, and a band of
-    bluish TRACKING NOISE that rolls up the frame now and then (with clean gaps). Pure fn of beat."""
+    """A camcorder viewfinder: a slow-blinking ● REC, an ACCURATE recording clock (SP m:ss counting
+    up in real seconds), a ▶ PLAY tag, and a band of bluish TRACKING NOISE drifting up the frame at
+    half speed. The band uses a float position + a soft-edged coverage envelope, so it glides
+    smoothly (sub-row interpolated) rather than stepping. Pure fn of beat (the 15 fps ultra clock)."""
     try:
         W = min(max(int(width or 32), 18), 44); H = 8
         b = float(beat); bi = int(b)
@@ -654,61 +556,34 @@ def _vhs(beat, width=None):
         def put(y, x, ch, c):
             if 0 <= x < W and 0 <= y < H:
                 grid[y][x] = "[%s]%s[/%s]" % (c, ch, c)
-        if bi % 2 == 0:
-            put(0, 1, "●", red)                          # REC dot blinks ~1Hz
+        if (bi // 8) % 2 == 0:                           # ● REC blinks ~1Hz (was ~7.5Hz)
+            put(0, 1, "●", red)
         for i, ch in enumerate("REC"):
             put(0, 3 + i, ch, white)
-        ts = "SP %d:%02d" % (bi // 60 % 10, bi % 60)     # ticking timestamp (top-right)
+        t = bi // 15                                     # REAL elapsed seconds at the 15 fps clock
+        ts = "SP %d:%02d" % (t // 60, t % 60)            # accurate recording clock (top-right)
         for i, ch in enumerate(ts):
             put(0, W - len(ts) - 1 + i, ch, white)
         for i, ch in enumerate("▶ PLAY"):
             put(H - 1, 1 + i, ch, blue)
-        band = (H - 2) - (bi % (H + 6))                  # tracking band rolls up, with a gap
-        for dy in (0, 1):
-            y = band + dy
-            if 1 <= y < H - 1:
-                for x in range(W):
-                    h = (x * 92821 + y * 68917 + bi * 40503) & 0xff
-                    if h % 2 == 0:
-                        v = 0x50 + (h % 0x80)
-                        c = "#%02x%02x%02x" % (v, v, min(255, v + 0x20))
-                        put(y, x, "▒░▓"[(h >> 3) % 3], c)
-        return "\n".join("".join(r) for r in grid)
+        # tracking-noise band drifts up at HALF speed, sub-row interpolated: a float position and a
+        # soft-edged vertical envelope (edge rows fade by coverage) so it glides instead of stepping.
+        pos = (b * 0.5) % (H + 6)                         # 0.5 rows/frame -> ~half the old speed
+        band_top = (H - 2) - pos                          # float; band occupies [band_top, band_top+2)
+        for y in range(1, H - 1):
+            cov = min(y + 1.0, band_top + 2.0) - max(float(y), band_top)
+            if cov <= 0.02:
+                continue
+            fade = 0.4 + 0.6 * min(1.0, cov)
+            for x in range(W):
+                h = (x * 92821 + y * 68917 + bi * 40503) & 0xff
+                if h % 2 == 0:
+                    v = int((0x50 + (h % 0x80)) * fade)
+                    c = "#%02x%02x%02x" % (v, v, min(255, v + 0x20))
+                    put(y, x, "▒░▓"[(h >> 3) % 3], c)
+        return chr(10).join("".join(r) for r in grid)
     except Exception:
         return ""
-
-
-# ---------------------------------------------------------------- bladerunner (off-world) ---------
-def _bladerunner(beat, width=None):
-    """Off-world rain city: a dark skyline with amber/teal neon signs flickering on the towers, heavy
-    diagonal rain falling, and a faint searchlight beam sweeping the sky. Pure fn of beat."""
-    try:
-        W = min(max(int(width or 32), 20), 44); H = 8
-        b = float(beat)
-        dark, amber, teal, rain = "#0e1420", "#ffae3a", "#2fd0d0", "#3a5a6a"
-        grid = [[" "] * W for _ in range(H)]
-        def put(y, x, ch, c):
-            if 0 <= x < W and 0 <= y < H:
-                grid[y][x] = "[%s]%s[/%s]" % (c, ch, c)
-        sx = int(round((0.5 + 0.5 * math.sin(b * 0.15)) * (W - 1)))   # searchlight sweep
-        for y in range(0, H - 2):
-            put(y, sx, "│", _lerp("#0c1420", "#5a7a8a", 0.45))
-        for x in range(W):                              # skyline towers + flickering neon signs
-            ht = 1 + ((x * 53 + 11) % 4)
-            for k in range(ht):
-                put(H - 1 - k, x, "█", dark)
-            if (x * 17) % 9 == 0:
-                flick = 0.55 + 0.45 * math.sin(b * 0.9 + x)
-                put(H - ht, x, "▀", _lerp("#141008", amber if (x // 9) % 2 == 0 else teal, flick))
-        for i in range(W // 2):                         # diagonal rain
-            col = (i * 7 + 3) % W
-            y = int((b * (1.1 + ((i * 13) % 4) * 0.35) + i * 3) % (H + 3)) - 1
-            if 0 <= y < H - 1 and grid[y][col] == " ":
-                put(y, col, "╱", _lerp(rain, teal, 0.35))
-        return "\n".join("".join(r) for r in grid)
-    except Exception:
-        return ""
-
 
 # ---------------------------------------------------------------- vaporwave (aesthetic) -----------
 def _vaporwave(beat, width=None):
@@ -749,15 +624,10 @@ THEMES = {
     "ultra-skynet": lambda b, w=None: render_sprite(T800, b, cols=w),
     "ultra-synthwave": lambda b, w=None: _synthwave(b, width=w),
     "ultra-matrix": lambda b, w=None: _matrix_rain(b, width=w),
-    "ultra-arcade": lambda b, w=None: _arcade(b, width=w),
-    "ultra-tv": lambda b, w=None: _tv(b, width=w),
-    "ultra-cassette": lambda b, w=None: _cassette(b, width=w),
     "ultra-sonar": lambda b, w=None: _sonar(b, width=w),
-    "ultra-scope": lambda b, w=None: _scope(b, width=w),
     "ultra-kaiju": lambda b, w=None: _kaiju(b, width=w),
     "ultra-aurora": lambda b, w=None: _aurora(b, width=w),
     "ultra-vhs": lambda b, w=None: _vhs(b, width=w),
-    "ultra-bladerunner": lambda b, w=None: _bladerunner(b, width=w),
     "ultra-vaporwave": lambda b, w=None: _vaporwave(b, width=w),
 }
 TITLES = {
@@ -765,15 +635,10 @@ TITLES = {
     "ultra-skynet": "「 SKYNET · T-800 」",
     "ultra-synthwave": "「 OUTRUN · SYNTHWAVE 」",
     "ultra-matrix": "「 THE MATRIX · 電 」",
-    "ultra-arcade": "「 SPACE INVADERS · INSERT COIN 」",
-    "ultra-tv": "「 SMPTE · PLEASE STAND BY 」",
-    "ultra-cassette": "「 MIXTAPE · SIDE A 」",
     "ultra-sonar": "「 SONAR · DEPTH 340 」",
-    "ultra-scope": "「 OSCILLOSCOPE · CH1 」",
     "ultra-kaiju": "「 怪獣 · TOKYO ALERT 」",
     "ultra-aurora": "「 AURORA · 69°N 」",
     "ultra-vhs": "「 ● REC · SP 」",
-    "ultra-bladerunner": "「 OFF-WORLD · 2019 」",
     "ultra-vaporwave": "「 ＶＡＰＯＲ · 純粋 」",
 }
 

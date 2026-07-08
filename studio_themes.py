@@ -447,22 +447,11 @@ ULTRA_MATRIX = Theme(
         "selection": "#0e2c14",                          # rain-graphite lift
     },
 )
-# Space Invaders cabinet — phosphor-green invaders marching on black, a magenta UFO, INSERT COIN.
-ULTRA_ARCADE = Theme(
-    name="ultra-arcade",
-    primary="#33aa44", secondary="#237a30", accent="#ff2d95",
-    foreground="#7ae88a", background="#030a04", surface="#08160a", panel="#0c1e0f",
-    success="#b8ffc4", warning="#ffcf5c", error="#ff5c5c", dark=True,
-    variables={
-        "block-cursor-foreground": "#030a04", "block-cursor-background": "#ff2d95",
-        "footer-key-foreground": "#b8ffc4", "footer-description-foreground": "#7ae88a",
-        "border": "#1f7a2e", "border-strong": "#124a1c",
-        "surface-deep": "#020702", "text-bright": "#d8ffe0",
-        "accent-2": "#46e8ff", "tertiary": "#4a9a5a",    # magenta UFO hero · electric-cyan · dim invader green
-        "selection": "#0e2c14",
-    },
-)
 # SMPTE test card — broadcast steel-blue chrome, the white/red/cyan of the bars, "PLEASE STAND BY".
+# --- UNDER CONSTRUCTION: intentionally NOT in ULTRA_THEMES, so it is hidden from the theme
+# picker and cannot be selected or run. The tv decoration (_tv in ultra_art.py) needs a
+# rework; kept here so the work is not lost. To re-enable: add ULTRA_TV back to ULTRA_THEMES
+# and re-register "ultra-tv" in ultra_art's EFFECTS / THEMES / TITLES maps. ---
 ULTRA_TV = Theme(
     name="ultra-tv",
     primary="#6a7a8a", secondary="#4a5560", accent="#e6e6e6",
@@ -475,21 +464,6 @@ ULTRA_TV = Theme(
         "surface-deep": "#030507", "text-bright": "#f0f4f8",
         "accent-2": "#1ac8c8", "tertiary": "#7a828a",    # test-card cyan · broadcast grey
         "selection": "#131820",
-    },
-)
-# Walkman mixtape — chrome shell + tape-gold, green/red VU, spinning reels. SIDE A.
-ULTRA_CASSETTE = Theme(
-    name="ultra-cassette",
-    primary="#b09a5a", secondary="#7a684a", accent="#ffe08a",
-    foreground="#d8c89a", background="#0a0803", surface="#14100a", panel="#1c160c",
-    success="#5ade7a", warning="#ffcf5c", error="#ff7a4a", dark=True,
-    variables={
-        "block-cursor-foreground": "#0a0803", "block-cursor-background": "#ffe08a",
-        "footer-key-foreground": "#fff0c0", "footer-description-foreground": "#d8c89a",
-        "border": "#6a5628", "border-strong": "#40340f",
-        "surface-deep": "#080602", "text-bright": "#fff0c0",
-        "accent-2": "#ff7a4a", "tertiary": "#a89468",    # VU-red tape warmth · aged chrome
-        "selection": "#241c0e",
     },
 )
 # Submarine sonar — abyssal cyan-green scope, a sweeping line, a pinging contact. DEPTH 340.
@@ -505,21 +479,6 @@ ULTRA_SONAR = Theme(
         "surface-deep": "#010708", "text-bright": "#c4faff",
         "accent-2": "#7cffb0", "tertiary": "#4a9aa0",    # contact-blip green · deep teal
         "selection": "#0c2a30",
-    },
-)
-# Oscilloscope — phosphor green-cyan trace on a graticule; analog-synth bench vibe. CH1.
-ULTRA_SCOPE = Theme(
-    name="ultra-scope",
-    primary="#1fb87a", secondary="#147a52", accent="#5cffd0",
-    foreground="#7ad8b8", background="#020c08", surface="#08180f", panel="#0a2216",
-    success="#7cffc8", warning="#ffcf5c", error="#ff6d6d", dark=True,
-    variables={
-        "block-cursor-foreground": "#020c08", "block-cursor-background": "#5cffd0",
-        "footer-key-foreground": "#c4ffe8", "footer-description-foreground": "#7ad8b8",
-        "border": "#148a5a", "border-strong": "#0c4a34",
-        "surface-deep": "#010805", "text-bright": "#c4ffe8",
-        "accent-2": "#c4faff", "tertiary": "#4a9a78",    # bright cyan flash · dim scope green
-        "selection": "#0c2a1c",
     },
 )
 # Showa monster movie — charcoal city + atomic-blue breath + red-alert sirens. TOKYO ALERT.
@@ -567,21 +526,6 @@ ULTRA_VHS = Theme(
         "selection": "#1a2648",                          # vhs-blue lift (> panel)
     },
 )
-# Off-world rain city — amber neon + teal on a rain-slicked night. 2019.
-ULTRA_BLADERUNNER = Theme(
-    name="ultra-bladerunner",
-    primary="#a87a30", secondary="#705018", accent="#ffae3a",
-    foreground="#c0a878", background="#060810", surface="#0e1218", panel="#161a22",
-    success="#7ad0c0", warning="#ffae3a", error="#ff6d6d", dark=True,
-    variables={
-        "block-cursor-foreground": "#060810", "block-cursor-background": "#ffae3a",
-        "footer-key-foreground": "#ffe0a0", "footer-description-foreground": "#c0a878",
-        "border": "#6a5220", "border-strong": "#40320f",
-        "surface-deep": "#030509", "text-bright": "#ffe0a0",
-        "accent-2": "#2fd0d0", "tertiary": "#8a7a58",    # teal neon · rain-worn brass
-        "selection": "#1a2230",                          # rain-blue lift (> panel)
-    },
-)
 # Vaporwave — pastel pink/cyan, a marble bust over a checkerboard floor. 純粋.
 ULTRA_VAPORWAVE = Theme(
     name="ultra-vaporwave",
@@ -597,9 +541,8 @@ ULTRA_VAPORWAVE = Theme(
         "selection": "#241030",                          # orchid lift (> panel)
     },
 )
-ULTRA_THEMES = (ULTRA_DRAGON, ULTRA_SKYNET, ULTRA_SYNTHWAVE, ULTRA_MATRIX, ULTRA_ARCADE, ULTRA_TV,
-                ULTRA_CASSETTE, ULTRA_SONAR, ULTRA_SCOPE, ULTRA_KAIJU, ULTRA_AURORA, ULTRA_VHS,
-                ULTRA_BLADERUNNER, ULTRA_VAPORWAVE)
+ULTRA_THEMES = (ULTRA_DRAGON, ULTRA_SKYNET, ULTRA_SYNTHWAVE, ULTRA_MATRIX,
+                ULTRA_SONAR, ULTRA_KAIJU, ULTRA_AURORA, ULTRA_VHS, ULTRA_VAPORWAVE)
 # Single source of truth for "is this the animated tier" — used by the picker (sectioning) and by
 # studio._on_theme_changed (show/hide the decoration). ultra_art.THEMES maps the same names to art.
 ULTRA_NAMES = frozenset(t.name for t in ULTRA_THEMES)
