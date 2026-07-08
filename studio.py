@@ -6,7 +6,7 @@ Launch: ./studio.sh   (or ./venv/bin/python studio.py)
 """
 import os, sys, time, json, subprocess, threading, glob, re, shutil, random
 import gpu_budget
-from textual import work
+from textual import work, on
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from rich.markup import escape
@@ -21,7 +21,7 @@ from rich.text import Text
 from rich.style import Style
 from studio_core import JobManager, REPO, ARCHIVED
 
-from studio_themes import EXTRA_THEMES, SPAL, tmark
+from studio_themes import EXTRA_THEMES, SPAL, tmark, THEME_MIGRATE
 
 def _run_kind(job):
     """T11: classify a job's PURPOSE from its params, distinct from job.kind (single/chained/
@@ -1083,7 +1083,14 @@ class Studio(App):
     #consultbtn { margin-top: 1; }
     #chatbtn { margin-bottom: 1; }
     DataTable { background: $surface-deep; color: $foreground; border: round $border; height: 1fr; }
-    DataTable > .datatable--cursor { background: $border-strong; color: $success; }
+    /* Row cursor = a bounded neutral DEPTH lift ($selection, one step above panel) + bright bold
+       text — NOT $border-strong (which in warm themes hue-matched the card border and flooded the
+       7-row queue cell into one muddy blob). The chromatic selection signal lives on the queue
+       card's own accent-reframed frame; this rule also gives the 1-row archive tables a crisp
+       cursor for free. border-strong is retired from the cursor, kept for input/hover/button fills. */
+    DataTable > .datatable--cursor { background: $selection; color: $text-bright; text-style: bold; }
+    DataTable:focus > .datatable--cursor { background: $selection; color: $text-bright; text-style: bold; }
+    DataTable > .datatable--hover { background: $surface; }
     DataTable > .datatable--header { background: $panel; color: $accent; }
     ProgressBar { margin: 1 1; }
     Bar > .bar--bar { color: $primary; }
@@ -1343,6 +1350,7 @@ class Studio(App):
         v.setdefault("border-strong", v.get("panel", "#134a2a"))
         v.setdefault("surface-deep", v.get("background", "#06120b"))
         v.setdefault("text-bright", v.get("success", "#9dffce"))
+        v.setdefault("selection", v.get("panel", "#1a1a1a"))   # row-cursor lift; builtins fall back to panel
         return v
 
     # Fields the launched command LITERALLY ignores outside director mode (verified against
@@ -1409,8 +1417,9 @@ class Studio(App):
     def on_mount(self):
         for t in EXTRA_THEMES:
             self.register_theme(t)
-        try:      # theme choice persists (picker ENTER writes it); unknown/stale names fall back
+        try:      # theme choice persists (picker ENTER writes it); cut names migrate, then fall back
             _th = str(load_studio_config().get("theme") or "")
+            _th = THEME_MIGRATE.get(_th, _th)   # a retired theme lands on its nearest kept sibling
             self.theme = _th if (_th.startswith("pipboy") and _th in self.available_themes) else "pipboy"
         except Exception:
             self.theme = "pipboy"
@@ -1962,10 +1971,12 @@ class Studio(App):
                 pass
         setattr(self, sig_attr, sig)
 
-    def _queue_card(self, job, status, status_col, w):
+    def _queue_card(self, job, status, status_col, w, selected=False):
         """One queued/suspended job as a decorated box-art card (rich markup, fixed 7-line height
         incl a trailing gap so DataTable rows stay uniform). Purely cosmetic — selection + every
-        queue action still key off the ROW (job id), never this card text."""
+        queue action still key off the ROW (job id), never this card text. When `selected`, the
+        card re-lights its OWN frame: bright hero accent + heavy box-drawing (the lit left ┃ rail),
+        so selection reads as a framed, ignited card on the neutral cursor lift — not a flood."""
         p = job.params or {}
         inner = max(20, w - 4)
         def trunc(s, n):
@@ -1985,15 +1996,18 @@ class Studio(App):
             p.get("backend", "ltx"), p.get("width", "?"), p.get("height", "?"),
             p.get("steps", "?"), p.get("cfg", "?"), p.get("seconds", "?"),
             trunc(p.get("seed", "") or "rnd", 11))
-        B = SPAL["primary"]
-        top = "[%s]╭%s╮[/%s]" % (B, "─" * (w - 2), B)
-        bot = "[%s]╰%s╯[/%s]" % (B, "─" * (w - 2), B)
+        if selected:
+            B = SPAL["accent"]; TL, TR, BL, BR, H, V = "┏", "┓", "┗", "┛", "━", "┃"   # ignited frame
+        else:
+            B = SPAL["primary"]; TL, TR, BL, BR, H, V = "╭", "╮", "╰", "╯", "─", "│"   # quiet frame
+        top = "[%s]%s%s%s[/%s]" % (B, TL, H * (w - 2), TR, B)
+        bot = "[%s]%s%s%s[/%s]" % (B, BL, H * (w - 2), BR, B)
         T, M, S = SPAL["title"], SPAL["muted"], SPAL["soft"]
         body = [
-            "[%s]│[/%s] %s [%s]│[/%s]" % (B, B, header, B, B),
-            "[%s]│[/%s] [%s]%s[/%s] [%s]│[/%s]" % (B, B, T, pad(title, inner), T, B, B),
-            "[%s]│[/%s] [%s]%s[/%s] [%s]│[/%s]" % (B, B, M, pad(job.id, inner), M, B, B),
-            "[%s]│[/%s] [%s]%s[/%s] [%s]│[/%s]" % (B, B, S, pad(parms, inner), S, B, B),
+            "[%s]%s[/%s] %s [%s]%s[/%s]" % (B, V, B, header, B, V, B),
+            "[%s]%s[/%s] [%s]%s[/%s] [%s]%s[/%s]" % (B, V, B, T, pad(title, inner), T, B, V, B),
+            "[%s]%s[/%s] [%s]%s[/%s] [%s]%s[/%s]" % (B, V, B, M, pad(job.id, inner), M, B, V, B),
+            "[%s]%s[/%s] [%s]%s[/%s] [%s]%s[/%s]" % (B, V, B, S, pad(parms, inner), S, B, V, B),
         ]
         return "\n".join([top] + body + [bot, ""])
 
@@ -2019,23 +2033,42 @@ class Studio(App):
                 height=3, key="__empty__")
             self._qsig = ("empty", w)
             return
-        sig = (w,) + tuple((j.id, _run_kind(j), st, str(j.params)) for (j, st, _c) in items)
-        if sig == getattr(self, "_qsig", None):
-            return
-        sel = None
-        try:
-            sel = t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value
+        sel = None                           # read the highlighted row FIRST so it can fold into the
+        try:                                 # signature -> the selected card re-lights (accent frame)
+            sel = t.coordinate_to_cell_key(t.cursor_coordinate).row_key.value   # when the cursor moves
         except Exception:
             pass
+        sig = (w, sel) + tuple((j.id, _run_kind(j), st, str(j.params)) for (j, st, _c) in items)
+        if sig == getattr(self, "_qsig", None):
+            return
         t.clear()
         for (j, st, scol) in items:
-            t.add_row(Text.from_markup(self._queue_card(j, st, scol, w)), height=7, key=j.id)
+            t.add_row(Text.from_markup(self._queue_card(j, st, scol, w, selected=(j.id == sel))),
+                      height=7, key=j.id)
         if sel is not None:
             try:
                 t.move_cursor(row=t.get_row_index(sel), animate=False)
             except Exception:
                 pass
         self._qsig = sig
+
+    @on(DataTable.RowHighlighted, "#qtable")
+    def _relight_queue(self, event):
+        """Selection is ONE chromatic event: repaint the queue the instant the cursor moves so the
+        highlighted card lights its OWN accent frame in lockstep with the CSS depth-lift — no
+        half-selected flash waiting for the next tick. Reuses _sync_queue_cards (sel is folded into
+        its signature); the guard swallows the re-entrant RowHighlighted that clear()+move_cursor
+        fire. A separate @on handler (NOT on_data_table_row_highlighted) so it composes with the
+        existing qinspect/thumbnail dispatch instead of colliding with it."""
+        if getattr(self, "_relighting", False):
+            return
+        self._relighting = True
+        try:
+            self._sync_queue_cards()
+        except Exception:
+            pass
+        finally:
+            self._relighting = False
 
     # ---------- live polling ----------
     def _meter(self):

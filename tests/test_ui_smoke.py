@@ -116,6 +116,15 @@ async def main():
             except Exception:
                 good = False
             check("theme applies: %s" % t.name, good)
+        # theme overhaul: $selection resolves for CSS (pipboy defines it; builtins fall back to panel),
+        # and the selected queue card re-lights its OWN frame in heavy box-art vs rounded when not
+        cssv = app.get_css_variables()
+        check("get_css_variables resolves $selection", "selection" in cssv, sorted(cssv)[:0])
+        sel_card = app._queue_card(active, "QUEUED · #1", "#6dffab", 60, selected=True)
+        dim_card = app._queue_card(active, "QUEUED · #1", "#6dffab", 60, selected=False)
+        check("selected card = heavy ignited frame", "┏" in sel_card and "┃" in sel_card)
+        check("unselected card = quiet rounded frame", "╭" in dim_card and "┏" not in dim_card)
+        check("cut theme migrates (radium->gameboy)", studio.THEME_MIGRATE.get("pipboy-radium") == "pipboy-gameboy")
         # picking a sound persists but NEVER auditions (no unexpected audio — user rule)
         sound_calls.clear()
         app.query_one("#snd_done", Select).value = "bell.wav"

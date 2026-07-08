@@ -11,9 +11,9 @@ def check(name, cond, detail=""):
     print(("PASS" if cond else "FAIL"), "::", name, ("" if cond else str(detail)))
 
 themes = studio.EXTRA_THEMES
-check("14 curated themes, unique names", len(themes) == 14 and len({t.name for t in themes}) == 14)
+check("10 curated themes, unique names", len(themes) == 10 and len({t.name for t in themes}) == 10)
 CUSTOM = ("border", "border-strong", "surface-deep", "text-bright", "accent-2", "tertiary",
-          "block-cursor-foreground", "block-cursor-background")
+          "block-cursor-foreground", "block-cursor-background", "selection")
 for t in themes:
     missing = [v for v in CUSTOM if not (t.variables or {}).get(v)]
     check("%s: full variable shape" % t.name, not missing, missing)
@@ -50,6 +50,21 @@ for t in themes:
     v = (t.variables or {}).get("surface-deep")
     if v and maxch(v) > 24: bad.append("surface-deep")
     check("%s: terminal-black canvas" % t.name, not bad, bad)
+
+# selection = the row-cursor DEPTH lift: it must be a clear value-step ABOVE panel (so the cursor
+# reads as a raised shelf, not a recessed hole) and must NOT be border-strong (the old muddy flood
+# it replaced). gameboy's lit glass is exempt from the wash guard but the ordering still holds.
+for t in themes:
+    var = t.variables or {}
+    sel, pan, bs = var.get("selection"), t.panel, var.get("border-strong")
+    check("%s: selection above panel" % t.name, sel and maxch(sel) > maxch(pan),
+          "sel=%s pan=%s" % (sel, pan))
+    check("%s: selection != border-strong" % t.name, sel and bs and sel.lower() != bs.lower())
+
+# the row-cursor CSS now rides $selection, not $border-strong (the collision the user reported)
+_cur = [ln for ln in studio.Studio.CSS.splitlines() if ".datatable--cursor" in ln]
+check("cursor rule uses $selection", _cur and all("$selection" in ln for ln in _cur), _cur)
+check("cursor rule dropped $border-strong", _cur and not any("$border-strong" in ln for ln in _cur))
 
 print("RESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)
