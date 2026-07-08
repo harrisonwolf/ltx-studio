@@ -66,6 +66,8 @@ EFFECTS = {
                         "bgpulse": ("#020a0c", "#041418")},   # black -> faint abyssal-cyan swell
     "ultra-scope":     {"border": "GREEN",  "mode": "wave",     "base": "#4ac0a0", "hot": "#c4ffe8",
                         "bgpulse": ("#020c08", "#061808")},   # black -> faint phosphor-green swell
+    "ultra-kaiju":     {"border": "ATOMIC", "mode": "electron", "base": "#6a8aa8", "hot": "#eaf6ff",
+                        "bgpulse": ("#06080c", "#0a1018")},   # black -> faint atomic-blue swell
 }
 
 _PAL = {}                   # optional theme palette (set by set_palette); reserved for future re-tint
@@ -619,6 +621,43 @@ def _scope(beat, width=None):
         return ""
 
 
+# ---------------------------------------------------------------- kaiju (monster movie) -----------
+def _kaiju(beat, width=None):
+    """A Showa monster picture: a city skyline (flickering windows), a kaiju silhouette whose dorsal
+    spines CHARGE blue over ~7s then FIRE an atomic-breath beam across the sky. Pure fn of beat."""
+    try:
+        W = min(max(int(width or 32), 20), 44); H = 8
+        b = float(beat); bi = int(b)
+        dark, window, spine_dim = "#1a1e26", "#c8a83a", "#164a6a"
+        atomic, hot, red = "#8ad0ff", "#eaf6ff", "#e03a3a"
+        grid = [[" "] * W for _ in range(H)]
+        def put(y, x, ch, c):
+            if 0 <= x < W and 0 <= y < H:
+                grid[y][x] = "[%s]%s[/%s]" % (c, ch, c)
+        for x in range(W):                              # skyline
+            for k in range(1 + ((x * 37 + 7) % 3)):
+                put(H - 1 - k, x, "█", dark)
+            if (x * 13 + bi) % 9 == 0:
+                put(H - 2, x, "▪", window)              # windows flicker
+        cyc = (b * 0.5) % 10.0
+        charge = min(1.0, cyc / 7.0)
+        firing = 7.0 <= cyc < 8.2
+        kx = W // 2 - 3
+        for s, ry in (("  ██  ", 2), (" ████ ", 3), ("██████", 4), ("█ ██ █", 5)):
+            for i, ch in enumerate(s):
+                if ch == "█":
+                    put(ry, kx + i, "█", dark)
+        put(3, kx + 1, "▪", hot if firing else red); put(3, kx + 4, "▪", hot if firing else red)
+        for sx in (kx - 1, kx + 1, kx + 3, kx + 5):     # dorsal spines charge blue
+            put(1, sx, "▲", _lerp(spine_dim, hot if firing else atomic, charge))
+        if firing:                                      # atomic-breath beam
+            for x in range(0, kx):
+                put(4, x, "═", hot if x % 2 else atomic)
+        return "\n".join("".join(r) for r in grid)
+    except Exception:
+        return ""
+
+
 # ---------------------------------------------------------------- public API ----------------------
 THEMES = {
     "ultra-dragon": lambda b, w=None: render_sprite(DRAGON, b, cols=w),
@@ -630,6 +669,7 @@ THEMES = {
     "ultra-cassette": lambda b, w=None: _cassette(b, width=w),
     "ultra-sonar": lambda b, w=None: _sonar(b, width=w),
     "ultra-scope": lambda b, w=None: _scope(b, width=w),
+    "ultra-kaiju": lambda b, w=None: _kaiju(b, width=w),
 }
 TITLES = {
     "ultra-dragon": "「 年 · YEAR OF THE DRAGON 」",
@@ -641,6 +681,7 @@ TITLES = {
     "ultra-cassette": "「 MIXTAPE · SIDE A 」",
     "ultra-sonar": "「 SONAR · DEPTH 340 」",
     "ultra-scope": "「 OSCILLOSCOPE · CH1 」",
+    "ultra-kaiju": "「 怪獣 · TOKYO ALERT 」",
 }
 
 

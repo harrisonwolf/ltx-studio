@@ -522,8 +522,23 @@ ULTRA_SCOPE = Theme(
         "selection": "#0c2a1c",
     },
 )
+# Showa monster movie — charcoal city + atomic-blue breath + red-alert sirens. TOKYO ALERT.
+ULTRA_KAIJU = Theme(
+    name="ultra-kaiju",
+    primary="#4a5a6a", secondary="#34404c", accent="#8ad0ff",
+    foreground="#a8b8c4", background="#06080c", surface="#0e1218", panel="#141a22",
+    success="#8ad0ff", warning="#ffcf5c", error="#e03a3a", dark=True,
+    variables={
+        "block-cursor-foreground": "#06080c", "block-cursor-background": "#8ad0ff",
+        "footer-key-foreground": "#eaf6ff", "footer-description-foreground": "#a8b8c4",
+        "border": "#2a3846", "border-strong": "#18222c",
+        "surface-deep": "#030507", "text-bright": "#eaf6ff",
+        "accent-2": "#e03a3a", "tertiary": "#6a7886",    # red-alert siren · charcoal steel
+        "selection": "#16202e",                          # steel-blue lift (> panel)
+    },
+)
 ULTRA_THEMES = (ULTRA_DRAGON, ULTRA_SKYNET, ULTRA_SYNTHWAVE, ULTRA_MATRIX, ULTRA_ARCADE, ULTRA_TV,
-                ULTRA_CASSETTE, ULTRA_SONAR, ULTRA_SCOPE)
+                ULTRA_CASSETTE, ULTRA_SONAR, ULTRA_SCOPE, ULTRA_KAIJU)
 # Single source of truth for "is this the animated tier" — used by the picker (sectioning) and by
 # studio._on_theme_changed (show/hide the decoration). ultra_art.THEMES maps the same names to art.
 ULTRA_NAMES = frozenset(t.name for t in ULTRA_THEMES)
