@@ -537,8 +537,23 @@ ULTRA_KAIJU = Theme(
         "selection": "#16202e",                          # steel-blue lift (> panel)
     },
 )
+# Northern lights — polar-night green + aurora violet over a pine treeline. 69°N.
+ULTRA_AURORA = Theme(
+    name="ultra-aurora",
+    primary="#2ec06a", secondary="#1f7a4a", accent="#a86ff0",
+    foreground="#8ad8b0", background="#030f0a", surface="#08180f", panel="#0c2016",
+    success="#6affaa", warning="#ffcf5c", error="#ff6d8a", dark=True,
+    variables={
+        "block-cursor-foreground": "#030f0a", "block-cursor-background": "#a86ff0",
+        "footer-key-foreground": "#b8ffd8", "footer-description-foreground": "#8ad8b0",
+        "border": "#1f7a44", "border-strong": "#124a28",
+        "surface-deep": "#020a06", "text-bright": "#b8ffd8",
+        "accent-2": "#7cc4ff", "tertiary": "#4a9a6a",    # icy star-blue · deep pine green
+        "selection": "#123420",                          # aurora-green lift (> panel)
+    },
+)
 ULTRA_THEMES = (ULTRA_DRAGON, ULTRA_SKYNET, ULTRA_SYNTHWAVE, ULTRA_MATRIX, ULTRA_ARCADE, ULTRA_TV,
-                ULTRA_CASSETTE, ULTRA_SONAR, ULTRA_SCOPE, ULTRA_KAIJU)
+                ULTRA_CASSETTE, ULTRA_SONAR, ULTRA_SCOPE, ULTRA_KAIJU, ULTRA_AURORA)
 # Single source of truth for "is this the animated tier" — used by the picker (sectioning) and by
 # studio._on_theme_changed (show/hide the decoration). ultra_art.THEMES maps the same names to art.
 ULTRA_NAMES = frozenset(t.name for t in ULTRA_THEMES)

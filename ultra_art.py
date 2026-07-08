@@ -68,6 +68,8 @@ EFFECTS = {
                         "bgpulse": ("#020c08", "#061808")},   # black -> faint phosphor-green swell
     "ultra-kaiju":     {"border": "ATOMIC", "mode": "electron", "base": "#6a8aa8", "hot": "#eaf6ff",
                         "bgpulse": ("#06080c", "#0a1018")},   # black -> faint atomic-blue swell
+    "ultra-aurora":    {"border": "AURORA", "mode": "wave",     "base": "#4ac080", "hot": "#b8ffd8",
+                        "bgpulse": ("#030f0a", "#06180c")},   # black -> faint aurora-green swell
 }
 
 _PAL = {}                   # optional theme palette (set by set_palette); reserved for future re-tint
@@ -658,6 +660,44 @@ def _kaiju(beat, width=None):
         return ""
 
 
+# ---------------------------------------------------------------- aurora (northern lights) --------
+def _aurora(beat, width=None):
+    """Northern lights: shimmering vertical curtains (green at the horizon -> teal -> violet up top)
+    that undulate and drift, twinkling stars above, a dark pine treeline below. Pure fn of beat."""
+    try:
+        W = min(max(int(width or 32), 16), 44); H = 8
+        b = float(beat)
+        grid = [[" "] * W for _ in range(H)]
+        def put(y, x, ch, c):
+            if 0 <= x < W and 0 <= y < H:
+                grid[y][x] = "[%s]%s[/%s]" % (c, ch, c)
+        horizon = H - 2
+        for x in range(W):
+            s = 0.5 + 0.5 * math.sin(x * 0.4 + b * 0.3)         # curtain brightness drifts
+            htop = 1 + int(round(2.4 * (0.5 + 0.5 * math.sin(x * 0.22 - b * 0.2))))
+            span = max(1, horizon - htop)
+            for y in range(htop, horizon + 1):
+                depth = (y - htop) / span                        # 0 top .. 1 horizon
+                c = (_lerp("#7a3ad0", "#1fb6a0", depth * 2) if depth < 0.5
+                     else _lerp("#1fb6a0", "#39ff8a", (depth - 0.5) * 2))
+                inten = s * (0.4 + 0.6 * depth)
+                if inten < 0.28:
+                    continue
+                ch = "▓" if inten > 0.7 else ("▒" if inten > 0.45 else "░")
+                put(y, x, ch, _lerp("#0a1a20", c, inten))
+        for y in range(0, 2):                                    # stars in the upper sky
+            for x in range(W):
+                if grid[y][x] == " " and (x * 7 + y * 13) % 17 == 0:
+                    tw = 0.5 + 0.5 * math.sin(b * 0.3 + x * 1.1 + y * 2.0)
+                    if tw > 0.6:
+                        put(y, x, "·", _lerp("#24406a", "#cfeaff", (tw - 0.6) / 0.4))
+        for x in range(W):                                       # pine treeline
+            put(horizon + 1, x, "▲", "#0e3a1e")
+        return "\n".join("".join(r) for r in grid)
+    except Exception:
+        return ""
+
+
 # ---------------------------------------------------------------- public API ----------------------
 THEMES = {
     "ultra-dragon": lambda b, w=None: render_sprite(DRAGON, b, cols=w),
@@ -670,6 +710,7 @@ THEMES = {
     "ultra-sonar": lambda b, w=None: _sonar(b, width=w),
     "ultra-scope": lambda b, w=None: _scope(b, width=w),
     "ultra-kaiju": lambda b, w=None: _kaiju(b, width=w),
+    "ultra-aurora": lambda b, w=None: _aurora(b, width=w),
 }
 TITLES = {
     "ultra-dragon": "「 年 · YEAR OF THE DRAGON 」",
@@ -682,6 +723,7 @@ TITLES = {
     "ultra-sonar": "「 SONAR · DEPTH 340 」",
     "ultra-scope": "「 OSCILLOSCOPE · CH1 」",
     "ultra-kaiju": "「 怪獣 · TOKYO ALERT 」",
+    "ultra-aurora": "「 AURORA · 69°N 」",
 }
 
 
