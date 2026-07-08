@@ -1,7 +1,7 @@
 """ultra_art: the animated pixel-art decorations for the ultra-themes tier. Guards the properties the
 studio relies on — purity (deterministic frames), real motion, the STUDIO_NO_ANIM freeze, width-fit +
 balanced markup at every size/beat, and that the module's THEMES match studio_themes.ULTRA_NAMES."""
-import sys, os, re
+import sys, os, re, math
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import ultra_art
 import studio_themes
@@ -64,14 +64,34 @@ for n in NAMES:
     check("%s: fits 48-col budget (max=%d)" % (n, worst), worst <= 48)
     check("%s: balanced markup" % n, balanced)
 
-# bg_pulse: ever-so-subtle canvas breathing (opt-in per theme; synthwave only). Moves, stays
-# near-black even at peak (<=24/channel), None for themes that don't opt in, frozen under NO_ANIM.
+# bg_pulse: the full-page breath — EVERY ultra theme opts in now, in its own hue; stays near-black
+# even at peak (<=24/channel); non-ultra -> None; frozen under NO_ANIM.
 def _maxch(h):
     h = h.lstrip("#"); return max(int(h[i:i + 2], 16) for i in (0, 2, 4))
+for n in NAMES:
+    eff = ultra_art.EFFECTS[n]
+    check("%s: opts into the canvas breath" % n, "bgpulse" in eff)
+    check("%s: canvas base == theme bg" % n,
+          eff["bgpulse"][0].lower() == studio_themes.__dict__[
+              {"ultra-dragon": "ULTRA_DRAGON", "ultra-skynet": "ULTRA_SKYNET",
+               "ultra-synthwave": "ULTRA_SYNTHWAVE", "ultra-matrix": "ULTRA_MATRIX"}[n]].background.lower())
+    check("%s: canvas peak near-black (<=24/ch)" % n, _maxch(eff["bgpulse"][1]) <= 24)
 _bp = [ultra_art.bg_pulse("ultra-synthwave", b * 0.5) for b in range(0, 40)]
-check("bg_pulse: synthwave opts in + moves", all(_bp) and len(set(_bp)) > 3)
-check("bg_pulse: peak stays near-black (<=24/ch)", max(_maxch(v) for v in _bp) <= 24)
-check("bg_pulse: non-opt-in theme -> None", ultra_art.bg_pulse("ultra-dragon", 3) is None)
+check("bg_pulse: moves", all(_bp) and len(set(_bp)) > 3)
+check("bg_pulse: non-ultra theme -> None", ultra_art.bg_pulse("pipboy", 3) is None)
+# THE POINT: canvas + border breathe on ONE shared phase -> both hit their crest/trough on the same
+# beats (a single page-heartbeat). Verify at the sine crest (sin=1) and trough (sin=-1).
+_CREST = math.pi / (2 * ultra_art.BREATH_W)
+_TROUGH = 3 * math.pi / (2 * ultra_art.BREATH_W)
+for n in NAMES:
+    eff = ultra_art.EFFECTS[n]
+    ramp = ultra_art.RAMPS[eff["border"]]
+    check("%s: canvas+border peak TOGETHER (synced)" % n,
+          ultra_art.bg_pulse(n, _CREST).lower() == eff["bgpulse"][1].lower()
+          and ultra_art.glow(n, _CREST).lower() == ramp[-1].lower())
+    check("%s: canvas+border trough together" % n,
+          ultra_art.bg_pulse(n, _TROUGH).lower() == eff["bgpulse"][0].lower()
+          and ultra_art.glow(n, _TROUGH).lower() == ramp[0].lower())
 os.environ["STUDIO_NO_ANIM"] = "1"
 try:
     check("bg_pulse: frozen under STUDIO_NO_ANIM",
