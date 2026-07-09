@@ -92,13 +92,15 @@ check("moment: every theme fires within ~8 min", set(_fires) == set(NAMES), sort
 
 _seen, _ok = set(), True
 for _x in range(0, 320):
-    _edges = ultra_art.current_frame(_x * 0.25, 4)
-    _ok &= len(_edges) <= 1 and all(0.0 <= g <= 1.0 for g in _edges.values())
-    _seen.update(_edges)
-check("current: a single bounded spark", _ok)
-check("current: tours every panel edge (16/16)", len(_seen) == 16, len(_seen))
-check("current: head stays in range", all(ultra_art.current_head(b, 4) in range(4) for b in (0, 5.5, 33.3, 200.0)))
-check("current: storm lights every edge", len(ultra_art.current_frame(3.3, 3, storm=1.0)) == 12)
+    _glows = ultra_art.current_frame(_x * 0.25, 4)
+    _ok &= len(_glows) <= 1 and all(0.0 <= g <= 1.0 for g in _glows.values())
+    _seen.update(_glows)
+check("current: a single bounded spark (whole panel at a time)", _ok)
+check("current: visits every panel (4/4)", _seen == {0, 1, 2, 3}, _seen)
+check("current: head matches the lit panel",
+      all((lambda f: not f or ultra_art.current_head(b, 4) in f)(ultra_art.current_frame(b, 4))
+          for b in (1.0, 10.0, 21.7, 33.3)))
+check("current: storm shimmers every panel", len(ultra_art.current_frame(3.3, 3, storm=1.0)) == 3)
 check("current: storm glow bounded", all(0.0 <= g <= 1.0 for g in ultra_art.current_frame(3.3, 3, storm=1.0).values()))
 check("current: no panels -> {}", ultra_art.current_frame(5.0, 0) == {})
 

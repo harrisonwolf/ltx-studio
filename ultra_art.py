@@ -142,51 +142,50 @@ def moment(theme_name, beat):
 
 
 # ---------------------------------------------------------------- live current (final layer) ------
-# The whole-screen layer: ONE bright spark in the theme's hot color flows along the visible panels'
-# borders — edge to edge, panel to panel — so the entire frame carries the theme's electricity.
-# TRAVELS, never throbs (the reverted border-breathe / canvas-breath / corner-frame all pulsed in
-# place). Pure math here (deterministic, testable); studio._animate_ultra_current applies the glows
-# to real panel borders and layers the signature-moment STORM (every edge crackling, scaled by the
+# The whole-screen layer: ONE bright spark in the theme's hot color travels the visible panels —
+# a panel's WHOLE border swells smoothly to the hot crest and fades as the current moves on to the
+# next panel (no edge-at-a-time flashing — a panel glows as one). TRAVELS, never throbs (the
+# reverted border-breathe / canvas-breath / corner-frame all pulsed in place). Pure math here
+# (deterministic, testable); studio._animate_ultra_current applies the glows to real panel borders
+# and layers the signature-moment STORM (every panel shimmering on its own phase, scaled by the
 # moment envelope, so it glides in and melts away).
-CURRENT_EDGE_S = 1.1        # default seconds-per-edge (the studio passes its own dial through)
+CURRENT_PANEL_S = 4.4       # default seconds the spark spends per panel (studio passes its dial)
 
 
-def current_head(beat, n_panels, edge_u=None):
+def current_head(beat, n_panels, panel_u=None):
     """Index of the panel the spark is on at `beat` (0..n_panels-1). PURE fn; never raises."""
     try:
         n = int(n_panels)
         if n <= 0:
             return 0
         b = 0.0 if _frozen() else float(beat)
-        eu = float(edge_u or CURRENT_EDGE_S * 2.0)
-        return (int(b / max(0.05, eu)) // 4) % n
+        pu = float(panel_u or CURRENT_PANEL_S * 2.0)
+        return int(b / max(0.05, pu)) % n
     except Exception:
         return 0
 
 
-def current_frame(beat, n_panels, edge_u=None, storm=0.0):
-    """Glow map for the live current at `beat`: {(panel, edge): 0..1}, edge 0..3 = top/right/
-    bottom/left. The spark lights one edge with a sin^2 crest (swells mid-edge, hands off dark at
-    the corners -> the crest GLIDES around the frame), and `storm` > 0 overlays a slow staggered
-    crackle on EVERY edge, scaled by the moment envelope. PURE fn; never raises (worst case {})."""
+def current_frame(beat, n_panels, panel_u=None, storm=0.0):
+    """Glow map for the live current at `beat`: {panel: 0..1}. The spark lights ONE panel's whole
+    border with a sin^2 crest (swells mid-visit, dark at the hand-off -> the glow GLIDES panel to
+    panel), and `storm` > 0 overlays a slow staggered shimmer on EVERY panel, scaled by the moment
+    envelope. PURE fn; never raises (worst case {})."""
     try:
         out = {}
         n = int(n_panels)
         if n <= 0:
             return out
         b = 0.0 if _frozen() else float(beat)
-        eu = float(edge_u or CURRENT_EDGE_S * 2.0)
-        s = b / max(0.05, eu)
-        k = int(s) % (n * 4)
+        pu = float(panel_u or CURRENT_PANEL_S * 2.0)
+        s = b / max(0.05, pu)
         g = math.sin(math.pi * (s - int(s))) ** 2
         if g > 0.01:
-            out[(k // 4, k % 4)] = g
+            out[int(s) % n] = g
         if storm > 0.001:
             for p in range(n):
-                for e in range(4):
-                    c = storm * (0.2 + 0.8 * abs(math.sin(b * 1.3 + (p * 4 + e) * 1.9)))
-                    if c > out.get((p, e), 0.0):
-                        out[(p, e)] = min(1.0, c)
+                c = storm * (0.25 + 0.75 * abs(math.sin(b * 1.1 + p * 2.1)))
+                if c > out.get(p, 0.0):
+                    out[p] = min(1.0, c)
         return out
     except Exception:
         return {}

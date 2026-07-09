@@ -1188,7 +1188,7 @@ class Studio(App):
         self._electron_next = 0.0        # _ultra_t of the max-gap FALLBACK fire (current passes fire sooner)
         self._electron_lastfire = -1e9   # _ultra_t of the last electron fire (min-gap gate for pass-fires)
         self._current_base = {}          # live current: widget id -> captured 4-edge (type, hex) CSS base
-        self._current_glow = {}          # live current: (widget id, edge) -> last glow written (skip no-ops)
+        self._current_glow = {}          # live current: widget id -> last glow written (skip no-ops)
         self._current_panel = None       # live current: (tab, panel idx) the spark was on last frame
         self._info_calm = False          # True once the calm (electron-less) INFO base is painted -> skip idle repaints
         self._info_base = INFO           # markup an ultra theme's electron animates over (see _set_info)
@@ -1615,10 +1615,11 @@ class Studio(App):
     _ELECTRON_TOUR_S = 10.43
     _ELECTRON_MIN_GAP_S = 15.0
     _ELECTRON_MAX_GAP_S = 35.0
-    # LIVE CURRENT (the whole-screen final layer): a spark flows along the visible panels' borders —
-    # edge to edge, panel to panel — and a signature-moment STORM crackles every border for a couple
-    # of seconds (math in ultra_art.current_frame; applied in _animate_ultra_current).
-    _CURRENT_EDGE_S = 1.1            # seconds the spark spends per panel edge
+    # LIVE CURRENT (the whole-screen final layer): a spark travels the visible panels — a panel's
+    # WHOLE border swells and fades as one (no edge-at-a-time flashing) — and a signature-moment
+    # STORM shimmers every panel for a couple of seconds (math in ultra_art.current_frame; applied
+    # in _animate_ultra_current).
+    _CURRENT_PANEL_S = 4.4           # seconds the spark spends on each panel
     _CURRENT_CIRCUITS = {            # the spark's path per tab (bordered panels, clockwise-ish order)
         "tab-new": ("#ultradecor", "#fieldvisual", "#readout", "#infopanel"),
         "tab-queue": ("#qtable", "#qinspectpanel"),
@@ -1711,13 +1712,14 @@ class Studio(App):
 
     def _animate_ultra_current(self):
         """The LIVE CURRENT — the whole-screen final layer of the ultra tier: one bright spark in
-        the theme's hot color flows along the borders of the active tab's panels (edge -> edge,
-        panel -> panel, a smooth sin^2 crest — it TRAVELS, it never throbs), and a signature-moment
-        STORM makes every border crackle for a couple of seconds, then melt away. Choreography: the
-        spark ENTERING the INFO panel is what fires the text comet (min-gap gated; _step_electrons
-        keeps only the max-gap fallback). Writes only edge colors that actually changed (steady
-        state: a couple of style writes per frame). Guarded; the fast timer never runs under
-        STUDIO_NO_ANIM, so reduce-motion never reaches here."""
+        the theme's hot color travels the active tab's panels; the visited panel's WHOLE border
+        swells smoothly to the crest and fades as the current moves on (it TRAVELS, it never
+        throbs; no edge-at-a-time flashing — a panel glows as one). A signature-moment STORM makes
+        every panel shimmer for a couple of seconds, then melt away. Choreography: the spark
+        ENTERING the INFO panel is what fires the text comet (min-gap gated; _step_electrons keeps
+        only the max-gap fallback). Writes only borders whose glow actually changed (steady state:
+        one style write per frame). Guarded; the fast timer never runs under STUDIO_NO_ANIM, so
+        reduce-motion never reaches here."""
         name = getattr(self, "_ultra_theme", None)
         if not name or ultra_art is None:
             return
@@ -1736,29 +1738,24 @@ class Studio(App):
             eff = ultra_art.EFFECTS.get(name) or {}
             hot = eff.get("hot", "#ffffff")
             storm = ultra_art.moment(name, self._ultra_t)[0]
-            edges = ultra_art.current_frame(self._ultra_t, len(panels),
-                                            edge_u=self._CURRENT_EDGE_S * 2.0, storm=storm)
-            EDGE = ("border_top", "border_right", "border_bottom", "border_left")
+            glows = ultra_art.current_frame(self._ultra_t, len(panels),
+                                            panel_u=self._CURRENT_PANEL_S * 2.0, storm=storm)
             for pi, (wid, w) in enumerate(panels):
                 base = self._current_base.get(wid)
                 if base is None:                          # capture this theme's own CSS border once
-                    base = []
-                    for attr in EDGE:
-                        try:
-                            bt = getattr(w.styles, attr)
-                            base.append((str(bt[0]) or "round", str(bt[1].hex)[:7]))
-                        except Exception:
-                            base.append(("round", "#808080"))
-                    base = self._current_base[wid] = tuple(base)
-                for ei, attr in enumerate(EDGE):
-                    g = round(edges.get((pi, ei), 0.0), 2)
-                    if self._current_glow.get((wid, ei)) == g:
-                        continue                          # unchanged -> no style write
-                    self._current_glow[(wid, ei)] = g
-                    typ, bhex = base[ei]
-                    setattr(w.styles, attr, (typ, ultra_art._lerp(bhex, hot, g) if g > 0 else bhex))
+                    try:
+                        bt = w.styles.border_top
+                        base = (str(bt[0]) or "round", str(bt[1].hex)[:7])
+                    except Exception:
+                        base = ("round", "#808080")
+                    self._current_base[wid] = base
+                g = round(glows.get(pi, 0.0), 2)
+                if self._current_glow.get(wid) == g:
+                    continue                              # unchanged -> no style write
+                self._current_glow[wid] = g
+                w.styles.border = (base[0], ultra_art._lerp(base[1], hot, g) if g > 0 else base[1])
             # choreography: the spark ENTERING the INFO panel fires the text comet (min-gap gated)
-            head = ultra_art.current_head(self._ultra_t, len(panels), edge_u=self._CURRENT_EDGE_S * 2.0)
+            head = ultra_art.current_head(self._ultra_t, len(panels), panel_u=self._CURRENT_PANEL_S * 2.0)
             if (tab, head) != self._current_panel:
                 self._current_panel = (tab, head)
                 if (panels[head][0] == "#infopanel"
@@ -1769,22 +1766,17 @@ class Studio(App):
 
     def _restore_ultra_current(self):
         """Give every border the live current ever touched back to the stylesheet (clear the inline
-        rules so CSS wins again — a theme change re-captures against the new palette) and drop the
+        rule so CSS wins again — a theme change re-captures against the new palette) and drop the
         caches. Guarded; safe to call at any time."""
-        try:
-            EDGE = ("border_top", "border_right", "border_bottom", "border_left")
-            for wid, base in list(self._current_base.items()):
+        for wid, base in list(self._current_base.items()):
+            try:
+                w = self.query_one(wid)
                 try:
-                    w = self.query_one(wid)
-                    for ei, attr in enumerate(EDGE):
-                        try:
-                            setattr(w.styles, attr, None)   # clear the inline rule -> CSS cascades back
-                        except Exception:
-                            setattr(w.styles, attr, base[ei])
+                    w.styles.border = None                # clear the inline rule -> CSS cascades back
                 except Exception:
-                    pass
-        except Exception:
-            pass
+                    w.styles.border = base
+            except Exception:
+                pass
         self._current_base, self._current_glow, self._current_panel = {}, {}, None
 
     def _animate_ultra_info(self, force=False):
