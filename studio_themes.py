@@ -447,11 +447,9 @@ ULTRA_MATRIX = Theme(
         "selection": "#0e2c14",                          # rain-graphite lift
     },
 )
-# SMPTE test card — broadcast steel-blue chrome, the white/red/cyan of the bars, "PLEASE STAND BY".
-# --- UNDER CONSTRUCTION: intentionally NOT in ULTRA_THEMES, so it is hidden from the theme
-# picker and cannot be selected or run. The tv decoration (_tv in ultra_art.py) needs a
-# rework; kept here so the work is not lost. To re-enable: add ULTRA_TV back to ULTRA_THEMES
-# and re-register "ultra-tv" in ultra_art's EFFECTS / THEMES / TITLES maps. ---
+# Dead channel — broadcast steel-blue chrome. Grey luminance bands roll slowly up the dead screen
+# (a failing vertical hold) and, at irregular moments, the colour SMPTE card cuts in — NO SIGNAL —
+# for about a second before the channel goes dead again. (Reworked and re-enabled 2026-07-09.)
 ULTRA_TV = Theme(
     name="ultra-tv",
     primary="#6a7a8a", secondary="#4a5560", accent="#e6e6e6",
@@ -541,7 +539,7 @@ ULTRA_VAPORWAVE = Theme(
         "selection": "#241030",                          # orchid lift (> panel)
     },
 )
-ULTRA_THEMES = (ULTRA_DRAGON, ULTRA_SKYNET, ULTRA_SYNTHWAVE, ULTRA_MATRIX,
+ULTRA_THEMES = (ULTRA_DRAGON, ULTRA_SKYNET, ULTRA_SYNTHWAVE, ULTRA_MATRIX, ULTRA_TV,
                 ULTRA_SONAR, ULTRA_KAIJU, ULTRA_AURORA, ULTRA_VHS, ULTRA_VAPORWAVE)
 # Single source of truth for "is this the animated tier" — used by the picker (sectioning) and by
 # studio._on_theme_changed (show/hide the decoration). ultra_art.THEMES maps the same names to art.

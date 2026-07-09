@@ -39,6 +39,7 @@ EFFECTS = {
     "ultra-skynet":    {"mode": "electron", "base": "#b0b8c0", "hot": "#ff6a5a"},
     "ultra-synthwave": {"mode": "wave",     "base": "#e0a0d0", "hot": "#5cffe0"},
     "ultra-matrix":    {"mode": "electron", "base": "#5ab86a", "hot": "#d8ffe0"},
+    "ultra-tv":        {"mode": "wave",     "base": "#9aa4ae", "hot": "#f0f4f8"},
     "ultra-sonar":     {"mode": "wave",     "base": "#4ac0d0", "hot": "#c4faff"},
     "ultra-kaiju":     {"mode": "electron", "base": "#6a8aa8", "hot": "#eaf6ff"},
     "ultra-aurora":    {"mode": "wave",     "base": "#4ac080", "hot": "#b8ffd8"},
@@ -63,6 +64,49 @@ def set_palette(pal):
 def _frozen():
     """Freeze animation to frame 0 (headless tests / stable screenshots / user reduce-motion)."""
     return bool(os.environ.get("STUDIO_NO_ANIM"))
+
+
+# ---------------------------------------------------------------- signature moments ---------------
+# The tier-wide spark: every ultra theme carries one rare, understated PAYOFF — a shooting star
+# over the synthwave grid, a second sonar contact, a tracking glitch on the VHS, the dead channel
+# cutting to colour... One shared scheduler drives them all, so the whole tier breathes on the
+# same irregular pulse. (Kaiju's charge-and-fire breath cycle predates this and IS its moment.)
+# Deterministic — a pure hash of the beat window, no random state — so headless tests reproduce.
+# Dials (beat units; the ultra clock advances 2 units per real second, so 44.0 units = 22 s):
+MOMENT_WIN = 44.0           # scheduling window: at most one moment per window (~22 s)
+MOMENT_SKIP = 3             # ~1-in-N windows stay quiet -> gaps drift irregularly (~20-80 s)
+MOMENT_RAMP = 0.8           # fade-in/out span (units) — moments GLIDE in and out, never pop
+
+
+def _moment(beat, salt, win=None, dur=(2.0, 5.0), skip=None, ramp=None):
+    """The shared signature-moment scheduler. Returns (intensity, phase) at `beat` for the stream
+    `salt`: intensity is a smooth 0..1 trapezoid envelope (ramp in, hold, ramp out) and phase runs
+    0..1 across the whole moment (for travelling payloads like a meteor). Each `win`-unit window
+    holds at most one moment, at a hashed offset with a hashed duration drawn from `dur`, and
+    ~1-in-`skip` windows skip entirely, so the rhythm never turns metronomic. PURE fn of beat ->
+    deterministic/testable; never raises (worst case (0.0, 0.0))."""
+    try:
+        b = float(beat)
+        win = float(win if win is not None else MOMENT_WIN)
+        skip = MOMENT_SKIP if skip is None else skip
+        ramp = MOMENT_RAMP if ramp is None else ramp
+        w = int(b // win)
+        hh = ((w * 2654435761) ^ ((salt + 1) * 97531)) & 0xffffffff
+        hh = ((hh ^ (hh >> 13)) * 1274126177) & 0xffffffff
+        hh ^= hh >> 16
+        if skip and (hh % skip) == 0:                     # a quiet window keeps the gaps organic
+            return (0.0, 0.0)
+        d = dur[0] + ((hh >> 8) % 997) / 996.0 * (dur[1] - dur[0])
+        lead = max(0.0, win - d - 1.0)
+        start = w * win + 0.5 + ((hh >> 18) % 997) / 996.0 * lead
+        t = b - start
+        if t < 0.0 or t > d:
+            return (0.0, 0.0)
+        r = max(0.05, min(ramp, d / 3.0))
+        return (min(1.0, t / r, (d - t) / r), t / max(0.05, d))
+    except Exception:
+        return (0.0, 0.0)
+
 
 
 # ---------------------------------------------------------------- pixel-sprite renderer -----------
@@ -97,11 +141,14 @@ def _glow_color(x, beat, glow, span):
     return ramp[max(0, min(n - 1, idx))]
 
 
-def render_sprite(spec, beat, palette=None, cols=None):
+def render_sprite(spec, beat, palette=None, cols=None, surge=0.0):
     """Render sprite `spec` at frame `beat` to a Rich-markup string. PURE fn of (spec, beat, palette).
     The pixels + glow-sweep index off int(beat) (8-bit, chunky); an optional `sparkle` field scatters
     a few TWINKLING atmosphere glyphs (theme embers / specks) across the transparent cells, animated
-    smoothly off the float clock. `cols` centers the sprite. Never raises."""
+    smoothly off the float clock. `cols` centers the sprite. `surge` (0..1, the signature-moment
+    envelope) swells the atmosphere: a second, denser sparkle set fades in and twinkles faster,
+    then melts away — the dragon spits an ember flurry, the T-800's targeting HUD lights up. Never
+    raises."""
     try:
         pal = dict(spec.get("pal", {}))
         if palette:
@@ -126,13 +173,22 @@ def render_sprite(spec, beat, palette=None, cols=None):
         def sparkle(x, orow):                           # a twinkling atmosphere glyph in a transparent cell
             # scrambled hash (not a linear modulus) -> an organic scatter, not a grid. ~1/26 cells (sparse
             # -> calm, not busy); each glyph pulses SLOWLY (~10s) and staggered -> soothing, not blinking.
-            if not spark or ((x * 2246822519 + orow * 3266489917) & 0x7fffffff) % 26:
+            # During a signature-moment surge a SECOND ~1/7 set fades in (brightness scaled by the
+            # envelope, so the flurry glides in and melts away — never pops).
+            h = (x * 2246822519 + orow * 3266489917) & 0x7fffffff
+            lit = (h % 26) == 0
+            extra = surge > 0.0 and (h % 7) == 3
+            if not spark or not (lit or extra):
                 return " "
-            tw = 0.5 + 0.5 * math.sin(bf * 0.3 + x * 1.7 + orow * 2.3)
-            if tw < 0.5:
+            tw = 0.5 + 0.5 * math.sin(bf * (0.3 if lit else 0.9) + x * 1.7 + orow * 2.3)
+            gate = 0.5 if lit else (1.0 - 0.45 * surge)      # the extra set opens with the envelope
+            if tw < gate:
                 return " "
+            f = (tw - gate) / max(0.05, 1.0 - gate)
+            if not lit:
+                f *= surge                                   # never brighter than the moment allows
             g = sglyphs[(x * 3 + orow * 2) % len(sglyphs)]   # a given spot keeps its glyph; only brightness twinkles
-            c = _lerp(spark.get("dim", "#333333"), spark.get("hot", "#ffffff"), (tw - 0.5) / 0.5)
+            c = _lerp(spark.get("dim", "#333333"), spark.get("hot", "#ffffff"), f)
             return "[%s]%s[/%s]" % (c, g, c)
 
         if len(rows) % 2:
@@ -321,7 +377,7 @@ def _synthwave(beat, width=None):
         hz = 5                                          # horizon row -> 5 sun rows, 4 grid rows
         r = max(3, min(cx - 1, 4))                      # sun radius
         scroll = b // max(1, SHIMMER_PERIOD)
-        out = []
+        rows_l = []
         for y in range(H):
             row = [" "] * W
             if y < hz:                                  # ---- SUN (solid gradient disc) ----
@@ -351,8 +407,17 @@ def _synthwave(beat, width=None):
                     for xx in (cx - off, cx + off):
                         if 0 <= xx < W:
                             row[xx] = "[%s]│[/%s]" % (gcol, gcol)
-            out.append("".join(row))
-        return "\n".join(out)
+            rows_l.append(row)
+        m, ph = _moment(bf, 3, dur=(2.2, 3.2))          # signature moment: a shooting star
+        if m > 0.0:
+            fx = ph * (W + 8.0) - 4.0                   # float path: upper-left -> lower-right
+            fy = 0.4 + ph * 1.8
+            for k in range(4):                          # bright head + fading tail
+                px, py = int(round(fx - k * 1.6)), int(round(fy - k * 0.35))
+                if 0 <= px < W and 0 <= py < hz - 1 and rows_l[py][px] == " ":
+                    c = _lerp("#243a66", "#eaf6ff", m * (1.0 - k / 4.0))
+                    rows_l[py][px] = "[%s]%s[/%s]" % (c, "✦" if k == 0 else "·", c)
+        return "\n".join("".join(r) for r in rows_l)
     except Exception:
         return ""
 
@@ -372,6 +437,8 @@ def _matrix_rain(beat, width=None):
         bi = int(b)
         nch = len(_MTX_CHARS)
         grid = [[" "] * W for _ in range(H)]
+        m, _ph = _moment(b, 4, dur=(4.0, 7.0))          # signature moment: one column burns white-hot
+        cxm = (int(b // MOMENT_WIN) * 7919) % W
         for x in range(W):
             speed = 0.7 + ((x * 37) % 5) * 0.16         # 0.70 .. 1.34 cells/unit
             trail = 2 + ((x * 13) % 3)                  # 2 .. 4
@@ -381,6 +448,8 @@ def _matrix_rain(beat, width=None):
                 y = int(head) - k
                 if 0 <= y < H:
                     col = "#d8ffe0" if k == 0 else _lerp("#0c3a16", "#39ff58", 1.0 - k / float(trail + 1))
+                    if m > 0.0 and x == cxm:
+                        col = _lerp(col, "#eaffee", 0.85 * m)
                     g = _MTX_CHARS[(x * 13 + y * 7 + bi) % nch]     # occasional in-place glyph flicker
                     grid[y][x] = "[%s]%s[/%s]" % (col, g, col)
         return "\n".join("".join(r) for r in grid)
@@ -388,24 +457,20 @@ def _matrix_rain(beat, width=None):
         return ""
 
 
-# ---------------------------------------------------------------- tv (SMPTE test card) ------------
-# UNDER CONSTRUCTION: not registered in EFFECTS/THEMES/TITLES, so it is unreachable from the
-# menu. Kept for a future rework (see the hidden ULTRA_TV in studio_themes.py).
+# ---------------------------------------------------------------- tv (dead channel) ---------------
 def _tv(beat, width=None):
-    """A dead broadcast. The MAIN state is the original greyscale standby bars with a faint tracking
-    line rolling up. Every once in a while, at irregular pseudo-random intervals, the colour NO SIGNAL
-    card cuts in for ~0.5-1.5s, then it drops back to the grey. Pure fn of beat (the 15 fps clock)."""
+    """A dead broadcast: soft greyscale LUMINANCE BANDS roll slowly up the screen (a failing
+    vertical hold) over a static scanline weave, a thin tracking line riding the roll. At
+    irregular moments the colour SMPTE card CUTS IN — NO SIGNAL — for ~0.5-1.5 s, flanked by a
+    breath of static, then the channel goes dead again. All motion runs on float clocks with
+    colour-lerp interpolation (the bands GLIDE; nothing steps). Pure fn of beat (2 units = 1 s)."""
     try:
         W = min(max(int(width or 32), 14), 44); H = 8
-        bi = int(beat); nb = 7
+        b = float(beat); bi = int(b); nb = 7
         grid = [[" "] * W for _ in range(H)]
-        WIN = 120
-        hh = (bi // WIN * 2654435761) & 0xffffffff
-        hh = ((hh ^ (hh >> 13)) * 1274126177) & 0xffffffff
-        dur = 8 + (hh >> 3) % 15
-        start = (hh >> 9) % max(1, WIN - dur)
-        color_on = ((hh & 3) != 0) and (start <= bi % WIN < start + dur)
-        if color_on:
+        # the cut: 0.5-1.5 s of colour every ~2-38 s (hashed offset in a 40-unit window, no skips)
+        m, _ph = _moment(b, 9, win=40.0, dur=(1.0, 3.0), skip=0)
+        if m >= 0.55:                                     # ---- the colour card (NO SIGNAL) ----
             bars = ["#dcdcdc", "#c8c81a", "#1ac8c8", "#1ac01a", "#c81ac8", "#c81a1a", "#1a1ad0"]
             low  = ["#1a1ad0", "#0b0b0b", "#c81ac8", "#0b0b0b", "#1ac8c8", "#0b0b0b", "#dcdcdc"]
             for y in range(H):
@@ -415,23 +480,31 @@ def _tv(beat, width=None):
                     grid[y][x] = "[%s]█[/%s]" % (c, c)
             msg = " NO SIGNAL "; my = H // 2; mx = max(0, (W - len(msg)) // 2)
             for i, ch in enumerate(msg):
-                x = mx + i
-                if 0 <= x < W:
-                    grid[my][x] = "[#ff6a6a on #0b0b0b]%s[/]" % ch
-        else:
-            greys = ["#c4c4c4", "#a4a4a4", "#848484", "#646464", "#4a4a4a", "#323232", "#1e1e1e"]
+                if 0 <= mx + i < W:
+                    grid[my][mx + i] = "[#ff6a6a on #0b0b0b]%s[/]" % ch
+        elif m > 0.0:                                     # ---- a breath of static flanks the cut ----
             for y in range(H):
                 for x in range(W):
-                    c = greys[min(nb - 1, x * nb // W)]
-                    grid[y][x] = "[%s]█[/%s]" % (c, c)
-            ty = bi % (H * 3)
-            if ty < H:
+                    h = (x * 92821 + y * 68917 + bi * 40503) & 0xff
+                    v = int(0x28 + (h % 0x90) * (0.4 + 0.6 * m))
+                    c = "#%02x%02x%02x" % (v, v, v)
+                    grid[y][x] = "[%s]%s[/%s]" % (c, "▒░▓"[(h >> 3) % 3], c)
+        else:                                             # ---- the dead channel (bands rolling up) ----
+            roll = b * 0.22                               # slow vertical-hold drift (~16 s per cycle)
+            tp = (H + 2.0) - ((b * 0.11) % (H + 4.0))     # tracking line: float row, rolls up slower
+            for y in range(H):
+                # two soft harmonics -> organic rolling luminance; colour-lerped so it GLIDES
+                s = 0.5 + 0.35 * math.sin((y + roll) * 0.9) + 0.15 * math.sin((y + roll) * 2.3 + 1.7)
+                tl = max(0.0, 1.0 - abs(y - tp))          # sub-row soft envelope for the tracking line
                 for x in range(W):
-                    if (x + bi) % 6 < 2:
-                        grid[ty][x] = "[#f0f4f8]▁[/#f0f4f8]"
+                    e = 0.06 * math.sin(x * 0.35 + roll * 0.7)    # faint diagonal shear
+                    v = max(0.0, min(1.0, s + e + 0.38 * tl))
+                    c = _lerp("#14181d", "#9aa3ac", v)
+                    grid[y][x] = "[%s]%s[/%s]" % (c, "█" if y % 2 else "▓", c)
         return chr(10).join("".join(r) for r in grid)
     except Exception:
         return ""
+
 
 # ---------------------------------------------------------------- sonar (submarine scope) ---------
 def _sonar(beat, width=None):
@@ -467,6 +540,14 @@ def _sonar(beat, width=None):
         bc = _lerp("#1a6a54", "#7cffc8", pf)             # blip: faint always, bright on ping
         if 0 <= bx < W and 0 <= by < H:
             grid[by][bx] = "[%s]◉[/%s]" % (bc, bc)
+        m, _ph = _moment(b, 5, dur=(8.0, 14.0))          # signature moment: a second contact
+        if m > 0.05:
+            ba2, br2 = 3.8, R * 0.38
+            b2x = int(round(cx + br2 * math.cos(ba2))); b2y = int(round(cy + br2 * math.sin(ba2) / 2.0))
+            pf2 = 1.0 - min(1.0, ((sweep - ba2) % (2 * math.pi)) / 1.2)
+            c2 = _lerp("#0e4450", _lerp("#1a6a54", "#7cffc8", pf2), m)   # surfaces + sinks with the envelope
+            if 0 <= b2x < W and 0 <= b2y < H:
+                grid[b2y][b2x] = "[%s]○[/%s]" % (c2, c2)
         grid[int(round(cy))][int(round(cx))] = "[%s]+[/%s]" % (ring, ring)
         return "\n".join("".join(r) for r in grid)
     except Exception:
@@ -541,6 +622,14 @@ def _aurora(beat, width=None):
                     tw = 0.5 + 0.5 * math.sin(b * 0.3 + x * 1.1 + y * 2.0)
                     if tw > 0.6:
                         put(y, x, "·", _lerp("#24406a", "#cfeaff", (tw - 0.6) / 0.4))
+        m, ph = _moment(b, 6, dur=(1.6, 2.6))                    # signature moment: a meteor
+        if m > 0.0:
+            fx = (1.0 - ph) * (W + 6.0) - 3.0                    # right -> left, shallow fall
+            fy = 0.2 + ph * 1.6
+            for k in range(4):
+                px, py = int(round(fx + k * 1.5)), int(round(fy - k * 0.3))
+                if 0 <= px < W and 0 <= py < 2 and grid[py][px] == " ":
+                    put(py, px, "✦" if k == 0 else "·", _lerp("#24406a", "#e8f4ff", m * (1.0 - k / 4.0)))
         for x in range(W):                                       # pine treeline
             put(horizon + 1, x, "▲", "#0e3a1e")
         return "\n".join("".join(r) for r in grid)
@@ -587,6 +676,14 @@ def _vhs(beat, width=None):
                     v = int((0x50 + (h % 0x80)) * fade)
                     c = "#%02x%02x%02x" % (v, v, min(255, v + 0x20))
                     put(y, x, "▒░▓"[(h >> 3) % 3], c)
+        m, _ph = _moment(b, 7, dur=(1.2, 2.4))            # signature moment: a tracking glitch
+        if m > 0.05:
+            gy = 2 + (int(b // MOMENT_WIN) % 4)           # one fixed mid-frame row per moment
+            for x in range(W):
+                h = (x * 40503 + bi * 92821) & 0xff
+                if h % 3 < 2:
+                    v = int((0x70 + (h % 0x70)) * (0.3 + 0.7 * m))
+                    put(gy, x, "▬▒▔"[(h >> 4) % 3], "#%02x%02x%02x" % (v, v, v))
         return chr(10).join("".join(r) for r in grid)
     except Exception:
         return ""
@@ -608,6 +705,8 @@ def _vaporwave(beat, width=None):
             for x in range(W):
                 if (((x + off) // 2) + y) % 2 == 0:
                     put(y, x, "█", _lerp(mag, cyan, x / float(W)))
+        m, _ph = _moment(b, 8, dur=(2.5, 4.0))           # signature moment: the marble catches the light
+        marble = _lerp(marble, "#fff6ff", 0.7 * m); pink = _lerp(pink, "#ffe2f2", 0.5 * m)
         bx = W // 2 - 3                                  # classical bust
         for s, ry in (("  ▄▄▄  ", 1), (" ▟███▙ ", 2), (" █████ ", 3), (" █████ ", 4), ("▟█████▙", 5)):
             for i, ch in enumerate(s):
@@ -626,10 +725,11 @@ def _vaporwave(beat, width=None):
 
 # ---------------------------------------------------------------- public API ----------------------
 THEMES = {
-    "ultra-dragon": lambda b, w=None: render_sprite(DRAGON, b, cols=w),
-    "ultra-skynet": lambda b, w=None: render_sprite(T800, b, cols=w),
+    "ultra-dragon": lambda b, w=None: render_sprite(DRAGON, b, cols=w, surge=_moment(b, 1)[0]),
+    "ultra-skynet": lambda b, w=None: render_sprite(T800, b, cols=w, surge=_moment(b, 2)[0]),
     "ultra-synthwave": lambda b, w=None: _synthwave(b, width=w),
     "ultra-matrix": lambda b, w=None: _matrix_rain(b, width=w),
+    "ultra-tv": lambda b, w=None: _tv(b, width=w),
     "ultra-sonar": lambda b, w=None: _sonar(b, width=w),
     "ultra-kaiju": lambda b, w=None: _kaiju(b, width=w),
     "ultra-aurora": lambda b, w=None: _aurora(b, width=w),
@@ -641,6 +741,7 @@ TITLES = {
     "ultra-skynet": "「 SKYNET · T-800 」",
     "ultra-synthwave": "「 OUTRUN · SYNTHWAVE 」",
     "ultra-matrix": "「 THE MATRIX · 電 」",
+    "ultra-tv": "「 TV · PLEASE STAND BY 」",
     "ultra-sonar": "「 SONAR · DEPTH 340 」",
     "ultra-kaiju": "「 怪獣 · TOKYO ALERT 」",
     "ultra-aurora": "「 AURORA · 69°N 」",

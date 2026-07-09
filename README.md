@@ -28,7 +28,7 @@ Scrolling the same panel reaches the lineage table — here a replicate source, 
 
 ![Run lineage table: replicate source, replicate sibling, enhanced child](media/tui-lineage.png)
 
-**Themeable** — the whole UI re-skins live: 21 hand-built Pip-Boy palettes, each modeled on a real reference object rather than a hue rotation, plus an opt-in *ultra* tier of 9 animated themes whose 8-bit decorations are pure functions of a 15 fps frame clock — zero cost to the render path. Three of them, each shown on its NEW RUN and ARCHIVE screens:
+**Themeable** — the whole UI re-skins live: 21 hand-built Pip-Boy palettes, each modeled on a real reference object rather than a hue rotation, plus an opt-in *ultra* tier of 10 animated themes whose 8-bit decorations are pure functions of a 15 fps frame clock — zero cost to the render path. Each carries a rare *signature moment* on a shared irregular scheduler: a shooting star crosses the synthwave grid, a second sonar contact surfaces, the dead TV channel cuts to colour bars for a second — NO SIGNAL — then rolls on. Three of them, each shown on its NEW RUN and ARCHIVE screens:
 
 **ultra-dragon** — imperial gold on black-crimson lacquer; a glimmering dragon coils across the schematic under 年, the Year of the Dragon.
 
@@ -128,7 +128,7 @@ Because phase boundaries are explicit, the studio accumulates real per-phase tim
 ## Feature tour
 
 - **Pip-Boy TUI** — NEW RUN form, live QUEUE, and a persistent right-hand rail with field schematics and global READOUT meters. Responsive layout that restacks below ~52 columns.
-- **Themeable UI** — 21 hand-built Pip-Boy palettes, each modeled on a real reference object (vault suit, nixie tube, radium dial) rather than a hue rotation, plus an opt-in *ultra* tier of 9 animated themes. The ultra decorations render as pure functions of a frame clock on a dedicated 15 fps timer — zero footprint on the standard themes, with a `STUDIO_NO_ANIM` reduce-motion switch.
+- **Themeable UI** — 21 hand-built Pip-Boy palettes, each modeled on a real reference object (vault suit, nixie tube, radium dial) rather than a hue rotation, plus an opt-in *ultra* tier of 10 animated themes, each with a rare, irregularly-scheduled *signature moment* (a shooting star, a second sonar contact, a NO SIGNAL cut-in). The ultra decorations render as pure functions of a frame clock on a dedicated 15 fps timer — zero footprint on the standard themes, with a `STUDIO_NO_ANIM` reduce-motion switch.
 - **Blind A/B** — queue two variants of one config, rate them blind, reveal after. Ratings and pairings are logged to `runs/pair_*.jsonl`.
 - **Live preview** — the worker decodes a preview frame mid-generation; the UI refreshes it on a wall-clock cadence so you can bail on a bad seed early.
 - **READOUT gauges** — VRAM headroom, clip budget, system RAM, the shot chain, predicted quality, and drift risk, all auto-refit from your own run history so the scales mean something on *your* hardware.
@@ -152,7 +152,7 @@ Because phase boundaries are explicit, the studio accumulates real per-phase tim
 | `experiment_log.py` | Appends structured run records to `runs/experiments.jsonl` — the measurement backbone. |
 | `readout.py` | The self-calibrating READOUT gauges. |
 | `field_visuals.py` | ASCII block-art schematics for every form field. |
-| `studio_themes.py` | Theme registry — 21 curated Pip-Boy palettes plus the 9-theme animated *ultra* tier. |
+| `studio_themes.py` | Theme registry — 21 curated Pip-Boy palettes plus the 10-theme animated *ultra* tier. |
 | `ultra_art.py` | Pixel-art / procedural decorations for the ultra themes — pure functions of a frame clock, never raises. |
 | `style_presets.py` | Named anchor-word bundles for the STYLE dropdown. |
 | `gpu_budget.py` | VRAM budgeting helpers for the 8 GB envelope. |
