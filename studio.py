@@ -1606,9 +1606,9 @@ class Studio(App):
     # INFO electron: a single bright pulse TOURS the whole box, then it's done. Fired at random gaps
     # (a short mandatory minimum so two never fire together; capped so it never goes quiet too long) —
     # gaps < the tour length let a new electron start while one is still running. Times in seconds.
-    _ELECTRON_TOUR_S = 3.0
-    _ELECTRON_MIN_GAP_S = 1.5
-    _ELECTRON_MAX_GAP_S = 25.0
+    _ELECTRON_TOUR_S = 12.0
+    _ELECTRON_MIN_GAP_S = 15.0
+    _ELECTRON_MAX_GAP_S = 35.0
 
     def _ultra_frame(self):
         """The ~15fps ultra animation frame (its own timer, live only while an ultra theme shows).

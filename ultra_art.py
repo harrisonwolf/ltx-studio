@@ -171,9 +171,6 @@ def _lerp(a, b, f):
     return "#%02x%02x%02x" % tuple(int(round(ca[i] + (cb[i] - ca[i]) * f)) for i in range(3))
 
 
-# TEXT_GLOW trims the running-light sweep speed (1.0 = original, 0.8 = 20% slower). It scales a
-# float phase, so the animation stays smooth at any speed (never choppier).
-TEXT_GLOW = 0.8
 def electron_text(text, beat, base, hot, mode="electron", speed=2, tail=6, wavelen=7, amp=1.0):
     """Overlay a moving running-light on plain `text` and return Rich markup. Two modes:
       'electron' — a bright crest + fading tail travels through the (non-space) characters.
@@ -188,12 +185,12 @@ def electron_text(text, beat, base, hot, mode="electron", speed=2, tail=6, wavel
         N = len(positions) or 1
         gcol = {}
         if mode == "wave":
-            phase = b * 0.6 * TEXT_GLOW * max(1, speed)
+            phase = b * 0.6 * max(1, speed)
             for gi, pos in enumerate(positions):
                 f = 0.5 + 0.5 * math.sin(gi / float(max(1, wavelen)) - phase)
                 gcol[pos] = _lerp(base, hot, f * f * amp)  # square sharpens crests; amp softens the swing
         else:                                             # electron comet
-            crest = (b * TEXT_GLOW * max(1, speed)) % N
+            crest = (b * max(1, speed)) % N
             for gi, pos in enumerate(positions):
                 d = (crest - gi) % N
                 gcol[pos] = _lerp(base, hot, 1.0 - d / float(max(1, tail))) if d < tail else base
@@ -222,13 +219,19 @@ def render_electrons(text, heads, base, hot, tail=6):
         lines = str(text).split("\n")
         positions = [(li, ci) for li, l in enumerate(lines) for ci, ch in enumerate(l) if ch != " "]
         bright = [0.0] * len(positions)
+        LEAD = 1.5                                        # smooth lead-in ahead of the head so the crest
+        #                                                  glides across sub-char positions (no stepping)
         for h in (heads or ()):
             for gi in range(len(positions)):
-                d = h - gi                                # >0 = this char is behind the comet head
+                d = h - gi                                # >0 behind the head (tail); <0 ahead (lead-in)
                 if 0.0 <= d < tail:
-                    f = 1.0 - d / float(max(1, tail))
-                    if f > bright[gi]:
-                        bright[gi] = f
+                    f = 1.0 - d / float(max(1, tail))     # trailing comet tail
+                elif -LEAD < d < 0.0:
+                    f = 1.0 + d / LEAD                     # leading edge fades IN as the head nears it
+                else:
+                    continue
+                if f > bright[gi]:
+                    bright[gi] = f
         gcol = {pos: (_lerp(base, hot, bright[gi]) if bright[gi] > 0 else base)
                 for gi, pos in enumerate(positions)}
         out = []
