@@ -4,11 +4,11 @@ Modern, realistic text/image-to-video that actually runs well on 8 GB. Chosen ov
 FramePack GUI because FramePack's 13B HunyuanVideo is too slow on 8 GB (3–15 min/step);
 LTX's 2B transformer fits in VRAM, so sampling is fast (~1–3 s/step).
 
-Shares the FramePack venv (diffusers 0.33.1 / torch cu128). No compilation, no fp8 needed.
+Supply a Python 3.10 env with this repo's requirements.txt (diffusers >=0.34 / torch cu128). No compilation, no fp8 needed.
 
 ## Run
 ```bash
-cd ~/video_gen/FramePack
+cd ~/video_gen/ltx-studio
 # text-to-video
 ./ltx.sh --prompt "a fox trotting through snow, cinematic, highly detailed" --seconds 5 --steps 40
 # image-to-video (animate a start frame)
@@ -32,7 +32,7 @@ Output MP4 lands in `outputs/`.
 A 3 s 704x480 clip ≈ 5 min total. Time scales with resolution x frames x steps.
 
 ## Enhance with the AnimateDiff suite (RIFE / upscale / face)
-LTX's enhance suite lives in the AnimateDiff repo. Dump frames, then run it:
+LTX's enhance suite (RIFE / upscale / face) is an optional external step that lives in a separate AnimateDiff repo, not in this one. If you have it, dump frames and run it, adjusting the absolute paths below to your machine:
 ```bash
 ./ltx.sh --image input/x.png --prompt "..." --seconds 5 --frames_dir outputs/ltx_frames --out outputs/raw.mp4
 cd ~/video_gen/AnimateDiff

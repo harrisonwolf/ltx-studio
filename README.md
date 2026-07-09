@@ -28,6 +28,26 @@ Scrolling the same panel reaches the lineage table — here a replicate source, 
 
 ![Run lineage table: replicate source, replicate sibling, enhanced child](media/tui-lineage.png)
 
+**Themeable** — the whole UI re-skins live: 21 hand-built Pip-Boy palettes, each modeled on a real reference object rather than a hue rotation, plus an opt-in *ultra* tier of 9 animated themes whose 8-bit decorations are pure functions of a 15 fps frame clock — zero cost to the render path. Three of them, each shown on its NEW RUN and ARCHIVE screens:
+
+**ultra-dragon** — imperial gold on black-crimson lacquer; a glimmering dragon coils across the schematic under 年, the Year of the Dragon.
+
+| | |
+|---|---|
+| ![ultra-dragon theme, NEW RUN screen](media/tui-theme-dragon.png) | ![ultra-dragon theme, ARCHIVE screen](media/tui-theme-dragon-archive.png) |
+
+**ultra-synthwave** — the showpiece: a magenta/cyan/orange neon sunset with an OUTRUN sun and a scrolling perspective grid.
+
+| | |
+|---|---|
+| ![ultra-synthwave theme, NEW RUN screen](media/tui-theme-synthwave.png) | ![ultra-synthwave theme, ARCHIVE screen](media/tui-theme-synthwave-archive.png) |
+
+**ultra-sonar** — an abyssal cyan-green submarine scope; a sweep line rotates around a contact pinging at DEPTH 340.
+
+| | |
+|---|---|
+| ![ultra-sonar theme, NEW RUN screen](media/tui-theme-sonar.png) | ![ultra-sonar theme, ARCHIVE screen](media/tui-theme-sonar-archive.png) |
+
 **Sample output** — all generated with the Wan backend, locally on the 8 GB laptop GPU:
 
 | | |
@@ -55,7 +75,7 @@ Scrolling the same panel reaches the lineage table — here a replicate source, 
 Three principles drove almost every design decision.
 
 **1. The UI process never touches CUDA.**
-The Textual app (`studio.py`) does not import `torch`. Generation runs in a *separate* Python subprocess with its own CUDA context; the two communicate over a tiny one-way text protocol on stdout. This means a driver OOM or a CUDA segfault kills the worker, not the UI — the studio stays responsive, reports the failure, and lets you re-queue. It also means the 4,000-line UI stays testable without a GPU in the loop.
+The Textual app (`studio.py`) does not import `torch`. Generation runs in a *separate* Python subprocess with its own CUDA context; the two communicate over a tiny one-way text protocol on stdout. This means a driver OOM or a CUDA segfault kills the worker, not the UI — the studio stays responsive, reports the failure, and lets you re-queue. It also means the ~4,500-line UI stays testable without a GPU in the loop.
 
 **2. Measure, don't guess.**
 Every run appends a structured record to `runs/experiments.jsonl` — config, per-phase wall-clock, peak VRAM, and quality telemetry (seam MSE across shot boundaries, motion drift, token counts). The time-estimate model and the READOUT gauges *calibrate themselves from that log*. When you want to know whether a change actually helped, there's a **blind A/B harness** with a double coin-flip (it randomizes both the on-screen label *and* the render order) and a reveal gate, so you rate output without knowing which variant you're looking at.
@@ -70,19 +90,19 @@ A quality lever that silently changes results poisons every future comparison. S
 ```
 ┌────────────────────────────────────────────────────────────────┐
 │  studio.py          Textual TUI  ·  never imports torch          │
-│  (~4,000 lines)     NEW RUN · QUEUE · blind A/B · READOUT meters  │
+│  (~4,500 lines)     NEW RUN · QUEUE · blind A/B · READOUT meters  │
 └─────────────────┬──────────────────────────────────────────────┘
                   │  spawns a worker subprocess, reads its stdout
                   │  parses  [[MARKER]]  lines   ◄── one-way protocol
 ┌─────────────────┴──────────────────────────────────────────────┐
 │  studio_core.py     JobManager  ·  process lifecycle, marker     │
-│  (~500 lines)       parsing, phase-timing provenance, run JSON   │
+│  (~600 lines)       parsing, phase-timing provenance, run JSON   │
 └─────────────────┬──────────────────────────────────────────────┘
                   │  argv  →  python director.py …  (own CUDA context)
 ┌─────────────────┴──────────────────────────────────────────────┐
 │  director.py        Generation engine  ·  multi-shot chaining,   │
 │  run_ltx.py         LTX / Wan backends, drift anchors, context   │
-│  (~1,200 lines)     windows, preview + telemetry emission        │
+│  (~1,500 lines)     windows, preview + telemetry emission        │
 └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -94,8 +114,8 @@ The worker prints progress as line-oriented markers; `studio_core` parses them w
 [[PHASE generating]]      ← phase boundary  → drives provenance + the progress budget
 [[SEG 2/4]]               ← shot 2 of 4 started
 [[STEP 12/20]]            ← denoising step within the current shot
-[[PREVIEW /path.png]]     ← a fresh preview frame is on disk
-[[VRAM 7.1]]              ← peak GB this phase
+[[PREVIEW 12]]            ← a fresh preview frame is on disk
+[[VRAM 7270]]             ← per-shot peak CUDA MB
 [[SEAMMSE 0.0043]]        ← boundary discontinuity between chained shots
 [[DRIFT 0.11]]            ← accumulated motion drift vs. the anchor frame
 [[CKPT 1]]               ← a resumable checkpoint was written
@@ -107,8 +127,8 @@ Because phase boundaries are explicit, the studio accumulates real per-phase tim
 
 ## Feature tour
 
-- **Pip-Boy TUI** — NEW RUN form, live QUEUE, and a persistent right-hand rail with field schematics and global READOUT meters. Responsive layout that restacks below 76 columns.
-- **Themeable UI** — 21 hand-built Pip-Boy palettes, each modeled on a real reference object (vault suit, nixie tube, radium dial) rather than a hue rotation, plus an opt-in *ultra* tier of 14 animated themes. The ultra decorations render as pure functions of a frame clock on a dedicated 15 fps timer — zero footprint on the standard themes, with a `STUDIO_NO_ANIM` reduce-motion switch.
+- **Pip-Boy TUI** — NEW RUN form, live QUEUE, and a persistent right-hand rail with field schematics and global READOUT meters. Responsive layout that restacks below ~52 columns.
+- **Themeable UI** — 21 hand-built Pip-Boy palettes, each modeled on a real reference object (vault suit, nixie tube, radium dial) rather than a hue rotation, plus an opt-in *ultra* tier of 9 animated themes. The ultra decorations render as pure functions of a frame clock on a dedicated 15 fps timer — zero footprint on the standard themes, with a `STUDIO_NO_ANIM` reduce-motion switch.
 - **Blind A/B** — queue two variants of one config, rate them blind, reveal after. Ratings and pairings are logged to `runs/pair_*.jsonl`.
 - **Live preview** — the worker decodes a preview frame mid-generation; the UI refreshes it on a wall-clock cadence so you can bail on a bad seed early.
 - **READOUT gauges** — VRAM headroom, clip budget, system RAM, the shot chain, predicted quality, and drift risk, all auto-refit from your own run history so the scales mean something on *your* hardware.
@@ -132,7 +152,7 @@ Because phase boundaries are explicit, the studio accumulates real per-phase tim
 | `experiment_log.py` | Appends structured run records to `runs/experiments.jsonl` — the measurement backbone. |
 | `readout.py` | The self-calibrating READOUT gauges. |
 | `field_visuals.py` | ASCII block-art schematics for every form field. |
-| `studio_themes.py` | Theme registry — 21 curated Pip-Boy palettes plus the 14-theme animated *ultra* tier. |
+| `studio_themes.py` | Theme registry — 21 curated Pip-Boy palettes plus the 9-theme animated *ultra* tier. |
 | `ultra_art.py` | Pixel-art / procedural decorations for the ultra themes — pure functions of a frame clock, never raises. |
 | `style_presets.py` | Named anchor-word bundles for the STYLE dropdown. |
 | `gpu_budget.py` | VRAM budgeting helpers for the 8 GB envelope. |
