@@ -32,8 +32,9 @@ RAMPS = {
 # Per-ultra-theme INFO-panel running-light (the flourish that escapes the decoration box, opt-in):
 #   mode/base/hot = "electron" (a bright comet + tail travels the text) or "wave" (a smooth traveling
 #   brightness wave). base = readable resting color, hot = the crest.
-# (Panel borders are STATIC — the border-breathe was removed 2026-07-08 at the user's request.
-#  The whole-canvas "full-page touch" was removed 2026-07-07 — being redesigned; awaiting approval.)
+# (The whole-screen layer is the LIVE CURRENT — a spark flowing along the panel borders, with
+#  signature-moment storms (current_frame/current_head below; landed 2026-07-09). It replaces the
+#  reverted border-breathe / canvas-breath / corner-frame: those THROBBED in place; this TRAVELS.)
 EFFECTS = {
     "ultra-dragon":    {"mode": "electron", "base": "#c9a24a", "hot": "#fff3c4"},
     "ultra-skynet":    {"mode": "electron", "base": "#b0b8c0", "hot": "#ff6a5a"},
@@ -106,6 +107,90 @@ def _moment(beat, salt, win=None, dur=(2.0, 5.0), skip=None, ramp=None):
         return (min(1.0, t / r, (d - t) / r), t / max(0.05, d))
     except Exception:
         return (0.0, 0.0)
+
+
+# One registry of each theme's signature-moment schedule: (salt, win, dur, skip) args for _moment.
+# Single source of truth — the decoration renderers AND the studio's whole-screen STORM both read
+# this, so the frame crackles exactly when the decoration plays its payoff. Kaiju's entry is a
+# storm-only stream (salt 10): its decoration payoff (the charge-and-fire breath) runs on a short
+# fixed cycle that would storm far too often, so its storms get the shared irregular schedule.
+MOMENTS = {
+    "ultra-dragon":    (1, None, (2.0, 5.0), None),
+    "ultra-skynet":    (2, None, (2.0, 5.0), None),
+    "ultra-synthwave": (3, None, (2.2, 3.2), None),
+    "ultra-matrix":    (4, None, (4.0, 7.0), None),
+    "ultra-tv":        (9, 40.0, (1.0, 3.0), 0),
+    "ultra-sonar":     (5, None, (8.0, 14.0), None),
+    "ultra-kaiju":     (10, None, (2.0, 5.0), None),
+    "ultra-aurora":    (6, None, (1.6, 2.6), None),
+    "ultra-vhs":       (7, None, (1.2, 2.4), None),
+    "ultra-vaporwave": (8, None, (2.5, 4.0), None),
+}
+
+
+def moment(theme_name, beat):
+    """(intensity, phase) of `theme_name`'s signature moment at `beat` — the public face of the
+    shared scheduler (params in MOMENTS). (0.0, 0.0) for unknown names. PURE fn; never raises."""
+    try:
+        spec = MOMENTS.get(theme_name)
+        if not spec:
+            return (0.0, 0.0)
+        salt, win, dur, skip = spec
+        return _moment(beat, salt, win=win, dur=dur, skip=skip)
+    except Exception:
+        return (0.0, 0.0)
+
+
+# ---------------------------------------------------------------- live current (final layer) ------
+# The whole-screen layer: ONE bright spark in the theme's hot color flows along the visible panels'
+# borders — edge to edge, panel to panel — so the entire frame carries the theme's electricity.
+# TRAVELS, never throbs (the reverted border-breathe / canvas-breath / corner-frame all pulsed in
+# place). Pure math here (deterministic, testable); studio._animate_ultra_current applies the glows
+# to real panel borders and layers the signature-moment STORM (every edge crackling, scaled by the
+# moment envelope, so it glides in and melts away).
+CURRENT_EDGE_S = 1.1        # default seconds-per-edge (the studio passes its own dial through)
+
+
+def current_head(beat, n_panels, edge_u=None):
+    """Index of the panel the spark is on at `beat` (0..n_panels-1). PURE fn; never raises."""
+    try:
+        n = int(n_panels)
+        if n <= 0:
+            return 0
+        b = 0.0 if _frozen() else float(beat)
+        eu = float(edge_u or CURRENT_EDGE_S * 2.0)
+        return (int(b / max(0.05, eu)) // 4) % n
+    except Exception:
+        return 0
+
+
+def current_frame(beat, n_panels, edge_u=None, storm=0.0):
+    """Glow map for the live current at `beat`: {(panel, edge): 0..1}, edge 0..3 = top/right/
+    bottom/left. The spark lights one edge with a sin^2 crest (swells mid-edge, hands off dark at
+    the corners -> the crest GLIDES around the frame), and `storm` > 0 overlays a slow staggered
+    crackle on EVERY edge, scaled by the moment envelope. PURE fn; never raises (worst case {})."""
+    try:
+        out = {}
+        n = int(n_panels)
+        if n <= 0:
+            return out
+        b = 0.0 if _frozen() else float(beat)
+        eu = float(edge_u or CURRENT_EDGE_S * 2.0)
+        s = b / max(0.05, eu)
+        k = int(s) % (n * 4)
+        g = math.sin(math.pi * (s - int(s))) ** 2
+        if g > 0.01:
+            out[(k // 4, k % 4)] = g
+        if storm > 0.001:
+            for p in range(n):
+                for e in range(4):
+                    c = storm * (0.2 + 0.8 * abs(math.sin(b * 1.3 + (p * 4 + e) * 1.9)))
+                    if c > out.get((p, e), 0.0):
+                        out[(p, e)] = min(1.0, c)
+        return out
+    except Exception:
+        return {}
+
 
 
 
@@ -408,7 +493,7 @@ def _synthwave(beat, width=None):
                         if 0 <= xx < W:
                             row[xx] = "[%s]│[/%s]" % (gcol, gcol)
             rows_l.append(row)
-        m, ph = _moment(bf, 3, dur=(2.2, 3.2))          # signature moment: a shooting star
+        m, ph = moment("ultra-synthwave", bf)           # signature moment: a shooting star
         if m > 0.0:
             fx = ph * (W + 8.0) - 4.0                   # float path: upper-left -> lower-right
             fy = 0.4 + ph * 1.8
@@ -437,7 +522,7 @@ def _matrix_rain(beat, width=None):
         bi = int(b)
         nch = len(_MTX_CHARS)
         grid = [[" "] * W for _ in range(H)]
-        m, _ph = _moment(b, 4, dur=(4.0, 7.0))          # signature moment: one column burns white-hot
+        m, _ph = moment("ultra-matrix", b)              # signature moment: one column burns white-hot
         cxm = (int(b // MOMENT_WIN) * 7919) % W
         for x in range(W):
             speed = 0.7 + ((x * 37) % 5) * 0.16         # 0.70 .. 1.34 cells/unit
@@ -469,7 +554,7 @@ def _tv(beat, width=None):
         b = float(beat); bi = int(b); nb = 7
         grid = [[" "] * W for _ in range(H)]
         # the cut: 0.5-1.5 s of colour every ~2-38 s (hashed offset in a 40-unit window, no skips)
-        m, _ph = _moment(b, 9, win=40.0, dur=(1.0, 3.0), skip=0)
+        m, _ph = moment("ultra-tv", b)
         if m >= 0.55:                                     # ---- the colour card (NO SIGNAL) ----
             bars = ["#dcdcdc", "#c8c81a", "#1ac8c8", "#1ac01a", "#c81ac8", "#c81a1a", "#1a1ad0"]
             low  = ["#1a1ad0", "#0b0b0b", "#c81ac8", "#0b0b0b", "#1ac8c8", "#0b0b0b", "#dcdcdc"]
@@ -540,7 +625,7 @@ def _sonar(beat, width=None):
         bc = _lerp("#1a6a54", "#7cffc8", pf)             # blip: faint always, bright on ping
         if 0 <= bx < W and 0 <= by < H:
             grid[by][bx] = "[%s]◉[/%s]" % (bc, bc)
-        m, _ph = _moment(b, 5, dur=(8.0, 14.0))          # signature moment: a second contact
+        m, _ph = moment("ultra-sonar", b)                # signature moment: a second contact
         if m > 0.05:
             ba2, br2 = 3.8, R * 0.38
             b2x = int(round(cx + br2 * math.cos(ba2))); b2y = int(round(cy + br2 * math.sin(ba2) / 2.0))
@@ -622,7 +707,7 @@ def _aurora(beat, width=None):
                     tw = 0.5 + 0.5 * math.sin(b * 0.3 + x * 1.1 + y * 2.0)
                     if tw > 0.6:
                         put(y, x, "·", _lerp("#24406a", "#cfeaff", (tw - 0.6) / 0.4))
-        m, ph = _moment(b, 6, dur=(1.6, 2.6))                    # signature moment: a meteor
+        m, ph = moment("ultra-aurora", b)                        # signature moment: a meteor
         if m > 0.0:
             fx = (1.0 - ph) * (W + 6.0) - 3.0                    # right -> left, shallow fall
             fy = 0.2 + ph * 1.6
@@ -676,7 +761,7 @@ def _vhs(beat, width=None):
                     v = int((0x50 + (h % 0x80)) * fade)
                     c = "#%02x%02x%02x" % (v, v, min(255, v + 0x20))
                     put(y, x, "▒░▓"[(h >> 3) % 3], c)
-        m, _ph = _moment(b, 7, dur=(1.2, 2.4))            # signature moment: a tracking glitch
+        m, _ph = moment("ultra-vhs", b)                   # signature moment: a tracking glitch
         if m > 0.05:
             gy = 2 + (int(b // MOMENT_WIN) % 4)           # one fixed mid-frame row per moment
             for x in range(W):
@@ -705,7 +790,7 @@ def _vaporwave(beat, width=None):
             for x in range(W):
                 if (((x + off) // 2) + y) % 2 == 0:
                     put(y, x, "█", _lerp(mag, cyan, x / float(W)))
-        m, _ph = _moment(b, 8, dur=(2.5, 4.0))           # signature moment: the marble catches the light
+        m, _ph = moment("ultra-vaporwave", b)            # signature moment: the marble catches the light
         marble = _lerp(marble, "#fff6ff", 0.7 * m); pink = _lerp(pink, "#ffe2f2", 0.5 * m)
         bx = W // 2 - 3                                  # classical bust
         for s, ry in (("  ▄▄▄  ", 1), (" ▟███▙ ", 2), (" █████ ", 3), (" █████ ", 4), ("▟█████▙", 5)):
@@ -725,8 +810,8 @@ def _vaporwave(beat, width=None):
 
 # ---------------------------------------------------------------- public API ----------------------
 THEMES = {
-    "ultra-dragon": lambda b, w=None: render_sprite(DRAGON, b, cols=w, surge=_moment(b, 1)[0]),
-    "ultra-skynet": lambda b, w=None: render_sprite(T800, b, cols=w, surge=_moment(b, 2)[0]),
+    "ultra-dragon": lambda b, w=None: render_sprite(DRAGON, b, cols=w, surge=moment("ultra-dragon", b)[0]),
+    "ultra-skynet": lambda b, w=None: render_sprite(T800, b, cols=w, surge=moment("ultra-skynet", b)[0]),
     "ultra-synthwave": lambda b, w=None: _synthwave(b, width=w),
     "ultra-matrix": lambda b, w=None: _matrix_rain(b, width=w),
     "ultra-tv": lambda b, w=None: _tv(b, width=w),

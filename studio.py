@@ -1185,7 +1185,11 @@ class Studio(App):
         self._ultra_t = 0.0              # continuous animation clock (float; advanced by the fast timer)
         self._ultra_timer = None         # dedicated ~15fps timer, live ONLY while an ultra theme shows
         self._electron_starts = []       # _ultra_t at which each in-flight INFO electron was fired
-        self._electron_next = 0.0        # _ultra_t at which to fire the next electron (random schedule)
+        self._electron_next = 0.0        # _ultra_t of the max-gap FALLBACK fire (current passes fire sooner)
+        self._electron_lastfire = -1e9   # _ultra_t of the last electron fire (min-gap gate for pass-fires)
+        self._current_base = {}          # live current: widget id -> captured 4-edge (type, hex) CSS base
+        self._current_glow = {}          # live current: (widget id, edge) -> last glow written (skip no-ops)
+        self._current_panel = None       # live current: (tab, panel idx) the spark was on last frame
         self._info_calm = False          # True once the calm (electron-less) INFO base is painted -> skip idle repaints
         self._info_base = INFO           # markup an ultra theme's electron animates over (see _set_info)
         self.consult = ConsultDaemon()
@@ -1451,6 +1455,8 @@ class Studio(App):
                 decor.border_title = ultra_art.TITLES.get(name, "« ULTRA »")
                 self._ultra_t = 0.0                      # fresh clock + electron schedule for this theme
                 self._electron_starts, self._electron_next = [], 0.0   # first electron fires ~immediately
+                self._electron_lastfire = -1e9
+                self._restore_ultra_current()            # borders re-capture against THIS theme's CSS
                 self._paint_ultra()                      # first frame: sprite + rail border breathe
                 self._animate_ultra_info(force=True)     # paint the INFO base (calm until the first fire)
                 self._animate_ultra_topbar()             # topbar ambient wave
@@ -1469,8 +1475,8 @@ class Studio(App):
                         self._ultra_timer.pause()
                     except Exception:
                         pass
-                # left the ultra tier -> un-animate the INFO + topbar (panel borders are static CSS
-                # now, so there is nothing to restore there)
+                self._restore_ultra_current()            # give the borders back to the static CSS
+                # left the ultra tier -> un-animate the INFO + topbar
                 for wid, txt in (("newinfo", getattr(self, "_info_base", None)),
                                  ("topbartitle", self.TOPBAR_TITLE)):
                     if txt:
@@ -1609,6 +1615,16 @@ class Studio(App):
     _ELECTRON_TOUR_S = 10.43
     _ELECTRON_MIN_GAP_S = 15.0
     _ELECTRON_MAX_GAP_S = 35.0
+    # LIVE CURRENT (the whole-screen final layer): a spark flows along the visible panels' borders —
+    # edge to edge, panel to panel — and a signature-moment STORM crackles every border for a couple
+    # of seconds (math in ultra_art.current_frame; applied in _animate_ultra_current).
+    _CURRENT_EDGE_S = 1.1            # seconds the spark spends per panel edge
+    _CURRENT_CIRCUITS = {            # the spark's path per tab (bordered panels, clockwise-ish order)
+        "tab-new": ("#ultradecor", "#fieldvisual", "#readout", "#infopanel"),
+        "tab-queue": ("#qtable", "#qinspectpanel"),
+        "tab-live": ("#preview", "#dirnotes", "#livelog"),
+        "tab-arch": ("#atable", "#inspectpanel", "#inspectlog"),
+    }
 
     def _ultra_frame(self):
         """The ~15fps ultra animation frame (its own timer, live only while an ultra theme shows).
@@ -1622,6 +1638,7 @@ class Studio(App):
         self._step_electrons()
         try:
             self._animate_ultra_topbar()
+            self._animate_ultra_current()
             if self.query_one(TabbedContent).active == "tab-new":
                 self._paint_ultra()
                 self._animate_ultra_info()
@@ -1630,25 +1647,32 @@ class Studio(App):
 
     def _step_electrons(self):
         """Advance the INFO-electron schedule (units of _ultra_t; 2 units = 1s): drop finished tours,
-        and fire a fresh electron once the (random) next-fire time is reached, then draw the next gap
-        in [MIN, MAX] seconds. Overlap is allowed (a gap shorter than the tour), but MIN keeps a
-        mandatory delay so two never start on the same frame. Uses random -> the STOCHASTIC part lives
-        here (studio state); ultra_art.render_electrons stays a pure fn for deterministic tests."""
+        and fire the MAX-GAP FALLBACK electron if nothing fired sooner. The primary trigger is
+        choreographed — the live current's spark entering the INFO panel fires the comet (min-gap
+        gated, in _animate_ultra_current) so the comet launches from the spark's hand-off; this
+        fallback only guarantees the comet never goes quiet past MAX_GAP (first fire lands
+        ~immediately). ultra_art.render_electrons stays a pure fn for deterministic tests."""
         if not getattr(self, "_ultra_theme", None):
             return
         tour_u = self._ELECTRON_TOUR_S * 2.0
         self._electron_starts = [s for s in self._electron_starts
                                  if (self._ultra_t - s) <= tour_u * 1.12]   # +margin for the tail to exit
         if self._ultra_t >= self._electron_next:
-            self._electron_starts.append(self._ultra_t)
-            gap = random.uniform(self._ELECTRON_MIN_GAP_S, self._ELECTRON_MAX_GAP_S) * 2.0
-            self._electron_next = self._ultra_t + gap
+            self._fire_electron()
+
+    def _fire_electron(self):
+        """Launch one INFO electron NOW and re-arm the max-gap fallback. Called by the live current
+        when its spark enters the INFO panel (the choreographed trigger) and by _step_electrons'
+        fallback so the comet keeps its approved [MIN, MAX]-gap cadence everywhere."""
+        self._electron_starts.append(self._ultra_t)
+        self._electron_lastfire = self._ultra_t
+        self._electron_next = self._ultra_t + self._ELECTRON_MAX_GAP_S * 2.0
 
     def _paint_ultra(self):
         """The decoration scene, repainted every frame (the pixels/scroll stay chunky via int(clock)
         inside ultra_art; the twinkling sparkles/stars move smoothly off the float clock). No-op unless
         an ultra theme is active AND the NEW RUN tab is showing. Deterministic in _ultra_t; guarded.
-        Panel borders are STATIC CSS — they do NOT breathe."""
+        Panel borders rest on static CSS — the LIVE CURRENT is what moves across them."""
         name = getattr(self, "_ultra_theme", None)
         if not name or ultra_art is None:
             return
@@ -1684,6 +1708,84 @@ class Studio(App):
                 self.query_one("#topbartitle", Static).update(Text.from_markup(art))
         except Exception:
             pass
+
+    def _animate_ultra_current(self):
+        """The LIVE CURRENT — the whole-screen final layer of the ultra tier: one bright spark in
+        the theme's hot color flows along the borders of the active tab's panels (edge -> edge,
+        panel -> panel, a smooth sin^2 crest — it TRAVELS, it never throbs), and a signature-moment
+        STORM makes every border crackle for a couple of seconds, then melt away. Choreography: the
+        spark ENTERING the INFO panel is what fires the text comet (min-gap gated; _step_electrons
+        keeps only the max-gap fallback). Writes only edge colors that actually changed (steady
+        state: a couple of style writes per frame). Guarded; the fast timer never runs under
+        STUDIO_NO_ANIM, so reduce-motion never reaches here."""
+        name = getattr(self, "_ultra_theme", None)
+        if not name or ultra_art is None:
+            return
+        try:
+            tab = self.query_one(TabbedContent).active
+            panels = []
+            for wid in self._CURRENT_CIRCUITS.get(tab, ()):
+                try:
+                    w = self.query_one(wid)
+                    if w.region.width > 0:                # actually on screen (blind mode hides the rail)
+                        panels.append((wid, w))
+                except Exception:
+                    pass
+            if not panels:
+                return
+            eff = ultra_art.EFFECTS.get(name) or {}
+            hot = eff.get("hot", "#ffffff")
+            storm = ultra_art.moment(name, self._ultra_t)[0]
+            edges = ultra_art.current_frame(self._ultra_t, len(panels),
+                                            edge_u=self._CURRENT_EDGE_S * 2.0, storm=storm)
+            EDGE = ("border_top", "border_right", "border_bottom", "border_left")
+            for pi, (wid, w) in enumerate(panels):
+                base = self._current_base.get(wid)
+                if base is None:                          # capture this theme's own CSS border once
+                    base = []
+                    for attr in EDGE:
+                        try:
+                            bt = getattr(w.styles, attr)
+                            base.append((str(bt[0]) or "round", str(bt[1].hex)[:7]))
+                        except Exception:
+                            base.append(("round", "#808080"))
+                    base = self._current_base[wid] = tuple(base)
+                for ei, attr in enumerate(EDGE):
+                    g = round(edges.get((pi, ei), 0.0), 2)
+                    if self._current_glow.get((wid, ei)) == g:
+                        continue                          # unchanged -> no style write
+                    self._current_glow[(wid, ei)] = g
+                    typ, bhex = base[ei]
+                    setattr(w.styles, attr, (typ, ultra_art._lerp(bhex, hot, g) if g > 0 else bhex))
+            # choreography: the spark ENTERING the INFO panel fires the text comet (min-gap gated)
+            head = ultra_art.current_head(self._ultra_t, len(panels), edge_u=self._CURRENT_EDGE_S * 2.0)
+            if (tab, head) != self._current_panel:
+                self._current_panel = (tab, head)
+                if (panels[head][0] == "#infopanel"
+                        and self._ultra_t - self._electron_lastfire >= self._ELECTRON_MIN_GAP_S * 2.0):
+                    self._fire_electron()
+        except Exception:
+            pass
+
+    def _restore_ultra_current(self):
+        """Give every border the live current ever touched back to the stylesheet (clear the inline
+        rules so CSS wins again — a theme change re-captures against the new palette) and drop the
+        caches. Guarded; safe to call at any time."""
+        try:
+            EDGE = ("border_top", "border_right", "border_bottom", "border_left")
+            for wid, base in list(self._current_base.items()):
+                try:
+                    w = self.query_one(wid)
+                    for ei, attr in enumerate(EDGE):
+                        try:
+                            setattr(w.styles, attr, None)   # clear the inline rule -> CSS cascades back
+                        except Exception:
+                            setattr(w.styles, attr, base[ei])
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        self._current_base, self._current_glow, self._current_panel = {}, {}, None
 
     def _animate_ultra_info(self, force=False):
         """Breakout #2 — paint the INFO panel's base text in the theme's dim resting color with any

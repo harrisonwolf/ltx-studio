@@ -80,5 +80,28 @@ try:
 finally:
     del os.environ["STUDIO_NO_ANIM"]
 
+# ---- signature-moment registry + the live current (the whole-screen final layer) ----
+check("MOMENTS covers every ultra theme", set(ultra_art.MOMENTS) == set(NAMES))
+check("moment: pure + bounded",
+      all(ultra_art.moment(n, 12.3) == ultra_art.moment(n, 12.3)
+          and 0.0 <= ultra_art.moment(n, b)[0] <= 1.0 and 0.0 <= ultra_art.moment(n, b)[1] <= 1.0
+          for n in NAMES for b in (0.0, 7.7, 44.4, 123.4)))
+check("moment: unknown theme -> (0, 0)", ultra_art.moment("pipboy", 5.0) == (0.0, 0.0))
+_fires = [n for n in NAMES if any(ultra_art.moment(n, x * 0.5)[0] > 0 for x in range(2000))]
+check("moment: every theme fires within ~8 min", set(_fires) == set(NAMES), sorted(set(NAMES) - set(_fires)))
+
+_seen, _ok = set(), True
+for _x in range(0, 320):
+    _edges = ultra_art.current_frame(_x * 0.25, 4)
+    _ok &= len(_edges) <= 1 and all(0.0 <= g <= 1.0 for g in _edges.values())
+    _seen.update(_edges)
+check("current: a single bounded spark", _ok)
+check("current: tours every panel edge (16/16)", len(_seen) == 16, len(_seen))
+check("current: head stays in range", all(ultra_art.current_head(b, 4) in range(4) for b in (0, 5.5, 33.3, 200.0)))
+check("current: storm lights every edge", len(ultra_art.current_frame(3.3, 3, storm=1.0)) == 12)
+check("current: storm glow bounded", all(0.0 <= g <= 1.0 for g in ultra_art.current_frame(3.3, 3, storm=1.0).values()))
+check("current: no panels -> {}", ultra_art.current_frame(5.0, 0) == {})
+
+
 print("RESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)
