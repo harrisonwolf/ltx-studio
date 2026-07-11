@@ -135,7 +135,7 @@ Because phase boundaries are explicit, the studio accumulates real per-phase tim
 - **Field schematics** — a right-rail « SCHEMATIC » panel draws the focused dial's trade-off axis with your current value marked on it, beside an « INFO » panel whose guidance is per-dial *and* per-backend.
 - **Style presets** — named bundles of anchor words (`Cinematic`, `Golden Hour`, `Noir`, …) that append into the prompt, stackable and user-extensible via JSON.
 - **Multi-shot director** — chains shots into longer clips with latent anchoring (AdaIN + palette lock) to fight drift, plus context windows so long clips don't OOM.
-- **Three backends** — LTX-2B (pinned 0.9.5, optional 0.9.8-distilled transformer) for fast drafts, Wan-VACE-1.3B for fidelity, and a 4-step Wan-turbo DMD path — with each path's step/CFG clamps surfaced rather than hidden.
+- **Three generation paths** — LTX-2B (pinned 0.9.5, optional 0.9.8-distilled transformer) for fast drafts, Wan-VACE-1.3B for fidelity, and a 4-step Wan-turbo DMD path — with each path's step/CFG clamps surfaced rather than hidden.
 - **Archive with lineage** — every run is a first-class record: favorite, re-roll, clone, replicate, enhance, blind-pair verdicts, a lineage panel tracing each run's replicate source and enhanced children, and an opening-frame preview on inspect so near-identical runs are distinguishable at a glance.
 - **Inspect & clone from the queue** — read-only provenance and one-click re-queue of any run's exact config.
 
@@ -158,7 +158,7 @@ Because phase boundaries are explicit, the studio accumulates real per-phase tim
 | `gpu_budget.py` | VRAM budgeting helpers for the 8 GB envelope. |
 | `ltx_preview.py` | Mid-generation preview-frame decode/save. |
 | `dials_help.py` | Help text for the dials. |
-| `vlm_director*.py`, `vlm_planner.py` | Optional Qwen-VL sidecars for auto-prompting / shot planning. |
+| `vlm_director*.py`, `vlm_planner.py` | Optional Qwen3-VL sidecars for auto-prompting / shot planning. |
 | `_q2tests/`, `_t22tests/` | CPU-only test harnesses (drift replay, hold-stress, readout units). |
 | `_spikes/` | Research spikes (e.g. a Wan 2.2-5B smoke test) — kept as a record of what was tried. |
 
