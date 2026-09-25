@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """Persistent CONSULT daemon: a conversational creative director for the LTX studio.
 
-Loads Qwen2.5-VL-7B (4-bit) ONCE and stays resident (fast turns), serving a chat over
-JSON-lines on stdin/stdout. Runs in its own venv (transformers>=4.49 + bnb). All logs to
+Loads Qwen3-VL-4B (nf4 on GPU, or fp16 on CPU) ONCE and stays resident (fast turns), serving a
+chat over JSON-lines on stdin/stdout. Runs in its own venv (transformers>=4.57 + bnb). All logs to
 stderr; stdout carries ONLY protocol JSON (one object per line).
 
 Protocol:

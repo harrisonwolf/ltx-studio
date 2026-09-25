@@ -4,7 +4,7 @@
 Sibling of field_visuals.py / preview_art.py: stdlib-only, torch/textual/studio-free, and it
 NEVER raises (every entry point is wrapped -> returns "" or None on any error). The studio wires
 it defensively (import -> None on failure) and paints its output the usual way: a Rich-markup
-STRING -> Text.from_markup(no_wrap=True) -> Static.update, on the existing 0.5s tick/_beat cadence.
+STRING -> Text.from_markup(no_wrap=True) -> Static.update, on a dedicated 15 fps frame timer.
 
 Design rules (see plan agile-tumbling-valley):
 - Sprites are defined IN CODE (palette + pixel rows), not shipped as PNGs, so they are recolorable,

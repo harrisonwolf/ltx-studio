@@ -75,13 +75,13 @@ Scrolling the same panel reaches the lineage table — here a replicate source, 
 Three principles drove almost every design decision.
 
 **1. The UI process never touches CUDA.**
-The Textual app (`studio.py`) does not import `torch`. Generation runs in a *separate* Python subprocess with its own CUDA context; the two communicate over a tiny one-way text protocol on stdout. This means a driver OOM or a CUDA segfault kills the worker, not the UI — the studio stays responsive, reports the failure, and lets you re-queue. It also means the ~4,500-line UI stays testable without a GPU in the loop.
+The Textual app (`studio.py`) does not import `torch`. Generation runs in a *separate* Python subprocess with its own CUDA context. The worker reports to the UI over a small text protocol on stdout, and the UI controls the worker with POSIX signals (pause, suspend, cancel). A driver OOM or a CUDA segfault therefore kills the worker, not the UI: the studio stays responsive, reports the failure, and lets you re-queue. It also means the ~4,500-line UI stays testable without a GPU in the loop.
 
 **2. Measure, don't guess.**
-Every run appends a structured record to `runs/experiments.jsonl` — config, per-phase wall-clock, peak VRAM, and quality telemetry (seam MSE across shot boundaries, motion drift, token counts). The time-estimate model and the READOUT gauges *calibrate themselves from that log*. When you want to know whether a change actually helped, there's a **blind A/B harness** with a double coin-flip (it randomizes both the on-screen label *and* the render order) and a reveal gate, so you rate output without knowing which variant you're looking at.
+Every run the studio finishes (done or failed) appends a structured record to `runs/experiments.jsonl`: config, per-phase wall-clock, peak VRAM, and quality telemetry (seam MSE across shot boundaries, luminance drift against the shot-1 anchor, prompt token counts). The VRAM and time constants behind the READOUT gauges *refit themselves from that log*. When you want to know whether a change actually helped, there's a **blind A/B harness** with a double coin-flip (it randomizes both the on-screen label *and* the render order) and a reveal gate, so you rate output without knowing which variant you're looking at.
 
 **3. New behavior ships as an opt-in toggle, defaulting to the old output.**
-A quality lever that silently changes results poisons every future comparison. So new features (drift anchors, context windows, distilled variants) are dials that default to the previous behavior — byte-identical output unless you opt in. Experiments stay honest across versions.
+A quality lever that silently changes results poisons every future comparison. So new features (latent AdaIN and palette-lock anchors, the Wan reference anchor, CFG rescale / interval guidance, the distilled LTX variant) are dials that default to the previous behavior: byte-identical output unless you opt in. Experiments stay honest across versions.
 
 ---
 
@@ -90,79 +90,113 @@ A quality lever that silently changes results poisons every future comparison. S
 ```
 ┌────────────────────────────────────────────────────────────────┐
 │  studio.py          Textual TUI  ·  never imports torch          │
-│  (~4,500 lines)     NEW RUN · QUEUE · blind A/B · READOUT meters  │
+│  (~4,500 lines)     NEW RUN · QUEUE · LIVE · ARCHIVE · blind A/B │
 └─────────────────┬──────────────────────────────────────────────┘
-                  │  spawns a worker subprocess, reads its stdout
-                  │  parses  [[MARKER]]  lines   ◄── one-way protocol
+                  │  spawns a worker subprocess, reads its stdout,
+                  │  parses  [[MARKER]]  lines; signals for control
 ┌─────────────────┴──────────────────────────────────────────────┐
 │  studio_core.py     JobManager  ·  process lifecycle, marker     │
 │  (~600 lines)       parsing, phase-timing provenance, run JSON   │
 └─────────────────┬──────────────────────────────────────────────┘
-                  │  argv  →  python director.py …  (own CUDA context)
+                  │  argv  →  python director.py … | run_ltx.py …
+                  │           (own CUDA context)
 ┌─────────────────┴──────────────────────────────────────────────┐
 │  director.py        Generation engine  ·  multi-shot chaining,   │
-│  run_ltx.py         LTX / Wan backends, drift anchors, context   │
-│  (~1,500 lines)     windows, preview + telemetry emission        │
+│  run_ltx.py         LTX / Wan backends, drift anchors, preview   │
+│  (~1,500 lines)     + telemetry emission, resumable checkpoints  │
 └────────────────────────────────────────────────────────────────┘
 ```
 
+`run_ltx.py` handles short single-shot LTX runs; everything else (chained, director, Wan) goes through `director.py`.
+
 ### The marker protocol
 
-The worker prints progress as line-oriented markers; `studio_core` parses them with regexes and updates job state. That's the entire coupling between the two processes — no shared memory, no RPC, no `torch` in the UI.
+The worker prints progress as line-oriented markers, and `studio_core` parses them with regexes to update job state. Arguments are space-separated. The worker-to-UI direction has no other channel: no shared memory, no RPC, no `torch` in the UI. In the other direction the studio sends `SIGSTOP`/`SIGCONT` to pause, `SIGUSR1` to suspend to a checkpoint, and kills the process group to cancel.
 
 ```
-[[PHASE generating]]      ← phase boundary  → drives provenance + the progress budget
-[[SEG 2/4]]               ← shot 2 of 4 started
-[[STEP 12/20]]            ← denoising step within the current shot
-[[PREVIEW 12]]            ← a fresh preview frame is on disk
-[[VRAM 7270]]             ← per-shot peak CUDA MB
-[[SEAMMSE 0.0043]]        ← boundary discontinuity between chained shots
-[[DRIFT 0.11]]            ← accumulated motion drift vs. the anchor frame
-[[CKPT 1]]               ← a resumable checkpoint was written
+[[PHASE generating]]        ← phase boundary → drives provenance + the progress budget
+[[LOAD 2 5 loading …]]      ← model-load sub-step 2 of 5, with a label
+[[SEG 2 4]]                 ← shot 2 of 4 started
+[[STEP 12 20]]              ← denoising step 12 of 20 within the current shot
+[[VRAM 7270]]               ← CUDA peak MB so far (torch max_memory_allocated)
+[[SEAMMSE 2 340]]           ← shot 2's boundary luminance MSE vs. the previous shot, ×100
+[[DRIFT 2 118 41]]          ← shot 2's luminance drift vs. the shot-1 anchor, ×100, before/after correction
+[[TOKENS 2 61]]             ← shot 2's prompt token count
+[[CKPT 2 97]]               ← resumable checkpoint written after shot 2 (97 frames so far)
+[[SUSPENDED runs/…_ckpt]]   ← worker parked itself at a checkpoint (SIGUSR1)
+[[PLAN 3 …]] [[DIRECT …]]   ← director mode: the VLM's plan and rewritten prompt for a shot
+[[DIRECT_MS 3 900 2100]]    ← director mode: VLM load / inference ms for shot 3
+[[DCFG k=v …]]              ← director mode: the as-run config, for the audit trail
 ```
 
-Because phase boundaries are explicit, the studio accumulates real per-phase timings (`load` / `warmup` / `generating` / `decoding` / `saving`) per run. Those feed two things: a **wall-time progress bar** that knows decoding is slow and weights the bar accordingly, and the **self-calibrating ETA** that reads back the experiment log.
+The worker also prints `[[PREVIEW n]]` when it writes a fresh preview frame, but the UI doesn't parse it; it polls the preview PNG's mtime instead.
+
+Raw phases are `importing`, `loading`, `offload`, `warmup`, `generating`, `decoding`, `saving` and (director mode) `redirecting`; the UI groups them as load → warm → gen → decode → save. Because phase boundaries are explicit, the studio accumulates real per-phase timings per run. Those feed two things: a **wall-time progress bar** that knows decoding is slow and weights the bar accordingly, and the **self-calibrating ETA** that reads back the experiment log.
 
 ---
 
 ## Feature tour
 
-- **Pip-Boy TUI** — NEW RUN form, live QUEUE, and a persistent right-hand rail with field schematics and global READOUT meters. Responsive layout that restacks below ~52 columns.
-- **Themeable UI** — 21 hand-built Pip-Boy palettes, each modeled on a real reference object (vault suit, nixie tube, radium dial) rather than a hue rotation, plus an opt-in *ultra* tier of 10 animated themes, each with a rare, irregularly-scheduled *signature moment* (a shooting star, a second sonar contact, a NO SIGNAL cut-in). The ultra decorations render as pure functions of a frame clock on a dedicated 15 fps timer — zero footprint on the standard themes, with a `STUDIO_NO_ANIM` reduce-motion switch.
-- **Blind A/B** — queue two variants of one config, rate them blind, reveal after. Ratings and pairings are logged to `runs/pair_*.jsonl`.
-- **Live preview** — the worker decodes a preview frame mid-generation; the UI refreshes it on a wall-clock cadence so you can bail on a bad seed early.
-- **READOUT gauges** — VRAM headroom, clip budget, system RAM, the shot chain, predicted quality, and drift risk, all auto-refit from your own run history so the scales mean something on *your* hardware.
-- **Field schematics** — a right-rail « SCHEMATIC » panel draws the focused dial's trade-off axis with your current value marked on it, beside an « INFO » panel whose guidance is per-dial *and* per-backend.
-- **Style presets** — named bundles of anchor words (`Cinematic`, `Golden Hour`, `Noir`, …) that append into the prompt, stackable and user-extensible via JSON.
-- **Multi-shot director** — chains shots into longer clips with latent anchoring (AdaIN + palette lock) to fight drift, plus context windows so long clips don't OOM.
-- **Three generation paths** — LTX-2B (pinned 0.9.5, optional 0.9.8-distilled transformer) for fast drafts, Wan-VACE-1.3B for fidelity, and a 4-step Wan-turbo DMD path — with each path's step/CFG clamps surfaced rather than hidden.
-- **Archive with lineage** — every run is a first-class record: favorite, re-roll, clone, replicate, enhance, blind-pair verdicts, a lineage panel tracing each run's replicate source and enhanced children, and an opening-frame preview on inspect so near-identical runs are distinguishable at a glance.
-- **Inspect & clone from the queue** — read-only provenance and one-click re-queue of any run's exact config.
+- **Pip-Boy TUI**: NEW RUN form, live QUEUE, LIVE render view, ARCHIVE, and a persistent right-hand rail with field schematics and global READOUT meters. The layout adapts: the rail restacks under the form on narrow terminals (below ~109 columns), and short terminals (under 38 / 30 rows) shed lower-value LIVE strips so the controls stay visible.
+- **Themeable UI**: 21 hand-built Pip-Boy palettes, each modeled on a real reference object (vault suit, nixie tube, radium dial) rather than a hue rotation, plus an opt-in *ultra* tier of 10 animated themes. Each ultra theme has a rare, irregularly scheduled *signature moment* (a shooting star, a second sonar contact, a NO SIGNAL cut-in). The ultra decorations render as pure functions of a frame clock on a dedicated 15 fps timer, cost nothing on the standard themes, and freeze under `STUDIO_NO_ANIM` (reduce motion).
+- **Blind A/B**: queue two variants of one config, rate them blind, reveal after. Blinds and ratings are logged to `runs/pair_blinds.jsonl` / `runs/pair_ratings.jsonl`.
+- **Live preview**: the worker projects a cheap RGB preview straight from the in-flight latent (no VAE decode). The UI redraws it as truecolor sub-cell terminal art (sextant / quadrant / half-block, cycled with Ctrl+P), so you can bail on a bad seed early.
+- **READOUT gauges**: VRAM headroom, clip budget, system RAM, the shot chain, predicted quality, and drift risk. The VRAM slope and the time constants refit from your own run history (cached in `runs/readout_fit.json`), so those scales mean something on *your* hardware. RAM, quality and drift are labeled hand heuristics.
+- **Field schematics**: a right-rail « SCHEMATIC » panel draws the focused dial's trade-off axis with your current value marked on it, beside an « INFO » panel whose guidance is per-dial *and* per-backend.
+- **Style presets**: named bundles of anchor words (`Cinematic`, `Golden Hour`, `Noir`, …) that append to the ANCHORS field. They stack, and you can add your own in `runs/style_presets.json`. Anchors apply on chained, director and Wan runs; single-shot LTX runs don't use them.
+- **Multi-shot director**: chains short shots into longer clips, with tail-overlap conditioning (or latent chaining) between shots, so every model pass stays inside the 8 GB budget. Drift is fought by anchoring to shot 1 with latent AdaIN and a pixel-space palette lock. An optional Qwen3-VL sidecar looks at each seam frame and rewrites the next shot's prompt toward your directive.
+- **Suspend / resume**: press `s` to park a multi-shot run at a resumable checkpoint (`runs/<id>_ckpt/`), and `r` to pick it back up. Checkpoints survive a studio restart, and a stall sentry auto-suspends a wedged run.
+- **Three generation paths**: LTX-2B (pinned 0.9.5) for fast drafts, Wan-VACE-1.3B for fidelity, and Wan-turbo, a Self-Forcing DMD distill LoRA that runs in about 6 steps (capped at 8). Each path's step/CFG clamps are surfaced rather than hidden. The 0.9.8-distilled LTX transformer is available as a blind-A/B variant or via `--ltx_variant distilled` on the CLI.
+- **Enhance**: ▲ ENHANCE runs RIFE interpolation, upscaling, face restore and SeedVR2 passes on a finished run. This needs an external AnimateDiff checkout (see [Machine-specific paths](#machine-specific-paths)).
+- **Consult the director**: ✎ CONSULT opens a Qwen3-VL chat that proposes dial settings and writes them into the form.
+- **Archive with lineage**: every run is a first-class record: favorite, re-roll, clone, replicate, enhance, blind-pair verdicts, a lineage panel tracing each run's replicate source and enhanced children, and an opening-frame preview on inspect so near-identical runs are distinguishable at a glance.
+- **Inspect & clone from the queue**: read-only provenance and one-click re-queue of any run's exact config.
+- **Sounds**: short cues from `sfx/` on run start, done, stall and empty queue. Drop a `.wav` in the folder to add it to the pickers. Mute with `STUDIO_MUTE=1` or the settings toggle.
+
+### Keys
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+Enter` | Queue the NEW RUN form |
+| `Ctrl+K` | Theme picker |
+| `Ctrl+P` | Cycle preview glyphs (sextant → quadrant → half); use it if the preview shows boxes |
+| `s` / `r` | Suspend the running job / resume a suspended one |
+| `t` | Toggle the raw worker terminal |
+| `d` | Toggle director raw output |
+| `Ctrl+C` | Quit |
 
 ---
 
 ## Repo map
 
-| File | Role |
+| Path | Role |
 |------|------|
-| `studio.py` | The Textual TUI — forms, queue, blind A/B, readout, layout. The centerpiece. |
+| `studio.py` | The Textual TUI: forms, queue, live view, archive, blind A/B, readout, layout. The centerpiece. |
 | `studio_core.py` | `JobManager`: subprocess lifecycle, `[[MARKER]]` parsing, phase-timing provenance, per-run JSON. |
-| `director.py` | Multi-shot generation engine: LTX/Wan backends, drift anchors, context windows, telemetry emission. |
-| `run_ltx.py` | Single-clip LTX runner (the simple path). |
-| `experiment_log.py` | Appends structured run records to `runs/experiments.jsonl` — the measurement backbone. |
-| `readout.py` | The self-calibrating READOUT gauges. |
-| `field_visuals.py` | ASCII block-art schematics for every form field. |
-| `studio_themes.py` | Theme registry — 21 curated Pip-Boy palettes plus the 10-theme animated *ultra* tier. |
-| `ultra_art.py` | Pixel-art / procedural decorations for the ultra themes — pure functions of a frame clock, never raises. |
+| `studio_modals.py` | Modal screens (frame viewer, theme picker, pickers and confirms). |
+| `studio_config.py` | Load/save of persisted settings in `runs/studio_config.json`. |
+| `studio_themes.py` | Theme registry: 21 curated Pip-Boy palettes plus the 10-theme animated *ultra* tier. |
+| `ultra_art.py` | Pixel-art / procedural decorations for the ultra themes: pure functions of a frame clock that never raise. |
+| `field_visuals.py` | Block-art schematics for every form field. |
+| `readout.py` | The self-calibrating READOUT gauges and their refit. |
+| `preview_art.py` | PNG → truecolor sub-cell terminal art for previews, thumbnails and the frame viewer. |
+| `dials_help.py` | Dial help text, shared by the UI tooltips and the VLM planner. |
 | `style_presets.py` | Named anchor-word bundles for the STYLE dropdown. |
-| `gpu_budget.py` | VRAM budgeting helpers for the 8 GB envelope. |
-| `ltx_preview.py` | Mid-generation preview-frame decode/save. |
-| `dials_help.py` | Help text for the dials. |
-| `vlm_director*.py`, `vlm_planner.py` | Optional Qwen3-VL sidecars for auto-prompting / shot planning. |
-| `_q2tests/`, `_t22tests/` | CPU-only test harnesses (drift replay, hold-stress, readout units). |
-| `_spikes/` | Research spikes (e.g. a Wan 2.2-5B smoke test) — kept as a record of what was tried. |
-
-The launch scripts (`studio.sh`, `ltx.sh`, `ltx-studio.sh`) wire up the Python env and drop you into the TUI.
+| `sounds.py`, `sfx/` | Event sound cues. |
+| `director.py` | Multi-shot generation engine: LTX/Wan backends, drift anchors, checkpoints, telemetry emission. |
+| `run_ltx.py` | Single-clip LTX runner: the studio's short-run path, and the `ltx.sh` CLI. See [LTX_README.md](LTX_README.md). |
+| `ltx_preview.py` | Latent → RGB preview projection (LTX and Wan) used by the workers. |
+| `gpu_budget.py` | VRAM cap / reserve helpers for the 8 GB envelope. |
+| `experiment_log.py` | Appends structured run records to `runs/experiments.jsonl` (the measurement backbone), plus a pandas loader for analysis. |
+| `vlm_director7b.py`, `vlm_planner.py` | Optional Qwen3-VL-4B sidecars: per-seam prompt rewriting (director mode) and the CONSULT planner. |
+| `vlm_director.py` | Earlier Qwen2-VL-2B director prototype. Superseded by `vlm_director7b.py` and not used. |
+| `ltx_studio.py` | The original single-file TUI. Superseded by `studio.py`; nothing launches it. |
+| `ltx_calib.py` | One-off probe for the longest LTX clip that fits 8 GB per resolution (loads the old 0.9.0 base). |
+| `tests/` | The CPU test suite; `tests/run.sh` runs everything (see [Testing](#testing)). |
+| `_q2tests/`, `_t22tests/` | Harnesses from the quality sprint and the READOUT work: unit tests plus the GPU acceptance / stress scripts. |
+| `_spikes/` | Research spikes (e.g. a Wan 2.2-5B smoke test), kept as a record of what was tried. |
+| `media/` | README screenshots and sample clips. |
+| `2026-07-*.md` | Implementation plans from past work sessions, kept for history. Their paths refer to the original checkout. |
 
 ---
 
@@ -170,29 +204,56 @@ The launch scripts (`studio.sh`, `ltx.sh`, `ltx-studio.sh`) wire up the Python e
 
 LTX Studio orchestrates open-weights models it does **not** vendor. You supply:
 
-- A Python 3.10 environment with the deps in `requirements.txt`.
+- A Python 3.10+ environment with the deps in `requirements.txt`.
 - On Blackwell / RTX 50-series, a CUDA 12.8 build of PyTorch:
   `pip install torch --index-url https://download.pytorch.org/whl/cu128`
-- The model weights (LTX-Video 2B, optionally Wan 2.1-VACE-1.3B), fetched on first run via `huggingface_hub` into a local cache.
+- The model weights, fetched on first use via `huggingface_hub` into the local HF cache: LTX-Video 0.9.5 (plus the base `Lightricks/LTX-Video` repo for its text encoder and tokenizer), and optionally Wan 2.1-VACE-1.3B and the Wan-turbo LoRA.
 
 Then:
 
 ```bash
-./studio.sh          # launch the full studio TUI
+./studio.sh          # launch the studio TUI (stderr is mirrored to studio.err)
+./ltx-studio.sh      # same, without the studio.err mirror
+./ltx.sh --prompt "a fox trotting through snow" --seconds 5   # headless single clip, no TUI
 ```
 
-Designed for WSL2 on Windows with an 8 GB GPU, but nothing is Windows-specific — it's a terminal app and a subprocess.
+All three launchers pick the interpreter in this order: `$LTX_PYTHON`, then the active `$VIRTUAL_ENV`, then `./venv`, then `python3`.
+
+### Environment variables
+
+| Variable | Effect |
+|----------|--------|
+| `LTX_PYTHON` | Interpreter for the launchers and `tests/run.sh`. |
+| `STUDIO_MUTE=1` | Silence all sound cues. |
+| `STUDIO_NO_ANIM` | Any non-empty value freezes the ultra-theme animation at frame 0 (reduce motion). |
+| `PREVIEW_MODE` | Starting preview glyph set: `sextant` (default), `quadrant` or `half`. |
+| `STUDIO_PREVIEW_SEC` | Minimum seconds between worker preview frames (default 15). |
+| `LTX_GPU` | GPU label recorded in each experiment-log row. |
+
+### Machine-specific paths
+
+The core loop (TUI → worker → LTX/Wan) is portable. Three optional features expect external installs, and their defaults point at the author's machine. Override them with these variables:
+
+| Variable | Used by | Default |
+|----------|---------|---------|
+| `LTX_ANIMATEDIFF_REPO` | ▲ ENHANCE (RIFE / upscale / face), run with that repo's `venv/bin/python` | `/home/wolve/video_gen/AnimateDiff` |
+| `LTX_DIRECTOR_PY` | The Qwen3-VL sidecars (director-mode seam rewriting and ✎ CONSULT). Point it at a separate venv with `transformers>=4.57`, `bitsandbytes` and `qwen-vl-utils`. | `/home/wolve/video_gen/director_venv/bin/python` |
+| `LTX_QWEN_4B_DIR` / `LTX_QWEN_8B_DIR` | Pre-quantized nf4 Qwen3-VL weights. If the directory is missing, the director sidecar quantizes the HF model at load time and CONSULT falls back to the CPU. | `/home/wolve/video_gen/qwen3vl{4b,8b}_nf4` |
+
+It was built on WSL2 on Windows with an 8 GB GPU. The ▶ PLAY button opens files through `explorer.exe`, `wslview` or PowerShell, so it assumes WSL. Everything else is a terminal app plus a subprocess.
 
 ---
 
 ## Testing
 
-The test harnesses are CPU-only by design — they exercise the parsing, telemetry, layout-fitting, and readout math without touching CUDA:
+The suite runs on the CPU and never touches CUDA. It covers parsing, the build() command matrix, layout, themes, timers, readout math and the ultra-art invariants:
 
 ```bash
-python _t22tests/test_readout.py     # readout gauge math + auto-refit
-python _q2tests/test_units.py        # drift / seam telemetry units
+./venv/bin/pip install pyflakes     # the lint test needs it
+tests/run.sh                        # all tests/test_*.py + the two harness suites
 ```
+
+Each test is a standalone script that exits nonzero on failure. `run.sh` sets `STUDIO_MUTE=1` so automation never makes a sound. `_q2tests/test_units.py` (palette lock, AdaIN, overlap fuse, experiment-log export) imports `director.py`, so it needs the full worker deps (`torch`, `diffusers`); a CPU-only torch build is enough.
 
 The strict separation between the UI process and the CUDA worker is what makes this possible: the interesting logic lives on the testable side of the process boundary.
 

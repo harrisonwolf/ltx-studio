@@ -1,10 +1,11 @@
 #!/usr/bin/env python
-"""One-shot Qwen2.5-VL-7B 'director': look at a seam frame and DIRECT the next ~2s shot.
+"""One-shot Qwen3-VL-4B 'director': look at a seam frame and DIRECT the next ~2s shot.
+(The filename is historical: it started as a Qwen2.5-VL-7B sidecar.)
 
 It reasons about (a) the overall vision/arc, (b) where we are in it (shot k of N),
 (c) the story so far (recent beats), and (d) what is actually on screen now, then decides
 what should CHANGE next and writes the prompt for that beat. Runs in its own venv
-(transformers>=4.49 + bitsandbytes 4-bit), isolated from LTX's pinned env. Loads, infers
+(transformers>=4.57 for Qwen3-VL + bitsandbytes 4-bit), isolated from LTX's pinned env. Loads, infers
 once, exits -> frees the GPU. Prints ONLY the final prompt to stdout; logs to stderr.
 
   director_venv/bin/python vlm_director7b.py --image seam.png --orig_prompt "..." \

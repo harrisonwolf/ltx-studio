@@ -18,7 +18,8 @@ one system:
                           DEPTH lift (one value-step above panel, NOT border-strong, NOT the hero)
                           used by the DataTable row cursor; the highlighted queue card re-lights
                           its OWN frame in the hero accent. Two channels, never a muddy flood.
-Curated 13 (11 emissive/reference themes + concrete named: usa, tron).
+Curated 13 at the time (11 emissive/reference themes + concrete named: usa, tron); the registry
+has since grown to 21 standard palettes plus the 10 animated ultra themes (ULTRA_THEMES).
 """
 
 from textual.theme import Theme

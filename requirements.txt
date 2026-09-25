@@ -1,10 +1,10 @@
 # LTX Studio dependencies.
 #
-# Targets Python 3.10 and open-weights video-diffusion backends running locally.
+# Targets Python 3.10+ and open-weights video-diffusion backends running locally.
 # Model weights are NOT listed here — they are fetched on first run via huggingface_hub.
 
 # ── TUI + orchestration (the studio itself) ──
-textual>=0.80
+textual>=0.86            # textual.theme.Theme (the theme registry) landed in 0.86
 rich
 numpy
 Pillow
@@ -19,7 +19,14 @@ accelerate
 safetensors
 sentencepiece
 huggingface_hub
-imageio-ffmpeg          # mp4 export
+imageio                 # diffusers.export_to_video writes mp4 through imageio...
+imageio-ffmpeg          # ...with this ffmpeg backend (the studio also uses its ffmpeg for thumbnails)
 
-# ── optional: Qwen-VL sidecars for auto-prompting / shot planning ──
+# ── optional: Qwen3-VL sidecars (director-mode prompt rewriting, CONSULT) ──
+# These run in a SEPARATE venv (LTX_DIRECTOR_PY, see README) that also needs transformers>=4.57
+# and bitsandbytes; listed here so a single-env setup can import them.
 qwen-vl-utils
+
+# ── dev ──
+# pyflakes              # tests/test_lint.py
+# pandas                # experiment_log.to_dataframe() for analysis

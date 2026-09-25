@@ -1,4 +1,4 @@
-"""Cheap latent->RGB live preview for LTX 0.9.x (diffusers).
+"""Cheap latent->RGB live preview for LTX 0.9.x and Wan (diffusers).
 
 The packed callback latent is [B, S, 128]; with transformer patch_size=patch_size_t=1
 (LTX 0.9.x) it unpacks to [B,128,LF,LH,LW] via a plain reshape. We project the 128

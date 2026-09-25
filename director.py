@@ -4,6 +4,7 @@ Each segment continues from the previous one's TAIL (motion-preserving condition
 per-segment color-matching to fight drift. The generation backend is pluggable:
   --backend ltx  (default) LTX-Video 2B via LTXConditionPipeline (tail = LTXVideoCondition)
   --backend wan  Wan 2.1-VACE-1.3B via WanVACEPipeline (tail = leading-clip keep/generate mask)
+  --backend wan-turbo  Wan-VACE + the Self-Forcing DMD distill LoRA (few-step; steps capped at 8)
 Both backends emit the SAME stdout markers + outputs, so studio_core/studio.py stay backend-agnostic.
 
   python director.py --prompt "..." --total 12 --seg 3 [--image start.png] [--backend wan]
@@ -991,7 +992,7 @@ def main():
     base_prompt = _fold_anchors(args.prompt, args.anchors)
     if base_prompt != args.prompt:
         print("folded anchors into the shot-1 prompt -> %s" % _ascii1(base_prompt, 200), flush=True)
-    DIRECTOR_PY = "/home/wolve/video_gen/director_venv/bin/python"
+    DIRECTOR_PY = os.environ.get("LTX_DIRECTOR_PY", "/home/wolve/video_gen/director_venv/bin/python")
     SIDECAR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vlm_director7b.py")
     if director:
         print("director: Qwen3-VL sidecar (loads per seam, then frees the GPU)", flush=True)

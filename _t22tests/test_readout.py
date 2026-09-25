@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """T22 CPU tests for readout.py — torch-free, textual-free, GPU-free.
 
-Run: venv/bin/python _t22tests/test_readout.py   (from the FramePack repo root)
+Run: venv/bin/python _t22tests/test_readout.py   (from the repo root)
 Prints ALL_T22_CHECKS_PASS and exits 0 on success; raises AssertionError otherwise.
 """
 import os

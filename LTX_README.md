@@ -1,41 +1,47 @@
-# LTX-Video on this machine (8 GB RTX 5070, WSL)
+# LTX-Video CLI (`ltx.sh` / `run_ltx.py`)
 
-Modern, realistic text/image-to-video that actually runs well on 8 GB. Chosen over the
-FramePack GUI because FramePack's 13B HunyuanVideo is too slow on 8 GB (3–15 min/step);
-LTX's 2B transformer fits in VRAM, so sampling is fast (~1–3 s/step).
+A headless single-clip text/image-to-video runner that works well on an 8 GB GPU. The studio uses the same script for short single-shot LTX runs; this page covers using it directly.
 
-Supply a Python 3.10 env with this repo's requirements.txt (diffusers >=0.34 / torch cu128). No compilation, no fp8 needed.
+LTX was chosen over the FramePack GUI because FramePack's 13B HunyuanVideo is too slow on 8 GB (3–15 min/step). LTX's 2B transformer samples at ~1–3 s/step even with the default sequential CPU offload (weights stream to the GPU layer by layer, so it stays 8 GB-safe).
+
+Use a Python 3.10+ env with this repo's `requirements.txt` (diffusers >=0.34, torch cu128 on RTX 50-series). No compilation, no fp8 needed.
 
 ## Run
+From the repo root:
 ```bash
-cd ~/video_gen/ltx-studio
 # text-to-video
 ./ltx.sh --prompt "a fox trotting through snow, cinematic, highly detailed" --seconds 5 --steps 40
 # image-to-video (animate a start frame)
 ./ltx.sh --image input/start.png --prompt "gentle waves, drifting clouds" --seconds 5 --steps 40
 ```
-Output MP4 lands in `outputs/`.
+Output goes to `outputs/ltx.mp4` by default. Each run overwrites it, so pass `--out` to keep clips.
 
 ## Dials
-- `--prompt` / `--n_prompt`   what to make / avoid
-- `--image PATH`              start frame -> image-to-video (omit = text-to-video)
-- `--seconds` `--fps`         clip length (frames = seconds*fps, auto-rounded to 8k+1)
-- `--width` `--height`        auto-rounded to /32 (try 704x480, 512x320 for speed/VRAM)
-- `--steps`                   ~30–50 for quality
-- `--cfg`                     guidance (default 3.0)
-- `--seed`                    reproducibility
-- `--fast_offload`            faster, but needs ~10 GB free VRAM (don't use on 8 GB)
-- `--frames_dir DIR`          also dump PNG frames (to feed the enhance suite)
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--prompt` / `--n_prompt` | (required) / artifact list | What to make / avoid |
+| `--image PATH` | none | Start frame → image-to-video (omit = text-to-video) |
+| `--seconds` `--fps` | 5, 24 | Frames = seconds × fps, rounded **down** to 8k+1 |
+| `--width` `--height` | 704, 480 | Rounded **down** to a multiple of 32 (try 512x320 for speed/VRAM) |
+| `--steps` | 40 | ~30–50 for quality |
+| `--cfg` | 3.0 | Guidance |
+| `--seed` | 0 | Reproducibility |
+| `--out` | `outputs/ltx.mp4` | Output path |
+| `--frames_dir DIR` | none | Also dump PNG frames (to feed an enhance suite) |
+| `--preview PATH` | none | Write a small live-preview PNG during sampling |
+| `--ltx_repo` | `Lightricks/LTX-Video-0.9.5` | Checkpoint repo (`Lightricks/LTX-Video` = the old 0.9.0) |
+| `--ltx_variant distilled` | off | 0.9.8-distilled 2B transformer; forces steps ≤ 8 and cfg 1.0 |
+| `--fast_offload` | off | Model-level offload: faster, but needs ~10 GB free VRAM (don't use on 8 GB) |
 
 ## Speed (measured, 8 GB)
 ~1.2 s/step at 512x320, ~3.1 s/step at 704x480 (+ ~2.5 min one-time model load).
-A 3 s 704x480 clip ≈ 5 min total. Time scales with resolution x frames x steps.
+A 3 s 704x480 clip ≈ 5 min total. Time scales with resolution × frames × steps.
 
-## Enhance with the AnimateDiff suite (RIFE / upscale / face)
-LTX's enhance suite (RIFE / upscale / face) is an optional external step that lives in a separate AnimateDiff repo, not in this one. If you have it, dump frames and run it, adjusting the absolute paths below to your machine:
+## Enhance (RIFE / upscale / face)
+In the studio, ▲ ENHANCE runs these passes for you on a finished run. It needs an external AnimateDiff checkout that provides `scripts.enhance`; point `LTX_ANIMATEDIFF_REPO` at it (see the main README). To do it by hand, dump frames and run the suite from that repo:
 ```bash
 ./ltx.sh --image input/x.png --prompt "..." --seconds 5 --frames_dir outputs/ltx_frames --out outputs/raw.mp4
-cd ~/video_gen/AnimateDiff
-./venv/bin/python -m scripts.enhance --frames ~/video_gen/FramePack/outputs/ltx_frames \
-    --interp 2 --upscale --upscaler ultrasharp --face --out ~/video_gen/FramePack/outputs/final.mp4 --fps 48
+cd "$LTX_ANIMATEDIFF_REPO"
+./venv/bin/python -m scripts.enhance --frames /path/to/ltx-studio/outputs/ltx_frames \
+    --interp 2 --upscale --upscaler ultrasharp --face --out /path/to/ltx-studio/outputs/final.mp4 --fps 48
 ```
