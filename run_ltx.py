@@ -17,6 +17,8 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--prompt", required=True)
 ap.add_argument("--image", default=None, help="start image -> image-to-video; omit for text-to-video")
 ap.add_argument("--anchors", default="", help="style/subject tokens appended to the prompt (same fold as director.py)")
+ap.add_argument("--cfg_rescale", type=float, default=0.0,
+                help="guidance-rescale phi (0=off), passed to the pipeline natively like director.py. No-op at cfg<=1.")
 ap.add_argument("--n_prompt", default="worst quality, blurry, distorted, jittery, low detail, "
                 "deformed, malformed anatomy, missing or extra limbs, mutated, fused body, headless")
 ap.add_argument("--seconds", type=float, default=5.0)
@@ -120,6 +122,9 @@ kw = dict(prompt=args.prompt, negative_prompt=args.n_prompt, width=W, height=H,
 if repo != base:      # 0.9.5's VAE is timestep-conditioned -- pass the decode kwargs only then (0.9.0 omits)
     kw["decode_timestep"] = 0.05
     kw["decode_noise_scale"] = 0.025
+if args.cfg_rescale > 0 and args.cfg > 1.0:   # default 0 -> kwarg absent -> identical to before
+    kw["guidance_rescale"] = args.cfg_rescale     # (the distilled variant forces cfg=1.0 above -> skipped)
+    print("guidance_rescale=%.3f (LTX native passthrough)" % args.cfg_rescale, flush=True)
 if args.image:
     kw["image"] = load_image(args.image)
 

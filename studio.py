@@ -2951,6 +2951,15 @@ class Studio(App):
                 steps_s = str(min(int(float(steps_s)), 8))   # [[STEP]] totals / previews / ETA all stay honest
             except Exception:
                 steps_s = "6"
+        else:
+            # the workers parse --steps as int and Job() int()s it: "30.0" -> 30, but "30.5"/"abc" raise
+            # HERE (the caller shows "check … STEPS") instead of crashing the app or the worker
+            _st = float(str(steps_s).strip())
+            if not _st.is_integer() or _st < 1:
+                raise ValueError("steps must be a whole number >= 1")
+            steps_s = str(int(_st))
+        float(str(V("cfg")).strip())                         # --cfg / --cond_strength are floats in both workers:
+        float(str(V("cond_strength") or "1.0").strip())      # a typo must fail here, not as an argparse exit
         _sv = (V("seed") or "").strip()                  # blank/invalid SEED -> a concrete random seed (recorded)
         seed_s = _sv if (_sv and _sv.lstrip("-").isdigit()) else str(random.randint(1, 2**31 - 1))
         common = ["--steps", steps_s, "--cfg", V("cfg"), "--seed", seed_s,
@@ -3246,7 +3255,7 @@ class Studio(App):
             title, kind, cmd, params = self.build(over)
         except Exception as ex:   # bad numbers must never crash the app (a crash kills a live render)
             self.query_one("#newinfo", Static).update(
-                f"[#ff6d6d]Can't plan this run — check LENGTH / FPS / SEGMENT / STEPS are numbers ({type(ex).__name__}).[/#ff6d6d]")
+                f"[#ff6d6d]Can't plan this run — check LENGTH / FPS / SEGMENT / STEPS / GUIDANCE are numbers ({type(ex).__name__}).[/#ff6d6d]")
             return None
         # GPU-budget gate: budget_ok() runs nvidia-smi, so ONLY probe when the board is idle
         # (nvidia-smi during live CUDA crashes the WSL VM). An active run -> this just queues behind it.
@@ -3424,9 +3433,11 @@ class Studio(App):
         """Reject a typo before it becomes a silently-coerced run. Returns an error string or None."""
         if var in ("steps", "cfg", "seg", "cond_strength", "fps", "seconds"):
             try:
-                float(value)
+                f = float(value)
             except (TypeError, ValueError):
                 return f"{var} must be a number (got '{value}')."
+            if var == "steps" and (not f.is_integer() or f < 1):
+                return f"steps must be a whole number >= 1 (got '{value}')."
         elif var == "seed":
             if not str(value).strip().lstrip("-").isdigit():
                 return f"seed must be an integer (got '{value}')."
@@ -3444,9 +3455,18 @@ class Studio(App):
                 return f"steadiness must be one of: hold, balanced, evolve (got '{value}')."
         elif var in ("cfg_rescale", "cfg_interval"):
             # cfg_rescale accepts off + a numeric strength
-            if var == "cfg_interval":
-                if value.lower() not in ("off", "on", "0.0:0.5"):
-                    return f"cfg_interval must be off or on/0.0:0.5 (got '{value}')."
+            if var == "cfg_interval":             # mirror director.py's parser: off | START:END | every-N
+                v = str(value).strip().lower()
+                try:
+                    if v != "off":
+                        if ":" in v:
+                            lo, hi = (float(x) for x in v.split(":", 1))
+                            if not 0.0 <= lo < hi <= 1.0:
+                                raise ValueError
+                        elif int(v) < 1:
+                            raise ValueError
+                except ValueError:
+                    return f"cfg_interval must be off, START:END (0<=START<END<=1) or every-N (got '{value}')."
             else:
                 if value.lower() != "off":
                     try:

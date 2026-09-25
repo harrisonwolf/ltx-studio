@@ -16,6 +16,7 @@ class FakeMgr:
     def archived(self): return []
     def active(self): return None
     def counts(self): return (0, 0, 0, 0)
+    def enqueue(self, *a): raise AssertionError("a bad form must never reach enqueue")
 studio.JobManager = FakeMgr
 studio.save_studio_config = lambda cfg: None
 studio.load_studio_config = lambda: {}
@@ -82,11 +83,24 @@ async def main():
         check("blank anchors ship no flag (byte-identical argv)", "--anchors" not in cmd)
         _t, _k, cmd9, _p = app.build(dict(BASE, seconds="8", anchors="noir"))
         check("chained ltx ships --anchors", "director.py" in cmd9[1] and arg(cmd9, "--anchors") == "noir", cmd9)
+        # 10. STEPS / GUIDANCE typos fail in build() (the caller shows a message) instead of crashing
+        #     Job() (int('30.0')) and with it the whole app, or exiting the worker in argparse
+        check("steps '30.0' normalizes to 30", arg(app.build(dict(BASE, steps="30.0"))[2], "--steps") == "30")
+        for bad in (dict(steps="30.5"), dict(steps="abc"), dict(steps="0"), dict(cfg="x"), dict(cond_strength="y")):
+            try:
+                app.build(dict(BASE, **bad)); raised = False
+            except ValueError:
+                raised = True
+            check(f"build rejects {bad}", raised)
+        app._queue_current_run(dict(BASE, steps="30.5")); await pilot.pause()
+        check("QUEUE with bad steps leaves the app running", app.is_running)
         # 9. every flag build() emits is one the target script's argparse accepts (else: instant crash)
         for name, c in (("single", cmd8), ("chained", cmd9), ("wan", cmd3), ("wan cfg", cmd4),
                         ("turbo", cmd6), ("director", cmd7),
                         ("single distilled", app.build(dict(BASE, _ltx_variant="distilled", anchors="x"))[2]),
-                        ("single i2v", app.build(dict(BASE, image="in.png"))[2])):
+                        ("single i2v", app.build(dict(BASE, image="in.png"))[2]),
+                        ("single rescale", app.build(dict(BASE, cfg="5.0", cfg_rescale="0.7"))[2]),
+                        ("chained rescale", app.build(dict(BASE, seconds="8", cfg="5.0", cfg_rescale="0.7"))[2])):
             check(f"{name}: argv flags all accepted by {os.path.basename(c[1])}", not unknown_flags(c), unknown_flags(c))
 
 asyncio.run(main())
