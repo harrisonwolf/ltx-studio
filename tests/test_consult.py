@@ -98,7 +98,25 @@ async def run(screen_cls, msg_id, send_id, status_id, log_id):
         check(f"{tag}: recovers to ready", not scr.query_one(send_id).disabled and "ready" in text(scr.query_one(status_id)))
     check(f"{tag}: app exited without an exception", getattr(app, "_exception", None) is None, getattr(app, "_exception", None))
 
+def daemon_kill_mid_load():
+    """An intentional kill() while the model loads (CONSULT closed / a render took the GPU) is not a
+    load failure: no 'failed to load' may be left behind for the next load to show."""
+    import subprocess, threading, tempfile
+    real_repo = studio.REPO
+    studio.REPO = tempfile.mkdtemp(prefix="consultrepo_")     # consult_daemon.err lives under REPO
+    try:
+        open(os.path.join(studio.REPO, "consult_daemon.err"), "w").write("Loading checkpoint shards:  50%\n")
+        d = studio.ConsultDaemon()
+        d.proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        t = threading.Thread(target=d._await_ready, daemon=True); t.start()
+        time.sleep(0.3); d.kill(); t.join(5)
+        check("daemon: kill() mid-load leaves no false load error", not d.last_error and not d.ready, d.last_error)
+    finally:
+        studio.REPO = real_repo
+
 async def main():
+    daemon_kill_mid_load()
     await run(studio.ConsultScreen, "#chatmsg", "#sendbtn", "#consultstatus", "#chatlog")
     await run(studio.ChatScreen, "#rawmsg", "#rawsendbtn", "#rawstatus", "#rawlog")
     # Ctrl+Enter on the NEW RUN form itself still queues

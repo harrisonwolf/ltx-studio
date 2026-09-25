@@ -36,6 +36,15 @@ def _frame_files(d):
     return [os.path.join(d, f) for _, f in sorted(names)]
 
 
+def _blind_hidden(p, *dials):
+    """True while a blind A/B run is unrevealed and its varied dial is one of `dials`."""
+    p = p or {}
+    return bool(p.get("pair_blind")) and not p.get("pair_revealed") and p.get("pair_varied_dial") in dials
+
+
+_LEN_DIALS = ("seconds", "fps", "res", "seg")   # these also move single-vs-chained / shot & frame counts
+
+
 def _run_secs(job):
     """Wall time of the whole run across suspend/resume legs (what the experiment row records);
     elapsed() alone covers only the current / last leg."""
@@ -414,7 +423,10 @@ class ConsultDaemon:
         return None
 
     def _await_ready(self):
+        p = self.proc
         obj = self._read_json()
+        if obj is None and self.proc is not p:
+            return                   # kill()ed / replaced mid-load (CONSULT closed, a render took the GPU): no failure
         self.ready = bool(obj and obj.get("ready"))
         self.info = (obj.get("info") or "") if obj else ""
         if self.ready:
@@ -2475,11 +2487,13 @@ class Studio(App):
                 else SPAL["accent2"] if label == "enhance" else SPAL["accent"])
         gap = max(1, inner - len(badge) - len(status))
         header = "[%s]%s[/%s]%s[%s]%s[/%s]" % (bcol, badge, bcol, " " * gap, status_col, status, status_col)
-        title = _demark(job.title or p.get("prompt", "") or job.id)
-        parms = "%s · %s×%s · %sst · cfg%s · %ss · seed %s" % (
-            p.get("backend", "ltx"), p.get("width", "?"), p.get("height", "?"),
-            p.get("steps", "?"), p.get("cfg", "?"), p.get("seconds", "?"),
-            trunc(p.get("seed", "") or "rnd", 11))
+        hid = lambda dial, v: "?" if _blind_hidden(p, dial) else v   # a blind run's varied value
+        title = "blind A/B run" if _blind_hidden(p, "prompt") else _demark(job.title or p.get("prompt", "") or job.id)
+        parms = "%s · %s · %sst · cfg%s · %ss · seed %s" % (
+            hid("backend", p.get("backend", "ltx")),
+            hid("res", "%s×%s" % (p.get("width", "?"), p.get("height", "?"))),
+            hid("steps", p.get("steps", "?")), hid("cfg", p.get("cfg", "?")),
+            hid("seconds", p.get("seconds", "?")), hid("seed", trunc(p.get("seed", "") or "rnd", 11)))
         if selected:
             B = SPAL["accent"]; TL, TR, BL, BR, H, V = "┏", "┓", "┗", "┛", "━", "┃"   # ignited frame
         else:
@@ -2764,8 +2778,7 @@ class Studio(App):
         # queue + archive tables — rebuilt only when content changes (cursor stays put; no rubber-band)
         _dt = lambda ts: time.strftime("%m-%d %H:%M", time.localtime(ts)) if ts else "—"
         def _blind_hides(j, dial):
-            p = j.params or {}
-            return bool(p.get("pair_blind")) and not p.get("pair_revealed") and p.get("pair_varied_dial") == dial
+            return _blind_hidden(j.params, dial)
 
         def _atitle(j):
             pre = ("★ " if (j.params or {}).get("favorite") else "") + \
@@ -2822,7 +2835,7 @@ class Studio(App):
             return
         tag = "‖ PAUSED" if m.paused else "▶ RUNNING"
         kglyph, klabel = _run_kind(job)
-        _ttl = _demark((job.title or job.params.get('prompt', ''))[:48])
+        _ttl = "blind A/B run" if _blind_hidden(job.params, "prompt") else _demark((job.title or job.params.get('prompt', ''))[:48])
         self._put("#livehdr", f"[b]{tag}[/b]   [#9dffce]{kglyph} {klabel}[/#9dffce]   {_ttl}")
         loading = job.is_loading() if hasattr(job, "is_loading") else False
         # The big load-bar takeover is for the INITIAL load only: is_loading() includes "warmup", so
@@ -2862,6 +2875,8 @@ class Studio(App):
                       fixed=True)
         self._put("#livephase", self._phase(job, m.paused), fixed=True)
         now_painting = job.director or job.params.get("prompt", "")
+        if _blind_hidden(job.params, "prompt"):
+            now_painting = "(hidden — blind A/B)"
         self._put("#director",
             ("[dim]this shot →[/dim] " + now_painting) if now_painting
             else ("[dim]—[/dim]" if job.kind != "director" else ""))
@@ -2915,8 +2930,9 @@ class Studio(App):
         _elstr = (f"t+{fmt(max(0, el - int(_slept)))} (+{fmt(int(_slept))} standby)" if _slept > 120
                   else f"t+{fmt(el)} elapsed")
         self._put("#livebar",
-                  f"  {_elstr}   ·   {eta}      {p.get('res', '')}   {p.get('steps', '')} steps   "
-                  f"seed {p.get('seed', '')}      → {os.path.basename(job.out or '')}", fixed=True)
+                  f"  {_elstr}   ·   {eta}      {'?' if _blind_hidden(p, 'res') else p.get('res', '')}   "
+                  f"{'?' if _blind_hidden(p, 'steps') else p.get('steps', '')} steps   "
+                  f"seed {'?' if _blind_hidden(p, 'seed') else p.get('seed', '')}      → {os.path.basename(job.out or '')}", fixed=True)
         # ---- PACE strip ----
         nstp = job.nstep or 0
         if first_ts and job.step > 0 and nstp:
@@ -2952,7 +2968,7 @@ class Studio(App):
         if job.kind == "director":
             self._put("#steer_directive", f"[dim]arc[/dim] {(p.get('directive') or '—')[:48]}", fixed=True)
         else:                          # no arc on single/chained -> show what it's actually rendering
-            self._put("#steer_directive", f"[dim]subject[/dim] {(p.get('prompt') or '—')[:48]}", fixed=True)
+            self._put("#steer_directive", f"[dim]subject[/dim] {'(hidden)' if _blind_hidden(p, 'prompt') else (p.get('prompt') or '—')[:48]}", fixed=True)
         self._put("#steer_anchors", f"[dim]anchors[/dim] {(p.get('anchors') or '—')[:40]}", fixed=True)
         # ---- PHASE timeline strip ----
         psecs = getattr(job, "phase_secs", {}) or {}
@@ -4614,7 +4630,7 @@ class Studio(App):
 
         _KGLYPH = {"single": "▭", "chained": "▥", "director": "✦", "enhance": "▲"}
         # a LENGTH / FPS / RES pair also differs in single-vs-chained and the shot count -> hide those too
-        _len_blind = _blind and _varied in ("seconds", "fps", "res")
+        _len_blind = _blind and _varied in _LEN_DIALS
         _kind = "(hidden)" if _len_blind and job.kind in ("single", "chained") else job.kind
         L = [f"[b]{job.id}[/b]    {_status_glyph(job.status)} \[{job.status.upper()}]",
              time.strftime(f"[dim]{'·' if _kind != job.kind else _KGLYPH.get(job.kind, '·')} {_kind} · %b %d  %H:%M[/dim]",
@@ -4718,7 +4734,7 @@ class Studio(App):
         # done = every shot; otherwise the last checkpointed shot, or the shots before the one in flight
         _shots_done = (job.nseg if job.status == "done"
                        else max(int(getattr(job, "last_ckpt_seg", 0) or 0), (job.seg or 0) - 1, 0))
-        if _blind and _varied in ("seconds", "fps", "res"):
+        if _len_blind:
             _shots_done = _HIDDEN                   # the shot count gives the varied length away
         L += ["", "[#6dffab]RESULT[/#6dffab]", row("runtime", fmt(_run_secs(job))),
               row("shots", _HIDDEN if _shots_done == _HIDDEN else f"{_shots_done} of {job.nseg} done"),
@@ -4813,8 +4829,10 @@ class Studio(App):
         def ts(t):
             return time.strftime("%b %d  %H:%M:%S", time.localtime(t)) if t else "—"
 
+        _lenb = _blind_hidden(p, *_LEN_DIALS)   # kind / shots / frames would give a blind length away
+        _H = "[hidden — blind A/B, REVEAL to show]"
         L = [f"[b]{job.id}[/b]    {_status_glyph(job.status)} \[{job.status.upper()}]",
-             f"[dim]{job.kind} · provenance[/dim]",
+             f"[dim]{'(hidden)' if _lenb and job.kind in ('single', 'chained') else job.kind} · provenance[/dim]",
              "─" * 48,
              "[#6dffab]TIMELINE[/#6dffab]",
              row("created", ts(job.created)),
@@ -4833,7 +4851,9 @@ class Studio(App):
                 if t > 0:
                     L.append(row(lbl, f"{fmt(int(t))}   [dim]{100 * t / tot:.0f}%[/dim]"))
         ssecs = getattr(job, "seg_secs", []) or []
-        if ssecs:
+        if ssecs and _lenb:
+            L += ["", "[#6dffab]SHOTS[/#6dffab]", row("shots", _H)]
+        elif ssecs:
             mean = sum(ssecs) / len(ssecs)
             L += ["", f"[#6dffab]SHOTS[/#6dffab]  [dim]{len(ssecs)} timed · {fmt(int(mean))} avg[/dim]"]
             for i, s in enumerate(ssecs, 1):
@@ -4845,11 +4865,11 @@ class Studio(App):
             if res:
                 L.append(row("resumes", f"{res}x after suspend"))
             if ckpt:
-                L.append(row("checkpoint", f"shot {ckpt}"))
+                L.append(row("checkpoint", _H if _lenb else f"shot {ckpt}"))
         sf = int(p.get("seg_frames") or 0)
         tf = int(p.get("total_frames") or (sf * int(job.nseg or 1) if sf else 0))
         L += ["", "[#6dffab]OUTPUT[/#6dffab]",
-              row("frames", str(tf) if tf else "—"),
+              row("frames", _H if _lenb else (str(tf) if tf else "—")),
               row("size", _filesize(job.out)),
               row("file", os.path.basename(job.out or "—"))]
         L += ["", "[dim]« INSPECT for the creative summary · » TERMINAL for the raw log.[/dim]"]

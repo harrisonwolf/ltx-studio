@@ -146,6 +146,9 @@ class Job:
         # else demotes to 'interrupted' so it can never become an unrecoverable zombie.
         ckpt = os.path.join(RUNS_DIR, f"{j.id}_ckpt")
         if j.status in ("interrupted", "suspended", "suspending") and j._ckpt_valid(ckpt):
+            if j.status == "suspending":     # the app died before the leg ended: freeze it at the
+                j.finished = j.finished or (  # last log activity so RESUME folds it into prior_secs
+                    os.path.getmtime(j.logpath()) if os.path.exists(j.logpath()) else j.started)
             j.status = "suspended"
             j.ckpt_dir = ckpt
         elif j.status == "suspending":
@@ -490,19 +493,20 @@ class JobManager:
                 return False, f"suspend failed: {e}"
 
     def resume_suspended(self, jid):
-        job = self.jobs.get(jid)
-        if job and job.status == "suspended":
-            if "--resume" not in job.cmd:
-                job.cmd = list(job.cmd) + ["--resume", job.ckpt_dir]
-            job.status = "queued"
-            job.resumes += 1
-            # fold the leg that just ended into prior_secs (run_secs() spans every leg); stash the
-            # pre-resume timing so REMOVE can undo this RESUME exactly
-            job.pre_resume = [job.started, job.finished, job.prior_secs or 0]
-            if job.started and job.finished:
-                job.prior_secs = (job.prior_secs or 0) + max(0.0, job.finished - job.started)
-            job.started = job.finished = None
-            job.save()
+        with self._lock:                  # the runner claims queued jobs under this lock: finish every
+            job = self.jobs.get(jid)      # field before the job becomes 'queued' (claimable)
+            if job and job.status == "suspended":
+                if "--resume" not in job.cmd:
+                    job.cmd = list(job.cmd) + ["--resume", job.ckpt_dir]
+                job.resumes += 1
+                # fold the leg that just ended into prior_secs (run_secs() spans every leg); stash the
+                # pre-resume timing so REMOVE can undo this RESUME exactly
+                job.pre_resume = [job.started, job.finished, job.prior_secs or 0]
+                if job.started and job.finished:
+                    job.prior_secs = (job.prior_secs or 0) + max(0.0, job.finished - job.started)
+                job.started = job.finished = None
+                job.status = "queued"
+                job.save()
 
     def promote(self, jid):
         """Move a queued/suspended run to the FRONT of the queue. Only the persisted queue-order key

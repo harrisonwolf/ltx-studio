@@ -106,9 +106,17 @@ async def main():
         # 5b. a LENGTH pair: single-vs-chained and the shot count would give the length away
         a.params.update(pair_varied_dial="seconds", pair_revealed=False)
         a.kind, a.nseg = "chained", 4
+        a.params.update(seg_frames=49, total_frames=193)
+        a.seg_secs = [10, 10, 10, 10]
         txt = app._fmt_inspect(a)
         check("length-blind inspect hides kind and shot count", "chained" not in txt and "of 4 done" not in txt and "4  ×" not in txt,
               [l for l in txt.splitlines() if "chained" in l or "of 4" in l or "4  ×" in l])
+        prov = app._fmt_provenance(a)
+        check("length-blind TIMING hides kind / frames", "chained" not in prov and "frames" in prov and "193" not in prov
+              and "hidden" in prov, [l for l in prov.splitlines() if "chained" in l or "frames" in l])
+        a.params.update(pair_varied_dial="seed", seed="4242")
+        card = app._queue_card(a, "QUEUED · #1", "#ffffff", 70)
+        check("blind queue card hides the varied seed", "4242" not in card, card)
         a.params["pair_blind"] = False
         # 6. "shots done" is honest for a run that failed before its first shot completed
         f = studio_core.Job("failrun", "t", "chained", [], dict(a.params, pair_blind=False, nseg=3))

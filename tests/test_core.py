@@ -119,10 +119,14 @@ def wait(cond, t=15.0):
     return False
 def enq(title, kind, nseg, *a, **kw):
     return m.enqueue(title, kind, W("--nseg", nseg, *a), P(nseg, **kw))
-def settled(j):
-    return wait(lambda: j.status not in ("queued", "running", "paused", "suspending") and m.current != j.id)
 def rows(j):
     return [r for r in el.load_runs() if r["run_id"] == j.id]
+def settled(j):
+    # the runner publishes the final status first and appends the experiment row just after (outside
+    # the lock), so a done/failed run is settled only once its row is on disk -- reading rows earlier
+    # raced the runner (intermittent empty/stale rows under load)
+    return wait(lambda: j.status not in ("queued", "running", "paused", "suspending") and m.current != j.id
+                and (j.status not in ("done", "failed") or bool(rows(j))))
 def lines_in(path):
     try:
         return len(open(path).read().split())
@@ -443,6 +447,39 @@ sys.settrace(_cancel_tr); m.cancel(); sys.settrace(None)
 settled(A); settled(B)
 check("#9 cancel racing A's natural finish never kills B", _hit["n"] and A.status == "done" and B.status == "done",
       (A.status, B.status))
+
+# ======================= R7 app died mid-SUSPEND: the leg's end time survives the reload =======================
+sj = sc.Job("susp_crash", "t", "chained", W("--nseg", 3), P(3))
+sj.status, sj.started, sj.finished = "suspending", time.time() - 600, None
+sj.save()
+ck = os.path.join(sc.RUNS_DIR, "susp_crash_ckpt")
+os.makedirs(os.path.join(ck, "frames"), exist_ok=True)
+json.dump({"n_frames": 1}, open(os.path.join(ck, "state.json"), "w"))
+open(os.path.join(ck, "frames", "0000.png"), "w").close()
+open(sj.logpath(), "w").write("x\n")
+os.utime(sj.logpath(), (sj.started + 300, sj.started + 300))
+lj = sc.Job.load(sj.jpath())
+check("R7 'suspending' at app death -> suspended with the leg's end time (from the log)",
+      lj.status == "suspended" and lj.finished and abs(lj.finished - (sj.started + 300)) < 2, (lj.status, lj.finished))
+m.jobs[lj.id] = lj
+m.resume_suspended(lj.id)
+check("R7 ...so RESUME folds that leg into prior_secs", abs((lj.prior_secs or 0) - 300) < 2, lj.prior_secs)
+m.remove(lj.id)
+# ======================= R8 resume_suspended takes the manager lock (runner claims under it) =======================
+rj = sc.Job("resume_lock", "t", "chained", W("--nseg", 3), P(3))
+rj.status, rj.started, rj.finished, rj.ckpt_dir = "suspended", time.time() - 100, time.time() - 50, ck
+m.jobs[rj.id] = rj
+held = threading.Event()
+def _hold():
+    with m._lock:
+        held.set(); time.sleep(0.4)
+threading.Thread(target=_hold, daemon=True).start(); held.wait(2)
+rt = threading.Thread(target=m.resume_suspended, args=(rj.id,), daemon=True); rt.start()
+time.sleep(0.15)
+mid = rj.status
+rt.join(2)
+check("R8 resume_suspended waits for the manager lock before publishing 'queued'", mid == "suspended", mid)
+m.remove(rj.id)
 
 m._stop = True
 time.sleep(0.5)
