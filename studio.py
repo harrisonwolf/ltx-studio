@@ -64,6 +64,16 @@ def _ckpt_shots(job):
     return max(int(getattr(job, "last_ckpt_seg", 0) or 0), int(getattr(job, "seg", 0) or 0) - 1, 0)
 
 
+def _live_phase(job):
+    """The phase the LIVE views show. A blind STEADINESS pair's redirects (every seam on evolve, every
+    3rd on hold) are shown as the decode that always precedes them, in EVERY widget (phase line,
+    progress suffix, phase timeline, % bar) -- any one of them would make the redirects countable."""
+    ph = getattr(job, "phase", "") or ""
+    if ph == "redirecting" and _blind_hidden(getattr(job, "params", None), "steadiness"):
+        return "decoding"
+    return ph
+
+
 def _run_secs(job):
     """Wall time of the whole run across suspend/resume legs (what the experiment row records);
     elapsed() alone covers only the current / last leg."""
@@ -2227,10 +2237,10 @@ class Studio(App):
             if getattr(job, "seg_started", None) is None and job.seg:
                 # a resumed leg still reloading: the engine checks the request before rendering another shot
                 return "Suspending — saving its place and freeing the GPU once the model is loaded…"
-            return f"Suspending — finishing shot {max(1, job.seg)} of {nseg}, then saving its place and freeing the GPU…"
+            return f"Suspending — finishing shot {min(max(1, job.seg), nseg)} of {nseg}, then saving its place and freeing the GPU…"
         if job.kind == "enhance":
             return "Polishing the finished video — smoothing motion, upscaling, cleaning up faces…"
-        phase = getattr(job, "phase", "") or ""
+        phase = _live_phase(job)
         if phase == "importing":
             return "Starting up — initializing PyTorch and the video model…"
         if phase == "loading":
@@ -2242,9 +2252,6 @@ class Studio(App):
         if phase == "warmup":
             return "Warming up the GPU — the first step is the slowest…"
         if phase == "redirecting":
-            if _blind_hidden(job.params, "steadiness"):   # evolve redirects every seam, hold every 3rd:
-                # [[PHASE decoding]] always precedes a redirect, so it reads as a longer decode
-                return f"Finishing shot {job.seg} of {nseg} — turning the model's output into frames…"
             return f"The director is studying the last frame to plan shot {job.seg + 1} of {nseg}…"
         if phase == "decoding":
             return f"Finishing shot {job.seg} of {nseg} — turning the model's output into frames…"
@@ -2257,7 +2264,9 @@ class Studio(App):
             if job.seg <= 1:
                 return "Warming up — loading the model into memory (first run ~2 min)…"
             # before this leg's first [[SEG]], job.seg is the checkpointed shot: the next one is starting
-            _nxt = min(job.seg + 1, nseg) if getattr(job, "seg_started", None) is None else job.seg
+            if getattr(job, "seg_started", None) is None and job.seg >= nseg:
+                return "Finishing up — every shot is already rendered; reloading to save the video…"
+            _nxt = job.seg + 1 if getattr(job, "seg_started", None) is None else job.seg
             return f"Starting shot {_nxt} of {nseg}…"
         if job.step > 0:
             return f"Painting shot {job.seg} of {nseg} — step {job.step} of {nstep}." + ("  Almost done with this shot." if near_end else "")
@@ -2390,7 +2399,7 @@ class Studio(App):
                 return 100
             budget = self._run_budget(job)
             total = sum(budget[k] for k in self._SMART_PHASES) or 1.0
-            raw_phase = getattr(job, "phase", "") or ""
+            raw_phase = _live_phase(job)
             meta = self._PHASE_MAP.get(raw_phase, "")
             # No phase marker yet -> fall back to load (pure startup) or gen (steps seen).
             if not meta:
@@ -2915,9 +2924,9 @@ class Studio(App):
             over.update(total=100, progress=sp)
             # keep the "shot X of N · step Y of Z" text; overall % now reflects wall-time progress
             _phase_hint = {"decoding": "  ·  decoding…", "saving": "  ·  saving…"}.get(
-                getattr(job, "phase", ""), "")
+                _live_phase(job), "")
             self._put("#progtext",
-                      f"shot {job.seg} of {job.nseg}   ·   step {job.step} of {job.nstep}   ·   {sp}% overall{_phase_hint}",
+                      f"shot {min(job.seg, job.nseg)} of {job.nseg}   ·   step {job.step} of {job.nstep}   ·   {sp}% overall{_phase_hint}",
                       fixed=True)
         self._put("#livephase", self._phase(job, m.paused), fixed=True)
         now_painting = job.director or job.params.get("prompt", "")
@@ -3029,11 +3038,14 @@ class Studio(App):
         self._put("#steer_anchors", f"[dim]anchors[/dim] {(p.get('anchors') or '—')[:40]}", fixed=True)
         # ---- PHASE timeline strip ----
         psecs = getattr(job, "phase_secs", {}) or {}
-        cur, cur_t0 = getattr(job, "phase", ""), getattr(job, "phase_started", None)
+        cur, cur_t0 = _live_phase(job), getattr(job, "phase_started", None)
+        _redir_as_dec = _blind_hidden(p, "steadiness")   # redirect time shown inside the decode cell
         cells = []
         for ph, lbl in (("loading", "load"), ("warmup", "warm"), ("generating", "gen"),
                         ("decoding", "decode"), ("saving", "save")):
             t = psecs.get(ph, 0)
+            if ph == "decoding" and _redir_as_dec:            # blind steadiness: redirects count as decode
+                t += psecs.get("redirecting", 0)
             if ph == cur and cur_t0:
                 cells.append(f"[#9dffce]{lbl} {fmt(int(t + time.time() - cur_t0))}[/#9dffce]")
             elif t > 0:

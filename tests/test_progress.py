@@ -118,9 +118,19 @@ async def main():
         jb = mkjob(4); jb.phase, jb.seg = "redirecting", 2
         jb.params.update(pair_blind=True, pair_revealed=False, pair_varied_dial="steadiness")
         check("blind steadiness redirect narration is neutral", "plan shot" not in app._phase_text(jb), app._phase_text(jb))
-        jb.phase = "decoding"; dec_txt = app._phase_text(jb); jb.phase = "redirecting"
-        check("...and reads exactly like the decode before it (no countable marker)", app._phase_text(jb) == dec_txt,
-              (app._phase_text(jb), dec_txt))
+        # ...and EVERY LIVE widget shows it exactly like the decode before it (phase line, progress
+        # suffix, phase timeline, % bar) -- any one difference makes the redirects countable
+        def live_view(ph, into):
+            jb.phase, jb.phase_started, jb.status = ph, time.time() - into, "running"
+            jb.phase_secs = {"decoding": 5.0} if ph == "decoding" else {"decoding": 5.0 + 0.0}
+            ACTIVE["job"] = jb; app._smart_max_id = None; app.tick()
+            return (app._phase_text(jb), str(app.query_one("#progtext").render()),
+                    str(app.query_one("#ph_timeline").render()), app._smart_pct(jb))
+        jb.step = jb.nstep = 25; jb.saw_step = True; jb.seg_started = time.time() - 60
+        a_ = live_view("decoding", 10.0)
+        b_ = live_view("redirecting", 10.0)
+        check("blind steadiness: a redirect looks exactly like decoding in every LIVE widget", a_ == b_, (a_, b_))
+        ACTIVE["job"] = None; app.tick()
         # suspending during a resumed leg's reload: no shot is finished first
         jr.status, jr.phase = "suspending", "loading"
         check("suspend during a resumed reload names no shot", "finishing shot" not in app._phase_text(jr), app._phase_text(jr))
@@ -138,7 +148,12 @@ async def main():
         ACTIVE["job"] = None; app.tick()
         # resuming from a final-shot checkpoint never says "shot 6 of 5"
         jf = mkjob(5); jf.phase, jf.seg, jf.seg_started, jf.saw_step = "", 5, None, False
-        check("final-checkpoint resume never names shot N+1 of N", "6 of 5" not in app._phase_text(jf), app._phase_text(jf))
+        check("final-checkpoint resume doesn't claim to start a shot", "Starting shot" not in app._phase_text(jf), app._phase_text(jf))
+        jf.phase, jf.seg, jf.seg_started, jf.step = "warmup", 6, time.time(), 0     # after [[SEG 6 5]]
+        ACTIVE["job"] = jf; app._smart_max_id = None; app.tick(); await pilot.pause(0.05)
+        pt = str(app.query_one("#progtext").render())
+        check("final-checkpoint resume never shows shot 6 of 5", "6 of 5" not in pt, pt)
+        ACTIVE["job"] = None; app.tick()
         # director redirect cadence in the budget matches director.py (every 3rd seam): 3 shots -> 0
         jd = mkjob(3); jd.params.update(mode="director", steadiness="hold", directive="storm")
         jc = mkjob(3)
