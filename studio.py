@@ -2224,7 +2224,8 @@ class Studio(App):
         nseg, nstep = job.nseg, job.nstep
         near_end = bool(nstep) and job.step >= nstep - 2
         if getattr(job, "status", "") == "suspending":
-            return f"Suspending — finishing shot {job.seg} of {nseg}, then saving its place and freeing the GPU…"
+            _cur = job.seg + 1 if (getattr(job, "seg_started", None) is None and job.seg) else job.seg
+            return f"Suspending — finishing shot {_cur} of {nseg}, then saving its place and freeing the GPU…"
         if job.kind == "enhance":
             return "Polishing the finished video — smoothing motion, upscaling, cleaning up faces…"
         phase = getattr(job, "phase", "") or ""
@@ -2239,6 +2240,8 @@ class Studio(App):
         if phase == "warmup":
             return "Warming up the GPU — the first step is the slowest…"
         if phase == "redirecting":
+            if _blind_hidden(job.params, "steadiness"):   # evolve redirects every seam, hold every 3rd
+                return "Working…"
             return f"The director is studying the last frame to plan shot {job.seg + 1} of {nseg}…"
         if phase == "decoding":
             return f"Finishing shot {job.seg} of {nseg} — turning the model's output into frames…"
@@ -2250,7 +2253,9 @@ class Studio(App):
         if nstep and not getattr(job, "saw_step", False):
             if job.seg <= 1:
                 return "Warming up — loading the model into memory (first run ~2 min)…"
-            return f"Starting shot {job.seg} of {nseg}…"
+            # before this leg's first [[SEG]], job.seg is the checkpointed shot: the next one is starting
+            _nxt = job.seg + 1 if getattr(job, "seg_started", None) is None else job.seg
+            return f"Starting shot {_nxt} of {nseg}…"
         if job.step > 0:
             return f"Painting shot {job.seg} of {nseg} — step {job.step} of {nstep}." + ("  Almost done with this shot." if near_end else "")
         return "Working…"
@@ -2387,6 +2392,10 @@ class Studio(App):
             if not meta:
                 meta = "gen" if (job.nstep and getattr(job, "saw_step", False)) else "load"
             nseg = max(int(job.nseg or 1), int(job.seg or 1))
+            if nseg > 1 and meta == "load" and int(job.seg or 0) >= 1 and getattr(job, "seg_started", None) is None:
+                # a RESUMED leg reloading the model: its checkpointed shots are done, don't drop to ~0%
+                shot = sum(budget[k] for k in ("warm", "gen", "decode")) / nseg
+                return int(max(0.0, min(99.0, 100.0 * (budget["load"] + int(job.seg) * shot) / total)))
             if nseg > 1 and meta in ("warm", "gen", "decode"):
                 # warmup/generating/decoding repeat PER SHOT (director.py emits them each shot): charge
                 # the finished shots in full + this shot's earlier sub-phases, and advance within this
@@ -2728,16 +2737,17 @@ class Studio(App):
         except Exception:
             pass
 
-    def _absorb_standby_gap(self, job, gap):
+    def _absorb_standby_gap(self, job, gap, clocks=True):
         """Modern Standby froze the VM for `gap` wall-seconds (this platform enters standby when
         the display goes dark, ES_SYSTEM_REQUIRED or not — Kernel-Power confirmed, twice). Shift
         every wall-clock baseline forward so pace / this-shot / time-left math self-heals at wake
         instead of showing 8h elapsed / '~0s left' garbage, and tally job.slept for the display."""
         try:
-            for attr in ("seg_started", "phase_started", "first_step_ts"):
-                v = getattr(job, attr, None)
-                if v:
-                    setattr(job, attr, v + gap)
+            if clocks:                   # (not while PAUSED: the manager's resume shift covers that span)
+                for attr in ("seg_started", "phase_started", "first_step_ts"):
+                    v = getattr(job, attr, None)
+                    if v:
+                        setattr(job, attr, v + gap)
             job.slept = getattr(job, "slept", 0.0) + gap
             try:
                 self._smart_step_wall += gap
@@ -2769,7 +2779,7 @@ class Studio(App):
         _aj = m.active()
         if _gap > 120:              # ticks run every 0.5s; a 2min+ hole = the VM was frozen (standby)
             if _aj is not None:
-                self._absorb_standby_gap(_aj, _gap)
+                self._absorb_standby_gap(_aj, _gap, clocks=not m.paused)
             if getattr(self, "_paused_since", None):   # already absorbed -> don't count it again at resume
                 self._paused_since = (self._paused_since[0], self._paused_since[1] + _gap)
         # A PAUSE (SIGSTOP) freezes the render but not the wall clock. The manager shifts the job's
@@ -2869,7 +2879,9 @@ class Studio(App):
         # The big load-bar takeover is for the INITIAL load only: is_loading() includes "warmup", so
         # every later shot's warmup used to flip the header back to "5/5 · warming up" + a dead
         # "loading..." ETA twenty minutes into a render. Later warmups ride the smart bar instead.
-        initial_load = loading and int(getattr(job, "seg", 0) or 0) <= 1 and not getattr(job, "saw_step", False)
+        # the leg's model load, before its first [[SEG]] (a resumed leg starts at its checkpointed shot c)
+        initial_load = loading and not getattr(job, "saw_step", False) and (
+            int(getattr(job, "seg", 0) or 0) <= 1 or getattr(job, "seg_started", None) is None)
         # T25: latch the wall-clock the step counter last advanced (for intra-step interpolation),
         # keyed to (job, seg, step) so it only updates on a real step change — never every tick.
         try:

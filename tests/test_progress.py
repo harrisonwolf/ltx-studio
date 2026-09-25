@@ -91,6 +91,33 @@ async def main():
         check("LIVE log keeps repeated lines past a full ring", written[n0:] == ["warning: same", "warning: same", "after"], written[n0:])
         log.write = real_write
         ACTIVE["job"] = None; app.tick()
+        # a standby DURING a pause: the manager's resume shift spans the whole pause, so the UI's wake
+        # handling must not shift the job clocks too (that double shift wrote negative times)
+        js = mkjob(3); js.phase, js.seg, js.step = "generating", 2, 4
+        t0 = time.time(); js.seg_started = t0 - 30; js.phase_started = t0 - 10
+        ACTIVE["job"], ACTIVE["paused"] = js, True
+        app.tick()
+        app._last_tick_wall = time.time() - 300          # the VM slept 5 min while paused
+        app.tick()
+        check("standby while paused leaves the job clocks to the resume shift", abs(js.seg_started - (t0 - 30)) < 1,
+              js.seg_started - (t0 - 30))
+        check("...but still tallies the standby", getattr(js, "slept", 0) >= 290, getattr(js, "slept", 0))
+        ACTIVE["paused"] = False; ACTIVE["job"] = None; app.tick()
+        # a RESUMED leg reloading its model (job.seg = checkpointed shot 2 of 5, no [[SEG]] yet this leg)
+        jr = mkjob(5); jr.phase, jr.seg, jr.step, jr.seg_started, jr.saw_step = "loading", 2, 0, None, False
+        jr.phase_started = time.time(); jr.load_step, jr.load_total, jr.load_msg = 2, 5, "loading"
+        check("resumed leg's reload keeps its done shots in the bar", app._smart_pct(jr) >= 30, app._smart_pct(jr))
+        jr.phase = ""
+        check("resumed leg says the NEXT shot is starting", "Starting shot 3 of 5" in app._phase_text(jr), app._phase_text(jr))
+        jr.phase = "loading"; app._smart_max_id = None
+        ACTIVE["job"] = jr; app.tick(); await pilot.pause(0.05)
+        pt = str(app.query_one("#progtext").render())
+        check("resumed leg shows the load bar during its reload", "2/5" in pt, pt)
+        ACTIVE["job"] = None; app.tick()
+        # blind STEADINESS: evolve narrates a redirect every seam, hold every 3rd -> neutral text
+        jb = mkjob(4); jb.phase, jb.seg = "redirecting", 2
+        jb.params.update(pair_blind=True, pair_revealed=False, pair_varied_dial="steadiness")
+        check("blind steadiness redirect narration is neutral", "plan shot" not in app._phase_text(jb), app._phase_text(jb))
         # director redirect cadence in the budget matches director.py (every 3rd seam): 3 shots -> 0
         jd = mkjob(3); jd.params.update(mode="director", steadiness="hold", directive="storm")
         jc = mkjob(3)
