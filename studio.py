@@ -1037,8 +1037,19 @@ class EnhanceOptsScreen(ModalScreen):
             eta += 50.0 * n100
         if face:
             eta += 20.0 * n100
-        self.query_one("#eopt_eta", Static).update(
-            f"[#ffcf5c]plan: ~{fmt(int(eta))}[/#ffcf5c]" if eta > 0 else "[dim]plan: no passes selected[/dim]")
+        # RESTORE (SeedVR2) and DEFLICKER have no calibration yet: name them instead of claiming
+        # "no passes selected" (or a total that silently leaves them out)
+        restore = self.query_one("#eopt_restore", Select).value
+        untimed = ([f"restore {restore}"] if restore not in (None, "none") else []) + \
+                  (["deflicker"] if self.query_one("#eopt_deflicker", Select).value == "1" else [])
+        extra = f" + {', '.join(untimed)} (not timed yet)" if untimed else ""
+        if eta > 0:
+            plan = f"[#ffcf5c]plan: ~{fmt(int(eta))}{extra}[/#ffcf5c]"
+        elif untimed:
+            plan = f"[#ffcf5c]plan: {', '.join(untimed)} (not timed yet)[/#ffcf5c]"
+        else:
+            plan = "[dim]plan: no passes selected[/dim]"
+        self.query_one("#eopt_eta", Static).update(plan)
 
     def on_button_pressed(self, e):
         if e.button.id and e.button.id.startswith("i_"):
@@ -1928,9 +1939,14 @@ class Studio(App):
         # (sticky-panel rule); the placeholder shows only before the first schematic ever renders.
         # no_wrap: block-art CLIPS at the box edge, never wraps (a 1-col deficit on a small monitor
         # used to smear bar fragments onto the next line).
+        _t = None
         if art:
-            _t = Text.from_markup(art)
-            _t.no_wrap = True
+            try:                            # a malformed schematic must never take the app (and a
+                _t = Text.from_markup(art)  # live render) down: keep the previous one instead
+                _t.no_wrap = True
+            except Exception:
+                _t = None
+        if _t is not None:
             panel.update(_t)
             self._visual_set = True
             self._visual_wid = wid          # remember it so a theme change can re-tint this schematic
@@ -2161,6 +2177,15 @@ class Studio(App):
         Fully guarded; returns a positive-total dict on any failure so callers never divide by 0."""
         try:
             p = job.params or {}
+            if (p.get("mode") or job.kind) == "enhance":
+                # enhance isn't diffusion: cost it with the ENHANCE screen's per-100-source-frame
+                # calibration (upscale ~80s, interp ~50s, face ~20s); restore/deflicker aren't timed yet
+                n100 = float(p.get("seconds") or 0) * float(p.get("fps") or 24) / 100.0
+                _up = str(p.get("enh_upscale") or "0")
+                eta = n100 * ((80.0 if _up not in ("0", "") else 0.0)
+                              + (50.0 if int(float(p.get("enh_interp") or 1)) > 1 else 0.0)
+                              + (20.0 if str(p.get("enh_face") or "0") not in ("0", "") else 0.0))
+                return {"load": 1.0, "warm": 1.0, "gen": max(1.0, eta), "decode": 1.0, "save": 1.0}
             backend = (p.get("backend") or "ltx")
             W, H = RES.get(res_key(p.get("res")), (704, 480))
             steps = int(float(p.get("steps") or job.nstep or 20))
@@ -2182,7 +2207,7 @@ class Studio(App):
                 if not _dv or _dv == (p.get("prompt") or "").strip():
                     _steady = "hold"
             if director and _steady != "evolve":
-                nseam = -(-nseam // 3)
+                nseam = nseam // 3                 # every 3rd seam, as director.py's loop does
             gen = steps * COEF * px * ff * nseg + (SEAM * nseam if director else 0)
             decode = DECODE * ff * nseg
             b = {"load": float(LOAD), "warm": float(WARM) * nseg, "gen": float(gen),
@@ -2272,14 +2297,28 @@ class Studio(App):
             # No phase marker yet -> fall back to load (pure startup) or gen (steps seen).
             if not meta:
                 meta = "gen" if (job.nstep and getattr(job, "saw_step", False)) else "load"
-            # cumulative est of the meta-phases strictly BEFORE the current one
-            before = 0.0
-            for k in self._SMART_PHASES:
-                if k == meta:
-                    break
-                before += budget[k]
-            frac = max(0.0, min(0.98, self._phase_fraction(job, meta, budget)))
-            pct = 100.0 * (before + frac * budget[meta]) / total
+            nseg = max(int(job.nseg or 1), int(job.seg or 1))
+            if nseg > 1 and meta in ("warm", "gen", "decode"):
+                # warmup/generating/decoding repeat PER SHOT (director.py emits them each shot): charge
+                # the finished shots in full + this shot's earlier sub-phases, and advance within this
+                # shot's share -- a whole-run pass jumped to ~89% at shot 1's decode and stuck there.
+                shot = {k: budget[k] / nseg for k in ("warm", "gen", "decode")}
+                before = budget["load"] + (max(1, int(job.seg or 1)) - 1) * sum(shot.values())
+                for k in ("warm", "gen", "decode"):
+                    if k == meta:
+                        break
+                    before += shot[k]
+                frac = max(0.0, min(0.98, self._phase_fraction(job, meta, shot, per_shot=True)))
+                pct = 100.0 * (before + frac * shot[meta]) / total
+            else:
+                # cumulative est of the meta-phases strictly BEFORE the current one
+                before = 0.0
+                for k in self._SMART_PHASES:
+                    if k == meta:
+                        break
+                    before += budget[k]
+                frac = max(0.0, min(0.98, self._phase_fraction(job, meta, budget)))
+                pct = 100.0 * (before + frac * budget[meta]) / total
             return int(max(0.0, min(99.0, pct)))   # never reach/exceed 100 until truly complete
         except Exception:
             try:
@@ -2310,15 +2349,16 @@ class Studio(App):
             return None
         return None
 
-    def _phase_fraction(self, job, meta, budget):
-        """Fraction in [0, ~0.98] of the current meta-phase completed."""
+    def _phase_fraction(self, job, meta, budget, per_shot=False):
+        """Fraction in [0, ~0.98] of the current meta-phase completed (of the current SHOT's share
+        when per_shot, else of the whole run's)."""
         now = time.time()
         if meta == "gen":
             nstep = job.nstep or 0
-            nseg = max(job.nseg or 1, job.seg or 1)
+            nseg = 1 if per_shot else max(job.nseg or 1, job.seg or 1)
             if not nstep or not nseg:
                 return 0.0
-            steps_done = (max(0, (job.seg or 1) - 1)) * nstep + (job.step or 0)
+            steps_done = (0 if per_shot else max(0, (job.seg or 1) - 1) * nstep) + (job.step or 0)
             steps_total = nseg * nstep
             # intra_step = clamp((now - last_step_ts) / avg_step_seconds, 0, 1), where
             # avg_step_seconds = 1/rate (the SAME PACE "rate steps/s" calc). last_step_ts is the
@@ -2595,7 +2635,7 @@ class Studio(App):
         except Exception:
             pass
 
-    def _absorb_standby_gap(self, job, gap):
+    def _absorb_standby_gap(self, job, gap, standby=True):
         """Modern Standby froze the VM for `gap` wall-seconds (this platform enters standby when
         the display goes dark, ES_SYSTEM_REQUIRED or not — Kernel-Power confirmed, twice). Shift
         every wall-clock baseline forward so pace / this-shot / time-left math self-heals at wake
@@ -2605,7 +2645,8 @@ class Studio(App):
                 v = getattr(job, attr, None)
                 if v:
                     setattr(job, attr, v + gap)
-            job.slept = getattr(job, "slept", 0.0) + gap
+            if standby:
+                job.slept = getattr(job, "slept", 0.0) + gap
             try:
                 self._smart_step_wall += gap
             except Exception:
@@ -2633,10 +2674,22 @@ class Studio(App):
         _wall = time.time()
         _gap = _wall - getattr(self, "_last_tick_wall", _wall)
         self._last_tick_wall = _wall
+        _aj = m.active()
         if _gap > 120:              # ticks run every 0.5s; a 2min+ hole = the VM was frozen (standby)
-            _aj = m.active()
             if _aj is not None:
                 self._absorb_standby_gap(_aj, _gap)
+            if getattr(self, "_paused_since", None):   # already absorbed -> don't count it again at resume
+                self._paused_since = (self._paused_since[0], self._paused_since[1] + _gap)
+        # A PAUSE (SIGSTOP) freezes the render but not the wall clock: shift the pace / this-shot /
+        # time-left baselines by the paused span at resume, as for standby (minus the standby tally).
+        if _aj is not None and m.paused:
+            if getattr(self, "_paused_since", None) is None:
+                self._paused_since = (_aj.id, _wall)
+        elif getattr(self, "_paused_since", None):
+            _pid, _t0 = self._paused_since
+            self._paused_since = None
+            if _aj is not None and _aj.id == _pid:
+                self._absorb_standby_gap(_aj, max(0.0, _wall - _t0), standby=False)
         # GPU STATUS — from our OWN job state ONLY, never nvidia-smi. REPRODUCED: nvidia-smi polling
         # in this WSL2 (RTX 5070 Blackwell + driver 591.74) destabilizes the dxg passthrough and
         # restarts the WHOLE VM after ~30 calls, EVEN WITH NO CUDA RUNNING. So there is no live VRAM%
@@ -3178,7 +3231,7 @@ class Studio(App):
                 if not _dv or _dv == (self.v("prompt") or "").strip():
                     _steady = "hold"               # blank/echo directive -> engine runs hold
             if director and _steady != "evolve":
-                nseam = -(-nseam // 3)             # hold/balanced redirect every 3rd seam (director.py cadence)
+                nseam = nseam // 3                 # hold/balanced redirect every 3rd seam (director.py cadence)
             secs = (LOAD + nseg * (steps * COEF * px * ff + WARM + DECODE * ff)
                     + (SEAM * nseam if director else 0))
             mode = "DIRECTOR" if director else ("auto-chained" if chain else "single clip")
