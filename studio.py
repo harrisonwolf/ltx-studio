@@ -1987,7 +1987,10 @@ class Studio(App):
         if sid == "mode":      # gray out the dials the launched command literally ignores in this mode
             self._sync_mode_disable()
         if sid == "backend":   # ONLY a backend change may retune cfg/steps;
-            self._sync_cfg_default()                         # RES/MODE/etc must never clobber tuned dials
+            if getattr(self, "_cfg_sync_skip", None) == event.value:
+                self._cfg_sync_skip = None                   # CLONE/CONSULT set cfg+steps with the backend
+            else:
+                self._sync_cfg_default()                     # RES/MODE/etc must never clobber tuned dials
             self._sync_backend_disable()                     # + gray Wan-only dials off-backend
         elif sid == "vram_reserve":   # T14: persist immediately + apply to the NEXT run this manager launches
             try:
@@ -2067,15 +2070,24 @@ class Studio(App):
                 cfg_in.value = want
         except Exception:
             pass
-        if bk == "wan-turbo":                      # the distill is built for few steps; nudge off a heavy default
-            try:
-                steps_w = self.query_one("#steps")
-                if str(getattr(steps_w, "value", "")).strip() in ("", "20", "30", "40", "50"):
+        try:
+            steps_w = self.query_one("#steps")
+            cur = str(getattr(steps_w, "value", "")).strip()
+            if bk == "wan-turbo":                  # the distill is built for few steps; nudge off a heavy default
+                if cur in ("", "20", "30", "40", "50"):
+                    self._turbo_prev_steps = cur or "40"   # remembered so leaving turbo restores it
                     if steps_w.has_focus:
                         steps_w.blur()
                     steps_w.value = "6"
-            except Exception:
-                pass
+            else:
+                prev = getattr(self, "_turbo_prev_steps", None)
+                self._turbo_prev_steps = None
+                if prev and cur == "6":            # still the nudge we made (not a value the user typed since)
+                    if steps_w.has_focus:
+                        steps_w.blur()
+                    steps_w.value = prev
+        except Exception:
+            pass
         self.call_after_refresh(self.update_est)   # land after focus/value settle, so the ETA reflects the new default
 
     def on_switch_changed(self, event):
@@ -3048,6 +3060,9 @@ class Studio(App):
                         if v not in ("ltx", "wan", "wan-turbo"):
                             v = "wan-turbo" if "turbo" in v else ("wan" if "wan" in v else "ltx")
                     w = self.query_one(f"#{wid}")
+                    if wid == "backend" and w.value != v:
+                        self._cfg_sync_skip = v        # the Select.Changed this posts must not retune the
+                        self._turbo_prev_steps = None  # cfg/steps being applied alongside it
                     if isinstance(w, TextArea):
                         w.text = v
                     else:
@@ -3090,6 +3105,25 @@ class Studio(App):
         if seg not in (None, ""):                  # skip for single runs so the form keeps its default
             c["seg"] = seg
         return {k: v for k, v in c.items() if v is not None}
+
+    def _archive_over(self, job, **changes):
+        """A build() snapshot of an archived run (+ `changes`) for RE-ROLL / PAIR / ×N. Built from the
+        run's own params rather than pushed through the NEW RUN form, so the form (and its fixed seed)
+        is left alone and the backend-change handler can't retune cfg/steps after the fact. Params a
+        legacy run lacks default to off/empty, never to whatever the form happens to hold."""
+        c = self._clone_config(job)
+        c.update(changes)
+        for k, d in (("backend", "ltx"), ("cond_strength", "1.0"), ("cfg_rescale", "off"),
+                     ("cfg_interval", "off"), ("wan_ref_anchor", "off"), ("anchors", ""),
+                     ("directive", ""), ("image", ""), ("steadiness", "hold")):
+            c.setdefault(k, d)
+        c["name"] = ""
+        c["backend"] = str(c["backend"]).strip().lower().replace(" ", "-")
+        c["res"] = res_key(c.get("res"))
+        c["steadiness"] = str(c["steadiness"]).lower() or "hold"
+        c["mode"] = "director" if str(c.get("mode", "")).lower() == "director" else "single"
+        c["_ltx_variant"] = (job.params or {}).get("ltx_variant") or "none"   # the checkpoint is part of the run
+        return c
 
     def update_est(self):
         try:
@@ -3759,6 +3793,7 @@ class Studio(App):
                 return
             try:
                 cfg = self._clone_config(job)
+                cfg["name"] = ""                     # the message promises a blank NAME
                 self._apply_config(cfg)
                 self.query_one(TabbedContent).active = "tab-new"
                 try:
@@ -3842,6 +3877,7 @@ class Studio(App):
                     "Clone the original instead.[/#ffcf5c]")
                 return
             cfg = self._clone_config(job)
+            cfg["name"] = ""                         # the message promises a blank NAME
             self._apply_config(cfg)
             self.query_one(TabbedContent).active = "tab-new"
             try:
@@ -3869,13 +3905,8 @@ class Studio(App):
                 import random
                 s = (res.get("seed") or "").strip()
                 seed = s if (s and s.lstrip("-").isdigit()) else str(random.randint(1, 2**31 - 1))
-                cfg = self._clone_config(job)
-                cfg["seed"] = seed                   # the ONLY change vs the original run
-                cfg["name"] = ""                     # clear any stale NAME typed in the form (A13)
-                cfg.setdefault("backend", "ltx")     # legacy jobs missing these params must not
-                cfg.setdefault("cond_strength", "1.0")   # inherit whatever the form currently holds
-                self._apply_config(cfg)
-                j = self._queue_current_run()        # same path as QUEUE RUN (budget gate, enqueue)
+                cfg = self._archive_over(job, seed=seed)   # the seed is the ONLY change vs the original
+                j = self._queue_current_run(over=cfg)      # same gated path as QUEUE RUN; form untouched
                 if j:
                     self.query_one("#inspectinfo", Static).update(
                         f"[#9dffce]Re-rolled {job.id} → {j.id} with seed {seed}.[/#9dffce]")
@@ -3890,6 +3921,11 @@ class Studio(App):
             if (job.params.get("mode") or job.kind) == "enhance":
                 self.query_one("#inspectinfo", Static).update(
                     "[#ffcf5c]Enhance runs can't be paired — they have no seed. Pair the original render.[/#ffcf5c]")
+                return
+
+            if job.params.get("pair_id"):            # a run belongs to ONE pair (partner lookup is by pair_id)
+                self.query_one("#inspectinfo", Static).update(
+                    "[#ffcf5c]This run is already in a pair. CLONE it and PAIR the clone's run instead.[/#ffcf5c]")
                 return
 
             def _do_pair(res):
@@ -3926,13 +3962,8 @@ class Studio(App):
                 if err:
                     self.query_one("#inspectinfo", Static).update(f"[#ff6d6d]{err}[/#ff6d6d]")
                     return
-                cfg = self._clone_config(job)         # KEEP the seed -- only the one dial differs
-                cfg[dial] = value
-                cfg["name"] = ""                      # clear any stale NAME typed in the form (A13)
-                cfg.setdefault("backend", "ltx")      # legacy jobs missing these params must not
-                cfg.setdefault("cond_strength", "1.0")   # inherit whatever the form currently holds
-                self._apply_config(cfg)
-                j = self._queue_current_run()         # same path as QUEUE RUN (budget gate, enqueue)
+                cfg = self._archive_over(job, **{dial: value})   # KEEP the seed -- only the one dial differs
+                j = self._queue_current_run(over=cfg)         # same gated path as QUEUE RUN; form untouched
                 if j:
                     j.params["pair_id"] = job.id
                     j.params["pair_variant"] = "B"
@@ -3965,13 +3996,8 @@ class Studio(App):
                     n = 3
                 queued = []
                 for _ in range(n):
-                    cfg = self._clone_config(job)
-                    cfg["seed"] = str(random.randint(1, 2**31 - 1))
-                    cfg["name"] = ""
-                    cfg.setdefault("backend", "ltx")
-                    cfg.setdefault("cond_strength", "1.0")
-                    self._apply_config(cfg)
-                    j = self._queue_current_run()
+                    cfg = self._archive_over(job, seed=str(random.randint(1, 2**31 - 1)))
+                    j = self._queue_current_run(over=cfg, skip_budget=bool(queued))
                     if j:
                         j.params["replicate_set_id"] = job.id
                         j.save()
