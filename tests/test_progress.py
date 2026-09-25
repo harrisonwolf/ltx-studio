@@ -137,6 +137,14 @@ async def main():
         jw.params.update(pair_blind=True, pair_revealed=False, pair_varied_dial="steadiness")
         check("post-SEG redirect window is the next shot's warmup", studio._live_phase(jw) == "warmup", studio._live_phase(jw))
         check("...so the bar doesn't latch a whole shot ahead", app._smart_pct(jw) < 50, app._smart_pct(jw))
+        # the same window after a DECODE (every seam without a redirect), timed from the SEG, not the decode
+        jd = mkjob(5); jd.phase, jd.seg, jd.step, jd.nstep = "decoding", 3, 25, 25
+        jd.phase_started = time.time() - 30; jd.seg_started = time.time() - 0.001
+        fresh = mkjob(5); fresh.phase, fresh.seg, fresh.step, fresh.nstep = "warmup", 3, 0, 25
+        fresh.phase_started = fresh.seg_started = time.time()
+        check("post-SEG decode window = the next shot's warmup, just begun",
+              studio._live_phase(jd) == "warmup" and abs(app._smart_pct(jd) - app._smart_pct(fresh)) <= 1,
+              (studio._live_phase(jd), app._smart_pct(jd), app._smart_pct(fresh)))
         # blind steadiness: both variants are budgeted alike (hold's fewer redirects gave the ETA away)
         jh, je = mkjob(6), mkjob(6)
         for jj, st in ((jh, "hold"), (je, "evolve")):
@@ -155,6 +163,11 @@ async def main():
         prov = app._fmt_provenance(jt)
         check("blind-steadiness TIMING folds redirects into decode", "director " not in prov and "44%" in prov,
               [l for l in prov.splitlines() if "%" in l])
+        jt.params["pair_blind"] = False
+        jt.phase_secs = {"importing": 3.0, "loading": 20.0, "offload": 2.0, "generating": 30.0, "decoding": 10.0,
+                         "redirecting": 5.0, "saving": 1.0}
+        pc = [int(x) for x in __import__("re").findall(r"(\d+)%", app._fmt_provenance(jt))]
+        check("TIMING percentages add up to ~100", 98 <= sum(pc) <= 102, pc)
         # stall sentry: a director redirect (a VLM call, legitimately minutes) gets the long fuse like a
         # decode -- 250 s into one must not raise STALL (the short 240 s fuse is for step-marked gen)
         jv = mkjob(5); jv.phase, jv.seg, jv.step = "redirecting", 2, 25
@@ -163,6 +176,20 @@ async def main():
                             "since": time.monotonic() - 250, "fired": False, "susp": False, "killed": False}
         app._alerts()
         check("250 s into a director redirect is not a STALL", "STALL" not in (app._stall_note or ""), app._stall_note)
+        # ...nor is 1250 s, and a redirect is never auto-suspended / killed (director.py times out and
+        # recovers its own waits: daemon load 900 s + request 600 s)
+        calls = []
+        real_s, real_k = app.mgr.__class__.__dict__.get("suspend"), app.mgr.__class__.__dict__.get("hard_interrupt")
+        app.mgr.suspend = lambda: calls.append("suspend"); app.mgr.hard_interrupt = lambda: calls.append("kill")
+        for idle in (1250, 1600, 2500):
+            app._stall_state = {"sig": (jv.id, jv.phase, jv.seg, jv.step, 0), "pmt": 0.0,
+                                "since": time.monotonic() - idle, "fired": False, "susp": False, "killed": False}
+            app._stall_note = ""
+            app._alerts()
+            if idle == 1250:
+                check("1250 s into a redirect: no STALL banner yet", "STALL" not in (app._stall_note or ""), app._stall_note)
+        check("a redirect is never auto-suspended or killed by the stall fuse", not calls, calls)
+        check("...but a redirect wedged past 30 min is flagged", "STALL" in (app._stall_note or ""), app._stall_note)
         ACTIVE["job"] = None; app.tick()
         # suspending during a resumed leg's reload: no shot is finished first
         jr.status, jr.phase = "suspending", "loading"

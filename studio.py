@@ -69,13 +69,23 @@ def _live_phase(job):
     3rd on hold) are shown as the decode that always precedes them, in EVERY widget (phase line,
     progress suffix, phase timeline, % bar) -- any one of them would make the redirects countable."""
     ph = getattr(job, "phase", "") or ""
-    if ph == "redirecting":
-        ss, ps = getattr(job, "seg_started", None), getattr(job, "phase_started", None)
-        if ss and ps and ss > ps:      # [[SEG N+1]] already arrived (its [[PHASE warmup]] is next): shot N+1
-            return "warmup"            # is warming up -- don't read it as a whole-shot-ahead redirect/decode
-        if _blind_hidden(getattr(job, "params", None), "steadiness"):
-            return "decoding"
+    if _post_seg_window(job):          # [[SEG N+1]] arrived, its [[PHASE warmup]] is next: shot N+1 is
+        return "warmup"                # warming up -- don't read the stale phase as shot N+1's decode
+    if ph == "redirecting" and _blind_hidden(getattr(job, "params", None), "steadiness"):
+        return "decoding"
     return ph
+
+
+def _post_seg_window(job):
+    """True between a [[SEG N+1]] and the [[PHASE warmup]] that follows it, while job.phase is still the
+    previous shot's decoding / redirecting (the manager only moves the phase on a PHASE marker)."""
+    ss, ps = getattr(job, "seg_started", None), getattr(job, "phase_started", None)
+    return bool(ss and ps and ss > ps and getattr(job, "phase", "") in ("decoding", "redirecting"))
+
+
+def _live_phase_start(job):
+    """When the phase _live_phase() reports began (the post-[[SEG]] window's warmup began at the SEG)."""
+    return getattr(job, "seg_started", None) if _post_seg_window(job) else getattr(job, "phase_started", None)
 
 
 def _run_secs(job):
@@ -2491,7 +2501,7 @@ class Studio(App):
             intra = max(0.0, min(1.0, intra))
             return min(0.98, (steps_done + intra) / max(1, steps_total))
         # load / warm / decode / save: no sub-steps -> creep by elapsed / est
-        t0 = getattr(job, "phase_started", None)
+        t0 = _live_phase_start(job)
         if not t0:
             return 0.0
         est = budget.get(meta, 1.0) or 1.0
@@ -2712,9 +2722,13 @@ class Studio(App):
             # tight fuse. warmup (Wan averages 220s/shot with ZERO markers on this box's own refit)
             # and decode/save (a real multi-hour decode exists in experiments.jsonl) share the long
             # fuse, so an overnight batch never murders a slow-but-alive run.
-            slow = job.phase in ("warmup", "decoding", "saving", "redirecting")   # redirect = a VLM call
+            slow = job.phase in ("warmup", "decoding", "saving")
             fire_at = (getattr(self, "_stall_decode_secs", 600.0) if slow
                        else getattr(self, "_stall_secs", 240.0))
+            if job.phase == "redirecting":
+                # a VLM call: director.py already times out each wait (daemon load 900 s + request 600 s)
+                # and recovers by itself, so only warn -- and only past that worst case (never escalate)
+                fire_at = max(getattr(self, "_stall_decode_secs", 600.0), 1800.0)
             grace = (getattr(self, "_stall_decode_secs", 600.0) if slow
                      else getattr(self, "_stall_grace", 180.0))
             idle = now - prev["since"]
@@ -2734,7 +2748,7 @@ class Studio(App):
                 prev["fired"] = True
                 if sounds is not None:
                     sounds.play("run_stall", REPO)
-            escalate = act_suspend and job.phase in ("warmup", "generating", "decoding", "saving", "redirecting")
+            escalate = act_suspend and job.phase in ("warmup", "generating", "decoding", "saving")
             if not escalate:      # "alert" mode, or a load/download phase (legitimately silent-slow)
                 self._stall_note = "    " + tmark("error", "!! STALL? no progress %dm" % mins)
                 return
@@ -2947,10 +2961,7 @@ class Studio(App):
             self._preview_id, self._preview_mtime, self._notes_n = job.id, 0.0, 0
             pv.update("[dim]waiting for first frame…[/dim]")   # T12: placeholder until the first preview lands
             notes.clear()
-            if job.kind != "director":     # T12: non-director runs never populate director's-notes -- say so
-                notes.write("[dim]This run uses no director steering.[/dim]")
-            elif _blind_hidden(job.params, "director", "shape"):   # from the START (not the first plan:
-                notes.write("[dim](director's notes hidden — blind A/B, REVEAL to show)[/dim]")  # its timing tells)
+            self._notes_header(notes, job)
         ppath = getattr(job, "preview", None)
         if ppath and os.path.exists(ppath):
             mt = os.path.getmtime(ppath)
@@ -3043,7 +3054,7 @@ class Studio(App):
         self._put("#steer_anchors", f"[dim]anchors[/dim] {(p.get('anchors') or '—')[:40]}", fixed=True)
         # ---- PHASE timeline strip ----
         psecs = getattr(job, "phase_secs", {}) or {}
-        cur, cur_t0 = _live_phase(job), getattr(job, "phase_started", None)
+        cur, cur_t0 = _live_phase(job), _live_phase_start(job)
         _redir_as_dec = _blind_hidden(p, "steadiness")   # redirect time shown inside the decode cell
         cells = []
         for ph, lbl in (("loading", "load"), ("warmup", "warm"), ("generating", "gen"),
@@ -4948,6 +4959,8 @@ class Studio(App):
             for ph, lbl in (("loading", "load"), ("warmup", "warm"), ("generating", "gen"),
                             ("decoding", "decode"), ("redirecting", "director"), ("saving", "save")):
                 t = psecs.get(ph, 0)
+                if ph == "loading":               # startup phases share the load row, so the % add up
+                    t += sum(psecs.get(x, 0) for x in ("importing", "offload", "loading_vlm"))
                 if _fold and ph == "decoding":
                     t += psecs.get("redirecting", 0)
                 elif _fold and ph == "redirecting":
@@ -5013,6 +5026,14 @@ class Studio(App):
         """T13: open the live-preview theme picker (Ctrl+K)."""
         self.push_screen(ThemePickerScreen())
 
+    @staticmethod
+    def _notes_header(notes, job):
+        """The fixed first line of a run's LIVE director's notes (rewritten whenever the log is cleared)."""
+        if job.kind != "director":     # T12: non-director runs never populate director's-notes -- say so
+            notes.write("[dim]This run uses no director steering.[/dim]")
+        elif _blind_hidden(job.params, "director", "shape"):   # from the START (not the first plan:
+            notes.write("[dim](director's notes hidden — blind A/B, REVEAL to show)[/dim]")  # its timing tells)
+
     def action_toggle_dirraw(self):
         """Expand/collapse the director's FULL raw model output per seam (LIVE notes + ARCHIVE inspect)."""
         self._dir_raw = not self._dir_raw
@@ -5021,6 +5042,9 @@ class Studio(App):
         if tab == "tab-live":
             self._notes_n = 0
             self.query_one("#dirnotes", RichLog).clear()   # append-only log -> full repaint next tick
+            act = self.mgr.active()
+            if act is not None:
+                self._notes_header(self.query_one("#dirnotes", RichLog), act)
             try:
                 self.query_one("#dirnotebtn", Button).label = "» HIDE RAW" if self._dir_raw else "» DIR RAW"
             except Exception:

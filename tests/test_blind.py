@@ -147,6 +147,15 @@ async def main():
         ACT["job"] = lj; app.tick(); await pilot.pause(0.05); ACT["job"] = None; app.tick()
         notes.write = real_w
         check("blind steadiness notes placeholder shows before any plan", any("hidden" in w for w in wrote), wrote)
+        # ...and comes back after toggling DIR RAW (which clears the notes log)
+        ACT["job"] = lj; app.tick(); await pilot.pause(0.05)
+        app.query_one(studio.TabbedContent).active = "tab-live"; await pilot.pause(0.05)
+        wrote.clear(); notes.write = lambda c, *x, **k: (wrote.append(str(c)), real_w(c, *x, **k))[1]
+        app.action_toggle_dirraw(); app.tick(); await pilot.pause(0.05)
+        app.action_toggle_dirraw(); app.tick(); await pilot.pause(0.05)
+        notes.write = real_w; ACT["job"] = None; app.tick()
+        app.query_one(studio.TabbedContent).active = "tab-arch"; await pilot.pause(0.05)
+        check("placeholder survives a DIR RAW toggle", sum("hidden" in w for w in wrote) >= 2, wrote)
         # a STEADINESS pair: hold's "(skipped …)" plans vs evolve's rewrites give it away -> hidden
         a.params.update(pair_varied_dial="steadiness")
         a.plans = [[1, "(skipped - scene holding steady; prompt unchanged)", ""]]
