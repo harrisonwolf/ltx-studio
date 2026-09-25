@@ -123,11 +123,25 @@ def _bar_w(default=42):
         return int(default)
 
 
+# Where unicodedata's East-Asian width disagrees with Rich's cell table (what the studio measures
+# with): (first, last, cells). Hardcoded — this module stays stdlib-only (see the header).
+_CW_FIX = (
+    (0x1160, 0x11FF, 0), (0x3164, 0x3164, 0), (0xD7B0, 0xD7FF, 0), (0xFFA0, 0xFFA0, 0),  # Hangul jamo/fillers
+    (0x1F3FB, 0x1F3FF, 0),                                        # emoji skin-tone modifiers
+    (0x2630, 0x2637, 2), (0x268A, 0x268F, 2), (0x4DC0, 0x4DFF, 2),  # trigrams / monograms / hexagrams
+    (0x1D300, 0x1D356, 2), (0x1D360, 0x1D376, 2),                   # Tai Xuan Jing / counting rods
+)
+
+
 def _cw(ch):
     """Terminal cell width of one char (stdlib approximation of Rich's cell_len): combining /
     format marks 0, East-Asian wide/fullwidth 2, everything else (incl. the box/block art) 1."""
     if ch < "\u0300":
         return 1                                  # ASCII / Latin-1 fast path (the art is all 1-cell)
+    cp = ord(ch)
+    for lo, hi, n in _CW_FIX:
+        if lo <= cp <= hi:
+            return n
     cat = unicodedata.category(ch)
     if cat in ("Mn", "Me", "Cf"):
         return 0
@@ -204,19 +218,25 @@ def _tick(v, lo, hi, width):
     return int(round(frac * (width - 1)))
 
 
-def _pin_row(width, pins):
+def _pin_row(width, pins, slide=False):
     """One row of labels pinned to exact bar columns: pins = [(col, text, color), ...] where
     `col` is the column the label is CENTERED on (same column space as the ▲ marker). Labels
     are clamped into 0..width-1; a label that would touch an already-placed one is dropped
-    (earlier pins win). Returns a Rich-markup string, right-trimmed."""
+    (earlier pins win) — or, with slide=True (left-to-right zone captions on a shrunken bar),
+    slid right to 2 cols past the obstacle while it still fits. Returns Rich markup, right-trimmed."""
     cells = [(" ", None)] * width
     for col, text, color in pins:
         if not text or len(text) > width:
             continue
         start = int(col) - (len(text) - 1) // 2
         start = max(0, min(start, width - len(text)))
-        lo, hi = max(0, start - 1), min(width, start + len(text) + 1)
-        if any(ch != " " for ch, _cl in cells[lo:hi]):
+        while start is not None:
+            lo, hi = max(0, start - 1), min(width, start + len(text) + 1)
+            busy = [i for i in range(lo, hi) if cells[i][0] != " "]
+            if not busy:
+                break
+            start = busy[-1] + 2 if slide and busy[-1] + 2 + len(text) <= width else None
+        if start is None:
             continue
         for i, ch in enumerate(text):
             cells[start + i] = (ch, color)
@@ -396,8 +416,9 @@ def _backend(app):
     for key, _name, _tag, pos, color in opts:
         marker[_grid(pos, WIDTH)] = _c(ACCENT, "▲") if key == backend else _c(color, "·")
     lines = ["  " + bar, "  " + "".join(marker)]
-    lines.append("  " + _pin_row(WIDTH, [(_grid(5, WIDTH), "fast", "dim"),
-                                         (_grid(36, WIDTH), "nicer (slower)", "dim")]))
+    pw = min(WIDTH, _AVAIL - 2)             # the pin row sits after the 2-col indent too
+    lines.append("  " + _pin_row(pw, [(_grid(5, WIDTH), "fast", "dim"),
+                                      (_grid(36, WIDTH), "nicer (slower)", "dim")], slide=True))
 
     for key, name, tag, _pos, color in opts:    # A19: one item per line -> fits narrow panels
         tick = _c(ACCENT, "● ") if key == backend else "  "
@@ -622,9 +643,12 @@ def _steadiness(app):
     for key, _name, _tag, pos, color in opts:
         marker[_grid(pos, WIDTH)] = _c(ACCENT, "▲") if key == steadiness else _c(color, "·")
     lines = ["  " + bar, "  " + "".join(marker)]
-    lines.append("  " + _pin_row(WIDTH, [(_grid(6, WIDTH), "lots of motion", "dim"),
-                                         (_grid(19, WIDTH), "gentle", "dim"),
-                                         (_grid(33, WIDTH), "locked-off", "dim")]))
+    pw = min(WIDTH, _AVAIL - 2)             # the pin row sits after the 2-col indent too
+    # the two END labels are placed first (earlier pins win); "gentle" slides right into any
+    # gap left between them on a shrunken bar, else it is the one dropped
+    lines.append("  " + _pin_row(pw, [(_grid(6, WIDTH), "lots of motion", "dim"),
+                                      (_grid(33, WIDTH), "locked-off", "dim"),
+                                      (_grid(19, WIDTH), "gentle", "dim")], slide=True))
 
     for key, name, tag, _pos, color in opts:    # A19: one item per line -> fits narrow panels
         tick = _c(ACCENT, "● ") if key == steadiness else "  "
@@ -753,8 +777,8 @@ def _safe_text(s):
             ch = _UNSAFE[ch]
         elif ch >= "\u0300" or ch < " " or "\x7f" <= ch < "\xa0":
             cat = unicodedata.category(ch)
-            if cat[0] in "CM" or cat in ("Zl", "Zp"):
-                ch = "?"
+            if cat[0] in "CM" or cat in ("Zl", "Zp") or _cw(ch) == 0:   # (0: skin-tone modifier,
+                ch = "?"                                                 #  Hangul filler/jamo)
         out.append(ch)
     return "".join(out)
 

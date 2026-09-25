@@ -48,6 +48,19 @@ VARIANTS = {
     "wan-turbo": base_cfg(backend="wan-turbo", cfg=1.0, steps=8, seg_frames=57),
 }
 
+# long chains: the '┄+N' tail + a long 'asked→actual' SHOTS value compete for a narrow row
+LONG_CHAINS = {
+    "wan-112-shots": base_cfg(backend="wan", mode="director", W=832, H=480, fps=16, seg_frames=45,
+                              total_frames=4001, nseg=112, chain=True, seconds="250.25",
+                              steadiness="evolve"),
+    "ltx-14-shots": base_cfg(mode="director", W=768, H=512, seg_frames=49, total_frames=577,
+                             nseg=14, chain=True, seconds="24.03"),
+    "ltx-14-shots-asked": base_cfg(mode="director", W=768, H=512, seg_frames=49, total_frames=577,
+                                   nseg=14, chain=True, seconds="1234.56"),
+    "wan-999-shots": base_cfg(backend="wan", W=832, H=480, fps=16, seg_frames=45,
+                              total_frames=99999, nseg=999, chain=True, seconds="99999.99"),
+}
+
 TITLES = ("VRAM", "CLIP", "RAM", "SHOTS", "QUAL", "DRIFT")
 ABSOLUTE_WORDS = ("guarantee", "guaranteed", "perfect", "certain", "always", "100%", "flawless", "best")
 
@@ -71,12 +84,7 @@ def check_2_line_widths():
     tf = {"COEF": 40.0, "WARM": 4000.0, "DECODE": 900.0, "LOAD": 9000.0, "SEAM": 90.0, "rows": 6}
     annot_fit = {"vram": {}, "time": {"ltx": dict(tf, SEG_REF=49.0), "wan": dict(tf, SEG_REF=29.0),
                                       "wan-turbo": dict(tf, SEG_REF=29.0)}}
-    variants = dict(VARIANTS)
-    variants["wan-112-shots"] = base_cfg(backend="wan", mode="director", W=832, H=480, fps=16,
-                                         seg_frames=45, total_frames=4001, nseg=112, chain=True,
-                                         seconds="250.25", steadiness="evolve")
-    variants["ltx-14-shots"] = base_cfg(mode="director", W=768, H=512, seg_frames=49,
-                                        total_frames=577, nseg=14, chain=True, seconds="24.03")
+    variants = dict(VARIANTS, **LONG_CHAINS)
     variants["thin-quality"] = base_cfg(W=512, H=320, steps=4, cfg=9.0)
     for name, cfg in variants.items():
         for fit in (None, annot_fit):
@@ -96,8 +104,10 @@ def check_2_line_widths():
 
 def check_2c_value_tags_stay_visible():
     """On a narrow panel the BARS give way, not the numbers: every gauge row still ends with its
-    complete value tag (the same tag the default-width render shows) at every studio width."""
-    for name, cfg in VARIANTS.items():
+    complete value tag (the same tag the default-width render shows) at every studio width. A long
+    SHOTS 'asked→actual' that can't fit next to the narrowest chain falls back to the ACTUAL length
+    alone (the part after '→') — never a clipped-off prefix like '250.25s→25'."""
+    for name, cfg in dict(VARIANTS, **LONG_CHAINS).items():
         for secs in (600.0, None):
             ref = strip(readout.render_readout(cfg, secs, None)).split("\n")
             tags = {ln.split()[0]: ln.split()[-1] for ln in ref if ln.split() and ln.split()[0] in TITLES}
@@ -105,8 +115,17 @@ def check_2c_value_tags_stay_visible():
                 for ln in strip(readout.render_readout(cfg, secs, None, width=width)).split("\n"):
                     parts = ln.split()
                     if parts and parts[0] in tags:
-                        assert parts[-1] == tags[parts[0]], "%s/width=%d: %s value tag %r, want %r" % (
-                            name, width, parts[0], parts[-1], tags[parts[0]])
+                        want = {tags[parts[0]]}
+                        if parts[0] == "SHOTS":
+                            want.add(tags["SHOTS"].split("→")[-1])
+                        assert parts[-1] in want, "%s/width=%d: %s value tag %r, want %r" % (
+                            name, width, parts[0], parts[-1], sorted(want))
+                        if parts[-1] != tags[parts[0]]:          # fell back: only when it can't fit
+                            ns = int(cfg["nseg"])
+                            mn = 4 + (len("┄+%d" % (ns - 1)) if ns > 1 else 0)   # 1 box + '┄+N'
+                            assert 7 + mn + len(tags["SHOTS"]) > width, \
+                                "%s/width=%d: SHOTS fell back to %r though %r fits" % (
+                                    name, width, parts[-1], tags["SHOTS"])
 
 
 def check_2b_chain_boxes_fit_their_cell():
@@ -355,6 +374,49 @@ def check_13_log_shrink_refits():
         "refit after rotation didn't pick up the new rows: k=%s" % fit["vram"]["ltx"]["k_gb_per_mpxf"]
 
 
+def check_15_transient_read_failure_keeps_fit():
+    """A transient open() failure on experiments.jsonl (EMFILE / EACCES / a rotation race) is NOT
+    'the log shrank to 0 rows': the cached fit must survive untouched (it used to be refit on
+    nothing -> hand constants, sticking until the next run), and the refit happens on the next
+    call once the file reads again (the failure is not memoized)."""
+    import errno
+    repo = tempfile.mkdtemp(prefix="t22transient_")
+    exp = os.path.join(repo, readout.EXPERIMENTS)
+    rows, K, _COEF = _synth_rows()
+    _write_jsonl(exp, rows * 2)                      # 22 rows -> fitted k ~ K, row_count 22
+    first = readout.maybe_refit(repo, min_new_rows=5)
+    assert first and first.get("row_count") == 22, first and first.get("row_count")
+    with open(exp, "a") as f:                        # 6 new runs: enough to refit next time
+        for r in rows[:6]:
+            f.write(json.dumps(r) + "\n")
+    t = os.path.getmtime(os.path.join(repo, readout.FIT_CACHE)) + 10
+    os.utime(exp, (t, t))
+    real_open, fails = open, {"n": 0}
+
+    def flaky_open(path, *a, **k):
+        if str(path).endswith("experiments.jsonl") and not fails["n"]:
+            fails["n"] += 1
+            raise OSError(errno.EMFILE, "Too many open files")
+        return real_open(path, *a, **k)
+
+    readout.open = flaky_open                        # shadows the builtin inside readout only
+    try:
+        during = readout.maybe_refit(repo, min_new_rows=5)
+    finally:
+        del readout.open
+    assert fails["n"] == 1, "the flaky open was never hit"
+    assert during and during.get("row_count") == 22, "read failure refit the cache: %r" % (
+        during and during.get("row_count"))
+    assert abs(during["vram"]["ltx"]["k_gb_per_mpxf"] - K) / K <= 0.25, \
+        "read failure replaced the fitted k with %s" % during["vram"]["ltx"]["k_gb_per_mpxf"]
+    on_disk = readout.load_fit(repo)
+    assert on_disk and on_disk.get("row_count") == 22 and \
+        abs(on_disk["vram"]["ltx"]["k_gb_per_mpxf"] - K) / K <= 0.25, "cache overwritten: %r" % on_disk
+    after = readout.maybe_refit(repo, min_new_rows=5)
+    assert after and after.get("row_count") == 28, "no refit once readable again: %r" % (
+        after and after.get("row_count"))
+
+
 def _director_redirects(nseg, every):
     """Mirror of director.py's main loop redirect gate: after shot 1 and after every continuation,
     redirect iff the clip is still short of target (i.e. more shots follow) and
@@ -393,6 +455,7 @@ def main():
         check_9_missing_and_corrupt_no_raise, check_10_sub_threshold_growth_parses_once,
         check_11_failed_runs_excluded_from_refit, check_12_nonpositive_k_keeps_hand,
         check_13_log_shrink_refits, check_14_fitted_time_director_seams,
+        check_15_transient_read_failure_keeps_fit,
     ]
     for c in checks:
         c()

@@ -110,9 +110,55 @@ for key, field, choices in (("backend", "backend", ("ltx", "wan-turbo", "wan")),
                 if "▲" not in Text.from_markup(fv.render(key, stub(**{field: choice}), width=w) or "").plain]
         check("%s=%s: ▲ marker visible at every width" % (key, choice), not miss, miss[:5])
 
+# ...and it lands on the SAME zone of the (rescaled) bar as at the 48-col design width, the three
+# option glyphs keep their left-to-right order, and the zone labels stay whole + in order
+# (a colliding label slides right instead of vanishing: STEADINESS kept only 'lots of motion'
+# at 24-28 and lost 'gentle' at 37-40; BACKEND clipped 'nicer (slowe' at 24-25).
+def _zone_at(bar, col):
+    return [str(sp.style) for sp in bar.spans if sp.start <= col < sp.end]
+
+# label -> the narrowest panel width at which it must be shown (whole); >= 2 labels always
+for key, choices, labels, need in (
+        ("backend", ("ltx", "wan-turbo", "wan"), ("fast", "nicer (slower)"), (24, 24)),
+        ("steadiness", ("evolve", "balanced", "hold"), ("lots of motion", "gentle", "locked-off"),
+         (24, 37, 29))):
+    for choice in choices:
+        ref = [Text.from_markup(ln) for ln in fv.render(key, stub(**{key: choice}), width=48).split("\n")]
+        want = _zone_at(ref[0], ref[1].plain.index("▲"))
+        bad = []
+        for w in range(24, 201):
+            t = [Text.from_markup(ln) for ln in fv.render(key, stub(**{key: choice}), width=w).split("\n")]
+            mk, pins = t[1].plain, t[2].plain
+            col = mk.index("▲") if "▲" in mk else -1
+            if col < 0 or col >= w or _zone_at(t[0], col) != want:
+                bad.append((w, "▲ zone", col, _zone_at(t[0], col), want))
+            glyphs = [i for i, ch in enumerate(mk) if ch in "▲·"]
+            if len(glyphs) != 3 or mk[glyphs[choices.index(choice)]] != "▲":
+                bad.append((w, "option order", mk))
+            pos = [pins.find(lb) for lb in labels]
+            shown = [p for p in pos if p >= 0]
+            if shown != sorted(shown) or len(shown) < 2 or any(p < 0 <= w - n for p, n in zip(pos, need)):
+                bad.append((w, "labels", pins))
+        check("%s=%s: ▲ on its design zone, options + labels in order, 24..200" % (key, choice),
+              not bad, bad[:3])
+
+# the exact zone-label rows (narrow panels + the 48-col design width, which must never change)
+for key, w, want in (
+        ("backend", 24, "    fast  nicer (slower)"), ("backend", 25, "    fast   nicer (slower)"),
+        ("backend", 32, "    fast        nicer (slower)"),
+        ("backend", 48, "      fast                    nicer (slower)"),
+        ("steadiness", 24, "  lots of motion gentle"), ("steadiness", 32, "  lots of motion    locked-off"),
+        ("steadiness", 40, "  lots of motion gentle   locked-off"),
+        ("steadiness", 48, "  lots of motion   gentle      locked-off")):
+    got = Text.from_markup(fv.render(key, stub(), width=w)).plain.split("\n")[2]
+    check("%s @%d: zone labels %r" % (key, w, want), got == want, repr(got))
+
 # SEED: user text can't inject markup, and the card keeps its exact width in CELLS
 for seed in ("[/]", "[b]bold?[/b]", "\\", "x\\", "[#ff0000]r", "種子値テスト", "漢a", "😀😀", "é́x",
-             "nl\nx", "tab\tx", "12345678901234567890"):
+             "nl\nx", "tab\tx", "12345678901234567890",
+             # rich measures these differently from unicodedata's East-Asian width: skin-tone
+             # modifier (0 cells), trigrams / monograms / hexagrams / Tai Xuan Jing (2), Hangul fillers (0)
+             "👍🏽", "👍🏽👍🏽", "☰☰☰☰", "⚊⚋⚌⚍", "䷀䷁", "𝌆𝌇", "\u3164\u3164", "ᅠᅡ", "\uffa0x"):
     art = fv.render("seed", stub(seed=seed), width=48)
     try:
         t = Text.from_markup(art or "")
@@ -125,6 +171,11 @@ for seed in ("[/]", "[b]bold?[/b]", "\\", "x\\", "[#ff0000]r", "種子値テス�
     rows = t.plain.split("\n")
     card = [cell_len(r) for r in rows[:3]] + [cell_len(r) for r in rows[4:7]]
     check("seed %r: card rows all the same cell width" % seed, len(set(card)) == 1, card)
+    zw = [ch for ch in rows[1] if cell_len(ch) == 0]     # a 0-cell char (skin-tone modifier, Hangul
+    check("seed %r: no zero-width chars reach the card" % seed, not zw, zw)   # filler) -> '?'
+    over = [(w, ln) for w in WIDTHS[1:] for ln in Text.from_markup(
+            fv.render("seed", stub(seed=seed), width=w) or "").plain.split("\n") if cell_len(ln) > w]
+    check("seed %r: every line fits every width (clip measured like rich)" % seed, not over, over[:2])
 
 # SEG meter modes: single = AUTO cap; director honors + caps
 d1 = stub(mode="single")

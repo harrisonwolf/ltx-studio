@@ -237,7 +237,9 @@ def drift_risk(cfg):
 # auto-refit over runs/experiments.jsonl  (median-ratio, outlier-robust)
 # ============================================================================================
 def _read_experiments(path):
-    """Parse the jsonl into a list of dicts, skipping corrupt lines. Missing file -> []."""
+    """Parse the jsonl into a list of dicts, skipping corrupt lines. Unreadable (missing, EMFILE,
+    EACCES, ...) -> None, NOT [] — an empty list would read as "the log shrank to 0 rows" and
+    refit the cache down to the hand constants on a transient open() failure."""
     rows = []
     try:
         with open(path) as f:
@@ -250,7 +252,7 @@ def _read_experiments(path):
                 except Exception:
                     pass
     except OSError:
-        return []
+        return None
     return rows
 
 
@@ -363,8 +365,9 @@ def maybe_refit(repo, min_new_rows=5):
     hit = _REFIT_MEMO.get((repo, min_new_rows))
     if hit is not None and hit[0] == key and key[0] is not None:
         return hit[1]
-    res = _maybe_refit(repo, min_new_rows)
-    _REFIT_MEMO[(repo, min_new_rows)] = (key, res)
+    res, settled = _maybe_refit(repo, min_new_rows)
+    if settled:                                   # a transient read failure is retried next call
+        _REFIT_MEMO[(repo, min_new_rows)] = (key, res)
     return res
 
 
@@ -372,7 +375,8 @@ def _maybe_refit(repo, min_new_rows):
     """Cheap gate: if experiments.jsonl mtime <= cache mtime, return cached fit. Else parse the
     jsonl (skip corrupt lines), and if it has >= min_new_rows more rows than the cache's recorded
     row_count, refit + atomically rewrite the cache. First call (no cache) always builds a fit.
-    Runs inline; no threads. Never raises."""
+    Runs inline; no threads. Never raises. -> (fit, settled): settled=False when the jsonl could
+    not be read this time (the cached fit is returned untouched and must not be memoized)."""
     try:
         cache_path = os.path.join(repo, FIT_CACHE)
         exp_path = os.path.join(repo, EXPERIMENTS)
@@ -380,29 +384,31 @@ def _maybe_refit(repo, min_new_rows):
         try:
             exp_mtime = os.path.getmtime(exp_path)
         except OSError:
-            return cached                                        # no experiments file -> whatever we cached
+            return cached, True                                  # no experiments file -> whatever we cached
         if cached is not None:
             try:
                 cache_mtime = os.path.getmtime(cache_path)
             except OSError:
                 cache_mtime = -1.0
             if exp_mtime <= cache_mtime:
-                return cached                                    # nothing changed -> no parse
+                return cached, True                              # nothing changed -> no parse
         rows = _read_experiments(exp_path)
+        if rows is None:
+            return cached, False                                 # transient read failure -> keep the fit
         prev = _f((cached or {}).get("row_count")) if cached else 0.0
         if cached is not None and 0 <= (len(rows) - prev) < min_new_rows:
-            return cached                                        # too few new rows to bother re-fitting
+            return cached, True                                  # too few new rows to bother re-fitting
         # (fewer rows than the cache saw = the log was rotated/reset -> refit now, else it'd never update)
         fit = _refit(rows)
         fit["row_count"] = len(rows)
         fit["ts"] = time.time()
         _save_fit(repo, fit)
-        return fit
+        return fit, True
     except Exception:
         try:
-            return load_fit(repo)
+            return load_fit(repo), True
         except Exception:
-            return None
+            return None, True
 
 
 def _fitted_time(cfg, fit):
@@ -624,6 +630,11 @@ def render_readout(cfg, secs, fit, width=None):
             asked = _f(cfg.get("seconds"))
             val = ("%gs→%.1fs" % (asked, actual)) if (asked > 0 and abs(asked - actual) > 0.05) \
                 else ("%.1fs" % actual)
+            mn = 4 + (len("┄+%d" % (ns - 1)) if ns > 1 else 0)     # narrowest chain: 1 box + '┄+N'
+            if width and 7 + mn + len(val) > int(width):
+                val = "%.1fs" % actual             # 'asked→actual' won't fit: the real length only,
+                if 7 + mn + len(val) > int(width):  # never a clipped-off prefix of the number
+                    val = ""
             lines.append(_row("SHOTS", _chain_boxes(ns, bw(val), col), _c(col, val)))
             cap = "%d × %.1fs" % (ns, sf / fpsv)
             if secs is not None:
