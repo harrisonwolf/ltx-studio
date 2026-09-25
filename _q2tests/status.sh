@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-cd /home/wolve/video_gen/FramePack || exit 1
+cd "$(dirname "$0")/.." || exit 1
 echo "=== now: $(date +%H:%M:%S) ==="
 echo "=== driver log ==="
 cat outputs/gpu_accept.driver.log 2>/dev/null

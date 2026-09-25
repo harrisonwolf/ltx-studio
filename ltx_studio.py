@@ -3,7 +3,7 @@
 Launch:  ./ltx-studio.sh   (or:  ./venv/bin/python ltx_studio.py)
 Chains LTX generation -> (optional) AnimateDiff enhance suite (RIFE / upscale / face).
 """
-import os, sys, glob, time, subprocess
+import os, sys, time, subprocess
 
 from textual import work
 from textual.app import App, ComposeResult

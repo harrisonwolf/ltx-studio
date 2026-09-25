@@ -1,6 +1,6 @@
 """build() command matrix — the highest-value contract in the studio: form snapshot -> engine argv.
 Uses the headless pilot with a stubbed JobManager and full `over` snapshots (no widget mutation)."""
-import sys, os, types, asyncio
+import sys, os, asyncio
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import studio
 
@@ -30,7 +30,6 @@ def arg(cmd, flag):
     return cmd[cmd.index(flag) + 1] if flag in cmd else None
 
 async def main():
-    global ok
     app = studio.Studio()
     async with app.run_test(size=(179, 52)) as pilot:
         await pilot.pause()

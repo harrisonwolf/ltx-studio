@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # digest.sh <logname> [<logname>...] -- print provenance + telemetry markers for each run log.
-cd /home/wolve/video_gen/FramePack || exit 1
+cd "$(dirname "$0")/.." || exit 1
 for n in "$@"; do
   f="outputs/$n.log"
   echo "===== $n ====="

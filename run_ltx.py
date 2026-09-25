@@ -137,7 +137,7 @@ def _cb(pp, i, t, cbk):
     return cbk
 
 kw["callback_on_step_end"] = _cb
-print(f"[[SEG 1 1]]", flush=True)
+print("[[SEG 1 1]]", flush=True)
 print("[[PHASE warmup]]", flush=True)
 print("[[LOAD 5 5 warming up CUDA (first step is slow)]]", flush=True)
 frames = pipe(**kw).frames[0]

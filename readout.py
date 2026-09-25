@@ -16,7 +16,7 @@ import json
 import statistics
 import time
 
-FIT_CACHE = "runs/readout_fit.json"       # relative to the FramePack repo root
+FIT_CACHE = "runs/readout_fit.json"       # relative to the repo root (joined onto `repo` below)
 EXPERIMENTS = "runs/experiments.jsonl"
 
 # ---- palette (green-phosphor, matches studio.py + field_visuals.py Rich markup tags) ----
