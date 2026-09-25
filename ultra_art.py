@@ -16,8 +16,10 @@ Design rules (see plan agile-tumbling-valley):
 - The base UI stays minimal: this only paints when an ultra theme is active AND on an opted-in
   surface. Shimmer lives inside the sprite markup only, never on CSS borders.
 """
+import functools
 import math
 import os
+import re
 
 SHIMMER_PERIOD = 2          # sprite shimmer/scroll cadence (pixel art — stays chunky)
 
@@ -48,18 +50,14 @@ EFFECTS = {
     "ultra-vaporwave": {"mode": "wave",     "base": "#d888c8", "hot": "#ffd0ec"},
 }
 
-_PAL = {}                   # optional theme palette (set by set_palette); reserved for future re-tint
+# "[/#abc123][#abc123]" = a cell closing then reopening the SAME colour -> drop both tags so
+# same-colour neighbours share one tag. Identical rendered text + styles, but ~3-10x less markup
+# for Rich to parse on the 15 fps path. The lookbehind skips an escaped "\[" literal.
+_SAME_COLOR_SEAM = re.compile(r"(?<!\\)\[/(#[0-9a-fA-F]{6})\]\[\1\]")
 
 
-def set_palette(pal):
-    """Optional hook mirrored from field_visuals — rebinds an active-theme palette the renderers MAY
-    consult. Best-effort; the sprites carry their own fixed palettes today, so this is a no-op-safe
-    stash for future themed recoloring."""
-    try:
-        _PAL.clear()
-        _PAL.update(pal or {})
-    except Exception:
-        pass
+def _merge_runs(markup):
+    return _SAME_COLOR_SEAM.sub("", markup) if markup else markup
 
 
 def _frozen():
@@ -299,6 +297,7 @@ def render_sprite(spec, beat, palette=None, cols=None, surge=0.0):
 
 
 # ---------------------------------------------------------------- breakout effects ----------------
+@functools.lru_cache(maxsize=256)   # the palette is a fixed set of constants; parse each once
 def _rgb(h):
     h = h.lstrip("#")
     return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
@@ -344,7 +343,7 @@ def electron_text(text, beat, base, hot, mode="electron", speed=2, tail=6, wavel
                 c = gcol.get((li, ci), base)
                 buf.append("[%s]%s[/%s]" % (c, ("\\[" if ch == "[" else ch), c))
             out.append("".join(buf))
-        return "\n".join(out)
+        return _merge_runs("\n".join(out))
     except Exception:
         return None
 
@@ -362,7 +361,8 @@ def render_electrons(text, heads, base, hot, tail=6):
         LEAD = 1.5                                        # smooth lead-in ahead of the head so the crest
         #                                                  glides across sub-char positions (no stepping)
         for h in (heads or ()):
-            for gi in range(len(positions)):
+            lo = max(0, int(h - tail) - 1)                # only chars within [h-tail, h+LEAD] can light
+            for gi in range(lo, min(len(positions), int(h + LEAD) + 2)):
                 d = h - gi                                # >0 behind the head (tail); <0 ahead (lead-in)
                 if 0.0 <= d < tail:
                     f = 1.0 - d / float(max(1, tail))     # trailing comet tail
@@ -384,7 +384,7 @@ def render_electrons(text, heads, base, hot, tail=6):
                 c = gcol.get((li, ci), base)
                 buf.append("[%s]%s[/%s]" % (c, ("\\[" if ch == "[" else ch), c))
             out.append("".join(buf))
-        return "\n".join(out)
+        return _merge_runs("\n".join(out))
     except Exception:
         return None
 
@@ -576,15 +576,16 @@ def _tv(beat, width=None):
         else:                                             # ---- the dead channel (bands rolling up) ----
             roll = b * 0.22                               # slow vertical-hold drift (~16 s per cycle)
             tp = (H + 2.0) - ((b * 0.11) % (H + 4.0))     # tracking line: float row, rolls up slower
+            shear = [0.06 * math.sin(x * 0.35 + roll * 0.7) for x in range(W)]   # faint diagonal shear (per column)
             for y in range(H):
                 # two soft harmonics -> organic rolling luminance; colour-lerped so it GLIDES
                 s = 0.5 + 0.35 * math.sin((y + roll) * 0.9) + 0.15 * math.sin((y + roll) * 2.3 + 1.7)
                 tl = max(0.0, 1.0 - abs(y - tp))          # sub-row soft envelope for the tracking line
+                g = "█" if y % 2 else "▓"
                 for x in range(W):
-                    e = 0.06 * math.sin(x * 0.35 + roll * 0.7)    # faint diagonal shear
-                    v = max(0.0, min(1.0, s + e + 0.38 * tl))
+                    v = max(0.0, min(1.0, s + shear[x] + 0.38 * tl))
                     c = _lerp("#14181d", "#9aa3ac", v)
-                    grid[y][x] = "[%s]%s[/%s]" % (c, "█" if y % 2 else "▓", c)
+                    grid[y][x] = "[%s]%s[/%s]" % (c, g, c)
         return chr(10).join("".join(r) for r in grid)
     except Exception:
         return ""
@@ -847,6 +848,6 @@ def render(theme_name, beat, width=None):
         return None
     b = 0.0 if _frozen() else float(beat)             # float clock -> smooth sparkle/star twinkle
     try:
-        return fn(b, width)
+        return _merge_runs(fn(b, width))
     except Exception:
         return None
