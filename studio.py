@@ -3280,7 +3280,12 @@ class Studio(App):
                 consult = bool(self.consult.alive())
             except Exception:
                 consult = False
-            cfg = {"backend": rd("backend"), "mode": rd("mode"), "steadiness": rd("steadiness"),
+            _steady = rd("steadiness") or "hold"   # what the ENGINE runs: blank/echo directive -> hold
+            if rd("mode") == "director" and _steady != "hold":
+                _dv = (rd("directive") or "").strip()
+                if not _dv or _dv == (rd("prompt") or "").strip():
+                    _steady = "hold"
+            cfg = {"backend": rd("backend"), "mode": rd("mode"), "steadiness": _steady,
                    "W": W, "H": H, "fps": fps, "seg_frames": seg_frames, "total_frames": total_frames,
                    "nseg": nseg, "chain": chain, "seconds": rd("seconds"),
                    "steps": rd("steps"), "cfg": rd("cfg"),

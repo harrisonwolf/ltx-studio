@@ -87,6 +87,20 @@ async def main():
         plan = str(app.screen.query_one("#eopt_eta").render())
         check("restore-only enhance plan names the pass", "restore" in plan and "no passes" not in plan, plan)
         app.screen.dismiss(None); await pilot.pause(0.2)
+        # the readout gets the steadiness the ENGINE runs (evolve + blank directive -> hold)
+        from textual.widgets import Select, TextArea, Input
+        seen = {}
+        real_rr = studio.readout.render_readout
+        studio.readout.render_readout = lambda cfg, *a, **k: (seen.update(cfg), real_rr(cfg, *a, **k))[1]
+        try:
+            app.query_one("#mode", Select).value = "director"; app.query_one("#seconds", Input).value = "12"
+            await pilot.pause(0.2)
+            app.query_one("#steadiness", Select).value = "evolve"
+            app.query_one("#directive", TextArea).text = ""
+            await pilot.pause(0.2); app.update_est()
+            check("readout sees evolve+blank directive as hold", seen.get("steadiness") == "hold", seen.get("steadiness"))
+        finally:
+            studio.readout.render_readout = real_rr
         # a malformed schematic can't take the app down (the markup parse is guarded)
         real = studio.field_visuals.render
         studio.field_visuals.render = lambda *a, **k: "seed [/] oops"
