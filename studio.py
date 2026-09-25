@@ -2966,6 +2966,9 @@ class Studio(App):
                    + common + ["--ltx_repo", LTX_REPO_DEFAULT])   # single clips are always LTX; pin 0.9.5 (Q1)
             if want_distilled:                              # run_ltx.py mirrors director.py's --ltx_variant handling
                 cmd += ["--ltx_variant", "distilled"]
+            anchors = (V("anchors") or "").strip()
+            if anchors:                                     # the style leash (+ STYLE presets) applies here too
+                cmd += ["--anchors", anchors]
             if img:
                 cmd += ["--image", img]
             title = prompt[:40]

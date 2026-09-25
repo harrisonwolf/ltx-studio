@@ -10,6 +10,14 @@ PURE stdlib (no torch / textual / studio imports).
 import os
 import json
 
+
+def fold_anchors(prompt, anchors):
+    """Append the ANCHORS (the 'style leash') to a prompt that is reused as-is — every shot of a
+    chained run, or the one clip of a single-shot run. Empty anchors -> prompt unchanged. Shared by
+    director.py and run_ltx.py so both paths fold identically."""
+    a = (anchors or "").strip()
+    return (prompt.rstrip(" .,") + ", " + a) if a else prompt
+
 # Curated built-in presets: distinct vibes, tuned for the LTX/Wan look. Edit freely.
 BUILTIN = {
     "Cinematic":        ["cinematic", "35mm", "shallow depth of field", "film grain", "dramatic lighting"],

@@ -16,6 +16,7 @@ from gpu_budget import cap_vram; cap_vram()   # leave ~12% VRAM free for the OS 
 ap = argparse.ArgumentParser()
 ap.add_argument("--prompt", required=True)
 ap.add_argument("--image", default=None, help="start image -> image-to-video; omit for text-to-video")
+ap.add_argument("--anchors", default="", help="style/subject tokens appended to the prompt (same fold as director.py)")
 ap.add_argument("--n_prompt", default="worst quality, blurry, distorted, jittery, low detail, "
                 "deformed, malformed anatomy, missing or extra limbs, mutated, fused body, headless")
 ap.add_argument("--seconds", type=float, default=5.0)
@@ -35,6 +36,12 @@ ap.add_argument("--ltx_variant", default=None, choices=["distilled"],
                 help="LTX transformer variant (distilled = 0.9.8-distilled 2B, forces few-step/cfg=1.0). "
                      "Omit -> byte-identical 0.9.5 run. Mirrors director.py.")
 args = ap.parse_args()
+# ANCHORS (the style leash, incl. STYLE presets): the studio passes them on single clips too, folded
+# exactly as director.py folds them for chained runs. Omitted -> prompt (and output) unchanged.
+if args.anchors:
+    from style_presets import fold_anchors
+    args.prompt = fold_anchors(args.prompt, args.anchors)
+    print("folded anchors into the prompt -> %s" % args.prompt, flush=True)
 # --ltx_variant distilled: swap ONLY the transformer for the 0.9.8-distilled 2B single-file checkpoint,
 # keeping 0.9.5's T5/tokenizer/VAE/scheduler (same as director.py's distilled path). The distill is
 # CFG-distilled + few-step, so clamp steps<=8 and force cfg=1.0 HERE -- so the [[STEP]] totals, the

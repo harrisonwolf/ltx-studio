@@ -18,6 +18,7 @@ from diffusers import LTXConditionPipeline
 from diffusers.pipelines.ltx.pipeline_ltx_condition import LTXVideoCondition
 from diffusers.utils import export_to_video, load_image
 import ltx_preview
+import style_presets
 
 
 # --- suspend signal ---
@@ -182,9 +183,8 @@ def palette_lock(frames, pool, strength):
 def _fold_anchors(prompt, anchors):
     """In chained (non-director) mode the ONE prompt is reused for every shot with no VLM to keep the
     subject/style consistent -> fold the anchors (the 'style leash') straight into that prompt. In
-    director mode the VLM folds anchors in per seam, so this is skipped there."""
-    a = (anchors or "").strip()
-    return (prompt.rstrip(" .,") + ", " + a) if a else prompt
+    director mode it seeds shot 1 and the VLM re-folds them per seam."""
+    return style_presets.fold_anchors(prompt, anchors)
 
 
 def write_checkpoint(ckpt_dir, seg_idx, video, current_prompt, directive,

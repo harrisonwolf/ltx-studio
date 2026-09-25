@@ -21,6 +21,7 @@ Output goes to `outputs/ltx.mp4` by default. Each run overwrites it, so pass `--
 |------|---------|-------|
 | `--prompt` / `--n_prompt` | (required) / artifact list | What to make / avoid |
 | `--image PATH` | none | Start frame → image-to-video (omit = text-to-video) |
+| `--anchors` | none | Style/subject tokens appended to the prompt (the studio's ANCHORS field) |
 | `--seconds` `--fps` | 5, 24 | Frames = seconds × fps, rounded **down** to 8k+1 |
 | `--width` `--height` | 704, 480 | Rounded **down** to a multiple of 32 (try 512x320 for speed/VRAM) |
 | `--steps` | 40 | ~30–50 for quality |

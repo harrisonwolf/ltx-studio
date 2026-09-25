@@ -29,6 +29,14 @@ BASE = {"mode": "single", "prompt": "a test scene", "directive": "", "anchors": 
 def arg(cmd, flag):
     return cmd[cmd.index(flag) + 1] if flag in cmd else None
 
+import re
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+def accepted_flags(script):
+    """--flags the worker script's argparse declares (static read: the scripts import torch)."""
+    return set(re.findall(r'add_argument\(\s*"(--[\w-]+)"', open(os.path.join(REPO, script)).read()))
+def unknown_flags(cmd):
+    return sorted(f for f in cmd[2:] if f.startswith("--") and f not in accepted_flags(cmd[1]))
+
 async def main():
     app = studio.Studio()
     async with app.run_test(size=(179, 52)) as pilot:
@@ -68,6 +76,18 @@ async def main():
         # 7. same-second collision safety: distinct outputs for identical blank names
         o1, o2 = arg(cmd, "--out"), arg(cmd2, "--out")
         check("unique output slugs for same-second builds", o1 != o2, (o1, o2))
+        # 8. ANCHORS reach the worker on EVERY path (single clips used to drop them silently)
+        _t, _k, cmd8, p8 = app.build(dict(BASE, anchors="watercolor, muted palette"))
+        check("single ltx ships --anchors", "run_ltx.py" in cmd8[1] and arg(cmd8, "--anchors") == "watercolor, muted palette", cmd8)
+        check("blank anchors ship no flag (byte-identical argv)", "--anchors" not in cmd)
+        _t, _k, cmd9, _p = app.build(dict(BASE, seconds="8", anchors="noir"))
+        check("chained ltx ships --anchors", "director.py" in cmd9[1] and arg(cmd9, "--anchors") == "noir", cmd9)
+        # 9. every flag build() emits is one the target script's argparse accepts (else: instant crash)
+        for name, c in (("single", cmd8), ("chained", cmd9), ("wan", cmd3), ("wan cfg", cmd4),
+                        ("turbo", cmd6), ("director", cmd7),
+                        ("single distilled", app.build(dict(BASE, _ltx_variant="distilled", anchors="x"))[2]),
+                        ("single i2v", app.build(dict(BASE, image="in.png"))[2])):
+            check(f"{name}: argv flags all accepted by {os.path.basename(c[1])}", not unknown_flags(c), unknown_flags(c))
 
 asyncio.run(main())
 print("RESULT:", "PASS" if ok else "FAIL")
