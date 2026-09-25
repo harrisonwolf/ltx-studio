@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 """LTX-Video CLI (diffusers). Text-to-video, or image-to-video if --image is given.
-8GB-tuned: 2B transformer stays resident on GPU; T5 text encoder offloads via
-enable_model_cpu_offload; VAE tiling on. No compilation / fp8 needed.
+8GB-tuned: sequential CPU offload by default (weights stream to the GPU layer by layer);
+--fast_offload switches to enable_model_cpu_offload (needs ~10GB free). VAE tiling on.
+No compilation / fp8 needed. The studio uses this for short single-shot LTX runs.
 
   python run_ltx.py --prompt "..." --seconds 5
   python run_ltx.py --image start.png --prompt "..." --seconds 5

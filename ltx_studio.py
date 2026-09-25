@@ -1,6 +1,7 @@
 #!/usr/bin/env python
-"""LTX-Video Studio - a Pip-Boy themed TUI (Fallout aesthetic) for local video generation.
-Launch:  ./ltx-studio.sh   (or:  ./venv/bin/python ltx_studio.py)
+"""LEGACY: the original single-file LTX-Video Studio TUI, superseded by studio.py.
+Nothing launches it any more (./ltx-studio.sh now runs studio.py); run it directly with
+./venv/bin/python ltx_studio.py if you want the old UI.
 Chains LTX generation -> (optional) AnimateDiff enhance suite (RIFE / upscale / face).
 """
 import os, sys, time, subprocess

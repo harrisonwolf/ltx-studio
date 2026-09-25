@@ -1,7 +1,7 @@
 """Event sound harness — play a (custom) sound effect on studio events.
 
-MINIMAL + EXTENSIBLE. Right now studio.py only fires "run_done", but play(event, repo) accepts ANY
-event name, so wiring "run_start" / "run_error" / "run_queued" / etc. later is a one-line call each.
+MINIMAL + EXTENSIBLE. studio.py fires "run_start", "run_done", "run_stall" and "queue_empty";
+play(event, repo) accepts ANY event name, so wiring another event is a one-line call.
 
 CONFIG (all optional) — runs/studio_config.json:
   {"sounds": {

@@ -296,7 +296,7 @@ def open_in_player(linux_path):
 
 
 class ConsultDaemon:
-    """App-owned persistent CONSULT daemon (Qwen2.5-VL-7B). Warmed in the background while the
+    """App-owned persistent CONSULT daemon (Qwen3-VL-4B, vlm_planner.py). Warmed in the background while the
     GPU is idle and killed when a run needs the GPU, so opening CONSULT is instant. The daemon
     also exits on its own when the studio closes its stdin (EOF), so it never orphans."""
 
@@ -472,7 +472,7 @@ def _copy_chat(app, history, status):
 class ConsultScreen(ModalScreen):
     """Conversational creative director: describe a vision, it proposes prompts + dials,
     refine in chat, then APPLY writes the config into the NEW RUN form. Talks to a resident
-    Qwen2.5-VL-7B daemon (vlm_planner.py) in the isolated venv; killed on close."""
+    Qwen3-VL-4B daemon (vlm_planner.py) in the isolated venv; killed on close."""
     DEFAULT_CSS = """
     ConsultScreen { align: center middle; background: $background 80%; }
     #consultbox { width: 86%; height: 88%; border: round $primary; background: $background; padding: 1 2; }
@@ -546,7 +546,7 @@ class ConsultScreen(ModalScreen):
             self._show_cfg(self.cfg)
 
     def on_unmount(self):
-        # Free the 7B director's ~5.6GB as soon as CONSULT closes; it reloads on next open.
+        # Free the director model's VRAM as soon as CONSULT closes; it reloads on next open.
         try:
             self.app.consult.kill()
         except Exception:
@@ -694,7 +694,7 @@ class ConsultScreen(ModalScreen):
 
 
 class ChatScreen(ModalScreen):
-    """Talk to the underlying Qwen2.5-VL model DIRECTLY — not 'as the director', just the raw
+    """Talk to the underlying Qwen3-VL model DIRECTLY — not 'as the director', just the raw
     language/vision model for general use. Reuses the resident daemon with a neutral system prompt
     (raw=True); the model's VRAM is freed on close, same as consult."""
     DEFAULT_CSS = """
@@ -726,7 +726,7 @@ class ChatScreen(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="chatbox"):
-            yield Static("»  CHAT WITH THE MODEL  (Qwen2.5-VL, raw)", id="chattitle")
+            yield Static("»  CHAT WITH THE MODEL  (Qwen3-VL, raw)", id="chattitle")
             yield Static("a direct conversation with the language/vision model — not the director. attach an image path to discuss it.", id="chatsub")
             yield RichLog(id="rawlog", markup=True, wrap=True)
             yield Static("", id="rawstream")
