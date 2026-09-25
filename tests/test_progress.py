@@ -179,7 +179,6 @@ async def main():
         # ...nor is 1250 s, and a redirect is never auto-suspended / killed (director.py times out and
         # recovers its own waits: daemon load 900 s + request 600 s)
         calls = []
-        real_s, real_k = app.mgr.__class__.__dict__.get("suspend"), app.mgr.__class__.__dict__.get("hard_interrupt")
         app.mgr.suspend = lambda: calls.append("suspend"); app.mgr.hard_interrupt = lambda: calls.append("kill")
         for idle in (1250, 1600, 2500):
             app._stall_state = {"sig": (jv.id, jv.phase, jv.seg, jv.step, 0), "pmt": 0.0,
