@@ -20,6 +20,13 @@ from studio_core import JobManager, REPO, ARCHIVED
 
 from studio_themes import EXTRA_THEMES, ULTRA_THEMES, ULTRA_NAMES, SPAL, tmark, THEME_MIGRATE   # ULTRA_NAMES: re-exported for the tests
 
+def _argv_core(cmd):
+    """A worker argv minus the per-job output paths and the seed: two runs whose cores match would
+    render the same thing (used to refuse A/B and PAIR variants that differ only in a dropped dial)."""
+    skip = {"--out", "--frames_dir", "--seed"}
+    return [a for i, a in enumerate(cmd) if a not in skip and (i == 0 or cmd[i - 1] not in skip)]
+
+
 def _run_kind(job):
     """T11: classify a job's PURPOSE from its params, distinct from job.kind (single/chained/
     director/enhance, which is really the BACKEND shape). Returns (glyph, label)."""
@@ -2003,10 +2010,12 @@ class Studio(App):
             try:
                 _cfg = load_studio_config()
                 _snd = dict(_cfg.get("sounds") or {})
-                _snd["enabled"] = (event.select.value == "on")
-                save_studio_config({**_cfg, "sounds": _snd})
-                self.query_one("#newinfo", Static).update(
-                    "[#9dffce]event sounds: %s[/#9dffce]" % event.select.value)
+                # equal to the saved pref = the launch-time restore, not a pick: keep the INFO intro
+                if (event.select.value == "on") != bool(_snd.get("enabled", True)):
+                    _snd["enabled"] = (event.select.value == "on")
+                    save_studio_config({**_cfg, "sounds": _snd})
+                    self.query_one("#newinfo", Static).update(
+                        "[#9dffce]event sounds: %s[/#9dffce]" % event.select.value)
             except Exception:
                 pass
         elif sid in ("snd_done", "snd_stall"):   # per-event WAV pick: persist ONLY — no audition.
@@ -2017,11 +2026,13 @@ class Studio(App):
                 _cfg = load_studio_config()
                 _snd = dict(_cfg.get("sounds") or {})
                 _evm = dict(_snd.get("events") or {})
-                _evm[ev] = "sfx/%s" % event.select.value
-                _snd["events"] = _evm
-                save_studio_config({**_cfg, "sounds": _snd})
-                self.query_one("#newinfo", Static).update(
-                    tmark("success", "♪ %s → %s   (▶ TEST SOUND to hear it)" % (ev, event.select.value)))
+                # already the effective pick (launch restore / initial value) -> no save, no notice
+                if event.select.value != os.path.basename(_evm.get(ev) or "%s.wav" % ev):
+                    _evm[ev] = "sfx/%s" % event.select.value
+                    _snd["events"] = _evm
+                    save_studio_config({**_cfg, "sounds": _snd})
+                    self.query_one("#newinfo", Static).update(
+                        tmark("success", "♪ %s → %s   (▶ TEST SOUND to hear it)" % (ev, event.select.value)))
             except Exception:
                 pass
         self.update_est()
@@ -2647,18 +2658,26 @@ class Studio(App):
         # (ultra-theme animation runs on its OWN ~15fps timer — see _ultra_frame — not this 0.5s tick)
         # queue + archive tables — rebuilt only when content changes (cursor stays put; no rubber-band)
         _dt = lambda ts: time.strftime("%m-%d %H:%M", time.localtime(ts)) if ts else "—"
+        def _blind_hides(j, dial):
+            p = j.params or {}
+            return bool(p.get("pair_blind")) and not p.get("pair_revealed") and p.get("pair_varied_dial") == dial
+
         def _atitle(j):
             pre = ("★ " if (j.params or {}).get("favorite") else "") + \
                   ("▲ " if (j.kind == "enhance" and not (j.title or "").startswith("▲")) else "")
+            if _blind_hides(j, "prompt"):
+                return (pre + "blind A/B " + str((j.params or {}).get("pair_id", ""))[-4:])[:30]
             return (pre + (j.title or ""))[:30]
         def _arow(j):
-            return (j.id, j.id, _atitle(j), j.status, _dt(j.started), _dt(j.finished), fmt(j.elapsed()), _vidlen(j))
+            return (j.id, j.id, _atitle(j), j.status, _dt(j.started), _dt(j.finished), fmt(j.elapsed()),
+                    "—" if _blind_hides(j, "seconds") else _vidlen(j))
         # a finished run's row is frozen: cache it on everything it reads, so ticks stop re-formatting
         # the whole history just for _sync_table to find the signature unchanged
         acache, arows = self._arow_cache, []
         for j in m.archived():
             p = j.params or {}
-            key = (j.status, j.title, j.kind, j.created, j.started, j.finished, p.get("favorite"), p.get("seconds"))
+            key = (j.status, j.title, j.kind, j.created, j.started, j.finished, p.get("favorite"), p.get("seconds"),
+                   p.get("pair_revealed"))
             hit = acache.get(j.id) if j.finished else None
             if hit is None or hit[0] != key:
                 hit = (key, _arow(j))
@@ -3264,6 +3283,20 @@ class Studio(App):
                 "[#ffcf5c]Couldn't open a player. Paste this into Explorer:[/#ffcf5c]\n  "
                 + self._winpath(abs_out))
 
+    def _steadiness_gate(self, over=None):
+        """HONEST GATE (director audit #1): director.py runs HOLD whenever the directive is blank or
+        echoes the prompt — for BALANCED as well as EVOLVE — so queuing either like that would record a
+        steadiness that never executed (and a hold-vs-balanced/evolve blind A/B would compare two
+        identical runs). Returns the refusal markup, or None when the run is honest."""
+        _s = (self.v("steadiness", over) or "hold")
+        if self.v("mode", over) == "director" and _s != "hold":
+            _d = (self.v("directive", over) or "").strip()
+            if not _d or _d == (self.v("prompt", over) or "").strip():
+                return (f"[#ffcf5c]{_s.upper()} needs a DIRECTIVE distinct from the PROMPT — the engine would "
+                        f"silently run HOLD (and record it as {_s}). Write a directive (the arc to move "
+                        f"toward), or switch STEADINESS to hold.[/#ffcf5c]")
+        return None
+
     def _queue_current_run(self, over=None, skip_budget=False):
         """Build the NEW RUN form into a job and enqueue it. Shared by QUEUE RUN + RE-ROLL + ×N REPLICATE.
         over: optional field-id snapshot (blind-pair) built WITHOUT mutating the live form.
@@ -3273,18 +3306,10 @@ class Studio(App):
         if not (self.v("prompt", over) or "").strip():
             self.query_one("#newinfo", Static).update("[#ffcf5c]Enter a PROMPT first.[/#ffcf5c]")
             return None
-        # HONEST GATE (director audit #1): the engine silently runs HOLD when the directive is blank or
-        # echoes the prompt — queuing "evolve" like that would record a steadiness that never executed
-        # (and a hold-vs-evolve blind A/B would compare two identical runs). Refuse with the reason.
-        if (self.v("mode", over) == "director"
-                and (self.v("steadiness", over) or "hold") == "evolve"):
-            _d = (self.v("directive", over) or "").strip()
-            if not _d or _d == (self.v("prompt", over) or "").strip():
-                self.query_one("#newinfo", Static).update(
-                    "[#ffcf5c]EVOLVE needs a DIRECTIVE distinct from the PROMPT — the engine would "
-                    "silently run HOLD (and record it as evolve). Write a directive (the arc to move "
-                    "toward), or switch STEADINESS to hold/balanced.[/#ffcf5c]")
-                return None
+        _gate = self._steadiness_gate(over)
+        if _gate:
+            self.query_one("#newinfo", Static).update(_gate)
+            return None
         try:
             title, kind, cmd, params = self.build(over)
         except Exception as ex:   # bad numbers must never crash the app (a crash kills a live render)
@@ -3526,7 +3551,7 @@ class Studio(App):
         self._blind_apply_var(cfg, var, value)
         return cfg
 
-    def _queue_blind_variant(self, base_cfg, var, value, seed):
+    def _queue_blind_variant(self, base_cfg, var, value, seed, skip_budget=False):
         """Build the base-form SNAPSHOT with ONE variable = value + the shared seed, and queue it
         WITHOUT mutating the live form widgets. Building from the snapshot dict (via build(over=...))
         means no on_select_changed/_sync_cfg_default side-effect can fire and clobber cfg/steps, so the
@@ -3541,7 +3566,7 @@ class Studio(App):
                 "[#ff6d6d]checkpoint A/B needs backend=ltx (0.9.8-distilled is LTX-only) — "
                 "switch BACKEND to ltx, then retry.[/#ff6d6d]")
             return None
-        return self._queue_current_run(over=cfg)          # same gated path as QUEUE RUN, dict-driven build
+        return self._queue_current_run(over=cfg, skip_budget=skip_budget)   # same gated path as QUEUE RUN
 
     def _blind_msg(self, markup):
         """Show a builder status line in the inline panel (falls back to #newinfo if not mounted)."""
@@ -3621,11 +3646,44 @@ class Studio(App):
             label_value = {"A": b_val, "B": a_val}
         enqueue_labels = ["A", "B"]
         random.shuffle(enqueue_labels)            # flip #2: randomize enqueue order
+        # PRE-FLIGHT both variants before queueing EITHER, so a refusal can't leave half a pair queued:
+        # the steadiness gate, a plannable build, and a real difference in what the engine is TOLD to
+        # run (a dial build() drops for this setup -- steadiness outside director mode, cond strength
+        # on a single clip, fps on Wan, ... -- would otherwise queue two identical renders).
+        cores, kinds = [], []
+        for val in (a_val, b_val):
+            vcfg = self._blind_variant_cfg(base_cfg, var, val, seed)
+            gate = self._steadiness_gate(vcfg)
+            if gate:
+                self._blind_msg(gate)
+                return
+            try:
+                _t, _kind, cmd, _p = self.build(vcfg)
+                kinds.append(_kind)
+            except Exception as ex:
+                self._blind_msg(f"[#ff6d6d]Can't plan this pair — check the numbers ({type(ex).__name__}).[/#ff6d6d]")
+                return
+            cores.append(_argv_core(cmd))
+        if cores[0] == cores[1]:
+            self._blind_msg(f"[#ff6d6d]'{var}' A vs B would run the SAME command in this setup (the engine "
+                            f"ignores it here) — nothing to compare. Not queued.[/#ff6d6d]")
+            return
+        if not self._cuda_busy():                 # ONE budget probe for the pair (nvidia-smi only when idle)
+            cost = max(gpu_budget.GPU_COST.get(k, 5500) for k in kinds)
+            ok_b, free = gpu_budget.budget_ok(cost)
+            if not ok_b:
+                self._blind_msg(f"[#ff6d6d]⛔ Only {free} MB free on your 8 GB GPU — close GPU-heavy apps, then retry.[/#ff6d6d]")
+                return
         pair_id = time.strftime("blind-%y%m%d-%H%M%S") + f"-{random.randint(1000, 9999)}"
         jobs = {}                                 # label ("A"/"B") -> Job
         for lbl in enqueue_labels:
-            j = self._queue_blind_variant(base_cfg, var, label_value[lbl], seed)
-            if not j:                            # gate blocked (empty prompt / GPU budget / checkpoint refusal) -> abort
+            j = self._queue_blind_variant(base_cfg, var, label_value[lbl], seed, skip_budget=True)
+            if not j:                            # still refused (checkpoint refusal, ...) -> abort, and take
+                for other in jobs.values():      # back the half already queued: a lone blind run is no pair
+                    try:
+                        self.mgr.remove(other.id)
+                    except Exception:
+                        pass
                 self._blind_msg(
                     "[#ff6d6d]BLIND A/B aborted — a run was blocked (check GPU budget / prompt / backend).[/#ff6d6d]")
                 return
@@ -3963,6 +4021,15 @@ class Studio(App):
                     self.query_one("#inspectinfo", Static).update(f"[#ff6d6d]{err}[/#ff6d6d]")
                     return
                 cfg = self._archive_over(job, **{dial: value})   # KEEP the seed -- only the one dial differs
+                try:                                  # a dial build() drops for this run would queue a twin
+                    same = _argv_core(self.build(cfg)[2]) == _argv_core(self.build(self._archive_over(job))[2])
+                except Exception:
+                    same = False                      # let _queue_current_run report the planning error
+                if same:
+                    self.query_one("#inspectinfo", Static).update(
+                        f"[#ff6d6d]{dial}={value} doesn't change what this run renders (the engine ignores "
+                        f"it here) — nothing to pair.[/#ff6d6d]")
+                    return
                 j = self._queue_current_run(over=cfg)         # same gated path as QUEUE RUN; form untouched
                 if j:
                     j.params["pair_id"] = job.id
@@ -4130,7 +4197,11 @@ class Studio(App):
                 fout_rel = f"outputs/{base}_enh{gen}_frames"
                 # collision-safe: the source's enh_gen never increments, so re-enhancing the same run
                 # would silently OVERWRITE the earlier enhance (enhance.py wipes frames_out + the mp4).
-                while os.path.exists(os.path.join(REPO, out_rel)) or os.path.exists(os.path.join(REPO, fout_rel)):
+                # ...and queued-but-not-started enhances haven't written anything yet: count their paths too
+                taken = {v for jj in self.mgr.jobs.values() for v in ((jj.params or {}).get("out"),
+                                                                     (jj.params or {}).get("frames_dir")) if v}
+                while (os.path.exists(os.path.join(REPO, out_rel)) or os.path.exists(os.path.join(REPO, fout_rel))
+                       or out_rel in taken or fout_rel in taken):
                     gen += 1
                     out_rel = f"outputs/{base}_enh{gen}.mp4"
                     fout_rel = f"outputs/{base}_enh{gen}_frames"
@@ -4146,7 +4217,8 @@ class Studio(App):
                                            enh_restore=restore,
                                            enh_tile_feather=d.get("tile_feather", "0"), enh_interp_skip=d.get("interp_skip", "0"),
                                            source_id=job.id, source_root=job.params.get("source_root", job.id),
-                                           source_title=(job.title or "")))
+                                           source_title=(job.title or ""), cwd=AD_REPO))   # cwd set before the
+                                           # runner can pick the job up (setting it after enqueue raced)
                 ej.cmd = cmd               # enhance runs in the AnimateDiff repo (absolute paths point home)
                 ej.params["cwd"] = AD_REPO
                 ej.save()
@@ -4408,7 +4480,8 @@ class Studio(App):
              time.strftime(f"[dim]{_KGLYPH.get(job.kind, '·')} {job.kind} · %b %d  %H:%M[/dim]",
                            time.localtime(job.finished or job.created)),
              "─" * 48,
-             "[#6dffab]PROMPT[/#6dffab]", f"  {p.get('prompt') or job.title or '(none)'}"]
+             "[#6dffab]PROMPT[/#6dffab]",
+             f"  {_HIDDEN if (_blind and _varied == 'prompt') else (p.get('prompt') or job.title or '(none)')}"]
         if p.get("directive"):
             L += ["[#6dffab]DIRECTIVE[/#6dffab]", f"  {p['directive']}"]
         if p.get("anchors"):
@@ -4420,15 +4493,15 @@ class Studio(App):
             L.append(row("mode", f"{job.kind} · {_HIDDEN}" if p.get("steadiness") else job.kind))
         else:
             L.append(row("mode", job.kind + (f" · {p['steadiness']}" if p.get("steadiness") else "")))
-        L += [row("resolution", p.get("res", "?")),
-              row("length", f"{p.get('seconds', '?')}s")]
+        L += [brow("resolution", p.get("res", "?"), "res"),
+              brow("length", f"{p.get('seconds', '?')}s", "seconds")]
         if int(job.nseg or 1) > 1:
             if _blind and _varied == "seg":
                 L.append(row("shots", f"{job.nseg}  ×  {_HIDDEN}"))
             else:
                 L.append(row("shots", f"{job.nseg}  ×  {p.get('seg_sec', '?')}s each"))
         L += [brow("steps", p.get("steps", "?"), "steps"), brow("guidance", p.get("cfg", "?"), "cfg"),
-              row("seed", p.get("seed", "?")), brow("fps", p.get("fps", "?"), "fps")]
+              brow("seed", p.get("seed", "?"), "seed"), brow("fps", p.get("fps", "?"), "fps")]
         if _blind:
             L += ["", "[#6dffab]BLIND A/B[/#6dffab]",
                   row("status", "blind — variant + varied value hidden"),
@@ -4472,7 +4545,7 @@ class Studio(App):
                     L.append(row("your pick", f"variant {win_var} (varied value unavailable)"))
         neg = p.get("n_prompt")
         if neg and neg != NEG:
-            L += ["", "[#6dffab]NEGATIVE[/#6dffab]", f"  {neg}"]
+            L += ["", "[#6dffab]NEGATIVE[/#6dffab]", f"  {_HIDDEN if (_blind and _varied == 'n_prompt') else neg}"]
         if job.kind == "enhance":
             modes = []
             if p.get("enh_interp") and str(p.get("enh_interp")) != "1":
@@ -4501,7 +4574,7 @@ class Studio(App):
             if p.get("source_root") and p.get("source_root") != p.get("source_id"):
                 L.append(row("original", p.get("source_root")))
         L += ["", "[#6dffab]RESULT[/#6dffab]", row("runtime", fmt(job.elapsed())),
-              row("shots", f"{job.seg or job.nseg} of {job.nseg} done"),
+              row("shots", f"{job.nseg if job.status == 'done' else max(0, (job.seg or 0) - 1)} of {job.nseg} done"),
               row("output", os.path.basename(job.out or "?")), row("size", _filesize(job.out))]
         if job.out:
             out_abs = job.out if os.path.isabs(job.out) else os.path.join(REPO, job.out)
