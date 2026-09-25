@@ -131,6 +131,39 @@ async def main():
         b_ = live_view("redirecting", 10.0)
         check("blind steadiness: a redirect looks exactly like decoding in every LIVE widget", a_ == b_, (a_, b_))
         ACTIVE["job"] = None; app.tick()
+        # the ~ms window after [[SEG N+1]] but before [[PHASE warmup]] reads as shot N+1's warmup
+        jw = mkjob(5); jw.phase, jw.seg, jw.step, jw.nstep = "redirecting", 3, 25, 25
+        jw.phase_started = time.time() - 30; jw.seg_started = time.time() - 0.001
+        jw.params.update(pair_blind=True, pair_revealed=False, pair_varied_dial="steadiness")
+        check("post-SEG redirect window is the next shot's warmup", studio._live_phase(jw) == "warmup", studio._live_phase(jw))
+        check("...so the bar doesn't latch a whole shot ahead", app._smart_pct(jw) < 50, app._smart_pct(jw))
+        # blind steadiness: both variants are budgeted alike (hold's fewer redirects gave the ETA away)
+        jh, je = mkjob(6), mkjob(6)
+        for jj, st in ((jh, "hold"), (je, "evolve")):
+            jj.params.update(mode="director", steadiness=st, directive="a storm builds",
+                             pair_blind=True, pair_revealed=False, pair_varied_dial="steadiness")
+        check("blind hold/evolve get the same time budget", app._run_budget(jh) == app._run_budget(je),
+              (app._run_budget(jh)["gen"], app._run_budget(je)["gen"]))
+        jh.params["pair_blind"] = je.params["pair_blind"] = False
+        check("non-blind hold still budgets fewer redirects", app._run_budget(jh)["gen"] < app._run_budget(je)["gen"])
+        # TIMING lists the director's redirect time (it was in the total but not a row); blind folds it
+        jt = mkjob(3); jt.status, jt.started, jt.finished = "done", 1.0, 100.0
+        jt.phase_secs = {"generating": 50.0, "decoding": 10.0, "redirecting": 30.0}
+        prov = app._fmt_provenance(jt)
+        check("TIMING lists director redirect time", "director" in prov and "33%" in prov, prov[-400:])
+        jt.params.update(pair_blind=True, pair_revealed=False, pair_varied_dial="steadiness")
+        prov = app._fmt_provenance(jt)
+        check("blind-steadiness TIMING folds redirects into decode", "director " not in prov and "44%" in prov,
+              [l for l in prov.splitlines() if "%" in l])
+        # stall sentry: a director redirect (a VLM call, legitimately minutes) gets the long fuse like a
+        # decode -- 250 s into one must not raise STALL (the short 240 s fuse is for step-marked gen)
+        jv = mkjob(5); jv.phase, jv.seg, jv.step = "redirecting", 2, 25
+        ACTIVE["job"] = jv; app._stall_note = ""
+        app._stall_state = {"sig": (jv.id, jv.phase, jv.seg, jv.step, 0), "pmt": 0.0,
+                            "since": time.monotonic() - 250, "fired": False, "susp": False, "killed": False}
+        app._alerts()
+        check("250 s into a director redirect is not a STALL", "STALL" not in (app._stall_note or ""), app._stall_note)
+        ACTIVE["job"] = None; app.tick()
         # suspending during a resumed leg's reload: no shot is finished first
         jr.status, jr.phase = "suspending", "loading"
         check("suspend during a resumed reload names no shot", "finishing shot" not in app._phase_text(jr), app._phase_text(jr))

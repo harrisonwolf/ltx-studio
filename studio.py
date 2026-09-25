@@ -69,8 +69,12 @@ def _live_phase(job):
     3rd on hold) are shown as the decode that always precedes them, in EVERY widget (phase line,
     progress suffix, phase timeline, % bar) -- any one of them would make the redirects countable."""
     ph = getattr(job, "phase", "") or ""
-    if ph == "redirecting" and _blind_hidden(getattr(job, "params", None), "steadiness"):
-        return "decoding"
+    if ph == "redirecting":
+        ss, ps = getattr(job, "seg_started", None), getattr(job, "phase_started", None)
+        if ss and ps and ss > ps:      # [[SEG N+1]] already arrived (its [[PHASE warmup]] is next): shot N+1
+            return "warmup"            # is warming up -- don't read it as a whole-shot-ahead redirect/decode
+        if _blind_hidden(getattr(job, "params", None), "steadiness"):
+            return "decoding"
     return ph
 
 
@@ -2315,8 +2319,9 @@ class Studio(App):
                 _dv = (p.get("directive") or "").strip()
                 if not _dv or _dv == (p.get("prompt") or "").strip():
                     _steady = "hold"
-            if director and _steady != "evolve":
-                nseam = nseam // 3                 # every 3rd seam, as director.py's loop does
+            if director and _steady != "evolve" and not _blind_hidden(p, "steadiness"):
+                nseam = nseam // 3                 # every 3rd seam, as director.py's loop does (a BLIND
+                #                                    steadiness pair budgets both variants like evolve)
             gen = steps * COEF * px * ff * nseg + (SEAM * nseam if director else 0)
             decode = DECODE * ff * nseg
             b = {"load": float(LOAD), "warm": float(WARM) * nseg, "gen": float(gen),
@@ -2707,7 +2712,7 @@ class Studio(App):
             # tight fuse. warmup (Wan averages 220s/shot with ZERO markers on this box's own refit)
             # and decode/save (a real multi-hour decode exists in experiments.jsonl) share the long
             # fuse, so an overnight batch never murders a slow-but-alive run.
-            slow = job.phase in ("warmup", "decoding", "saving")
+            slow = job.phase in ("warmup", "decoding", "saving", "redirecting")   # redirect = a VLM call
             fire_at = (getattr(self, "_stall_decode_secs", 600.0) if slow
                        else getattr(self, "_stall_secs", 240.0))
             grace = (getattr(self, "_stall_decode_secs", 600.0) if slow
@@ -2729,7 +2734,7 @@ class Studio(App):
                 prev["fired"] = True
                 if sounds is not None:
                     sounds.play("run_stall", REPO)
-            escalate = act_suspend and job.phase in ("warmup", "generating", "decoding", "saving")
+            escalate = act_suspend and job.phase in ("warmup", "generating", "decoding", "saving", "redirecting")
             if not escalate:      # "alert" mode, or a load/download phase (legitimately silent-slow)
                 self._stall_note = "    " + tmark("error", "!! STALL? no progress %dm" % mins)
                 return
@@ -2944,6 +2949,8 @@ class Studio(App):
             notes.clear()
             if job.kind != "director":     # T12: non-director runs never populate director's-notes -- say so
                 notes.write("[dim]This run uses no director steering.[/dim]")
+            elif _blind_hidden(job.params, "director", "shape"):   # from the START (not the first plan:
+                notes.write("[dim](director's notes hidden — blind A/B, REVEAL to show)[/dim]")  # its timing tells)
         ppath = getattr(job, "preview", None)
         if ppath and os.path.exists(ppath):
             mt = os.path.getmtime(ppath)
@@ -2958,9 +2965,7 @@ class Studio(App):
         # number of shots / seams) shows ONE hidden line instead of the per-shot enumeration
         _hide_dir = _blind_hidden(job.params, "director", "shape")
         if _hide_dir:
-            if plans and self._notes_n == 0:
-                notes.write("[dim](director's notes hidden — blind A/B, REVEAL to show)[/dim]")
-            plans_new = []
+            plans_new = []                                  # (placeholder written when the job started)
         else:
             plans_new = plans[self._notes_n:]
         for entry in plans_new:
@@ -4939,9 +4944,14 @@ class Studio(App):
         if psecs:
             L += ["", "[#6dffab]PHASES[/#6dffab]"]
             tot = sum(psecs.values()) or 1
+            _fold = _blind_hidden(p, "steadiness")    # redirect count/time gives hold vs evolve away
             for ph, lbl in (("loading", "load"), ("warmup", "warm"), ("generating", "gen"),
-                            ("decoding", "decode"), ("saving", "save")):
+                            ("decoding", "decode"), ("redirecting", "director"), ("saving", "save")):
                 t = psecs.get(ph, 0)
+                if _fold and ph == "decoding":
+                    t += psecs.get("redirecting", 0)
+                elif _fold and ph == "redirecting":
+                    continue
                 if t > 0:
                     L.append(row(lbl, f"{fmt(int(t))}   [dim]{100 * t / tot:.0f}%[/dim]"))
         ssecs = getattr(job, "seg_secs", []) or []

@@ -15,12 +15,13 @@ def check(name, cond, detail=""):
 
 jobs = {}
 removed = []
+ACT = {"job": None}
 class FakeMgr:
     def __init__(self): self.jobs, self.paused, self.vram_reserve_gb = jobs, False, 1.0
     def queued(self): return [j for j in jobs.values() if j.status == "queued"]
     def suspended(self): return [j for j in jobs.values() if j.status == "suspended"]
     def archived(self): return [j for j in jobs.values() if j.status == "done"]
-    def active(self): return None
+    def active(self): return ACT["job"]
     def counts(self): return (len(self.queued()), 0, len(self.archived()), 0)
     def enhance_children(self, jid): return []
     def enqueue(self, title, kind, cmd, params):
@@ -133,6 +134,19 @@ async def main():
         txt = app._fmt_inspect(a)
         check("prompt-blind inspect hides the director's plans / rewrites", "whale" not in txt,
               [l for l in txt.splitlines() if "whale" in l])
+        # LIVE director's notes: the placeholder is up from the START of a blind steadiness run (when it
+        # appeared at the first [[PLAN]] -- seam 1 for evolve, seam 3 for hold -- its timing told)
+        from textual.widgets import RichLog
+        lj = studio_core.Job("blindlive", "t", "director", [], dict(a.params, pair_blind=True, pair_revealed=False,
+                                                                     pair_varied_dial="steadiness"))
+        lj.status, lj.seg, lj.plans = "running", 1, []
+        notes = app.query_one("#dirnotes", RichLog)
+        wrote = []
+        real_w = notes.write
+        notes.write = lambda c, *x, **k: (wrote.append(str(c)), real_w(c, *x, **k))[1]
+        ACT["job"] = lj; app.tick(); await pilot.pause(0.05); ACT["job"] = None; app.tick()
+        notes.write = real_w
+        check("blind steadiness notes placeholder shows before any plan", any("hidden" in w for w in wrote), wrote)
         # a STEADINESS pair: hold's "(skipped …)" plans vs evolve's rewrites give it away -> hidden
         a.params.update(pair_varied_dial="steadiness")
         a.plans = [[1, "(skipped - scene holding steady; prompt unchanged)", ""]]
