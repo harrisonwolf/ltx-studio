@@ -559,7 +559,7 @@ class ConsultScreen(ModalScreen):
         log.clear()
         for m in self.history:
             who = "[#6dffab]you ›[/#6dffab]" if m.get("role") == "user" else "[#9dffce]director ›[/#9dffce]"
-            log.write("%s %s" % (who, m.get("text", "")))
+            log.write("%s %s" % (who, escape(str(m.get("text", "")))))
         if self.cfg:
             self._show_cfg(self.cfg)
 
@@ -573,22 +573,26 @@ class ConsultScreen(ModalScreen):
     def _refresh_ready(self):
         d = self.app.consult
         send = self.query_one("#sendbtn", Button)
-        if d.ready:
-            if send.disabled:
+        inflight = getattr(self, "_inflight", False)
+        if d.ready and d.alive():                     # ready alone goes stale if the daemon dies later
+            if send.disabled and not inflight:        # mid-reply: keep SEND off and "thinking…" up
                 send.disabled = False
                 self._status("[#9dffce]ready — tell the director what you want.  [dim](%s)[/dim][/#9dffce]" % (getattr(d, "info", "") or "loaded"))
                 self.query_one("#chatmsg", TextArea).focus()
-        elif d.alive():
+            return
+        if not inflight:
+            send.disabled = True                      # re-armed (with the ready line) once it's back
+        if d.alive():
             self._status("[dim]waking the director… loading the model[/dim]")
+            return
+        busy = self.app.mgr.active() is not None
+        if getattr(d, "last_error", ""):
+            self._status(f"[#ff6d6d]director failed to load: {escape(d.last_error)} — retrying…[/#ff6d6d]")
+        elif busy:
+            self._status("[#ffcf5c]a render is using the GPU — director runs on CPU (~2-3 min per reply). Pause/cancel the run, or wait, for full-speed GPU.[/#ffcf5c]")
         else:
-            if getattr(d, "last_error", ""):
-                self._status(f"[#ff6d6d]director failed to load: {escape(d.last_error)} — retrying…[/#ff6d6d]")
-            busy = self.app.mgr.active() is not None
-            if busy:
-                self._status("[#ffcf5c]a render is using the GPU — director runs on CPU (~2-3 min per reply). Pause/cancel the run, or wait, for full-speed GPU.[/#ffcf5c]")
-            else:
-                self._status("[dim]loading the director… (~30s; its VRAM is freed when you close CONSULT)[/dim]")
-            self.app.consult.warm(cpu=busy)
+            self._status("[dim]loading the director… (~30s; its VRAM is freed when you close CONSULT)[/dim]")
+        self.app.consult.warm(cpu=busy)
 
     def _status(self, msg):
         self.query_one("#consultstatus", Static).update(msg)
@@ -622,9 +626,9 @@ class ConsultScreen(ModalScreen):
             return
         img = (self.query_one("#chatimg", Input).value or "").strip()
         log = self.query_one("#chatlog", RichLog)
-        log.write(f"[#6dffab]you ›[/#6dffab] {msg}")
+        log.write(f"[#6dffab]you ›[/#6dffab] {escape(msg)}")
         if img:
-            log.write(f"[dim]   (reference image: {img})[/dim]")
+            log.write(f"[dim]   (reference image: {escape(img)})[/dim]")
         self.history.append({"role": "user", "text": msg})
         self.query_one("#chatmsg", TextArea).text = ""
         self.query_one("#sendbtn", Button).disabled = True
@@ -632,26 +636,35 @@ class ConsultScreen(ModalScreen):
         self._inflight = True
         self._stream_buf = ""
         sp = self.query_one("#streampreview", Static)
+        self._gen = getattr(self.app, "_consult_gen", 0)       # RESET bumps it -> a late reply is dropped
         sp.display = True
         sp.update("[#9dffce]director ›[/#9dffce] [dim]…[/dim]")
-        self._ask(list(self.history), img or None)
+        self._ask(list(self.history), img or None, self._gen)
 
     @work(thread=True)
-    def _ask(self, history, image):
+    def _ask(self, history, image, gen):
         resp = self.app.consult.ask_stream(
-            history, image, lambda piece: self.app.call_from_thread(self._on_chunk, piece))
-        self.app.call_from_thread(self._reply, resp)
+            history, image, lambda piece: self.app.call_from_thread(self._on_chunk, piece, gen))
+        self.app.call_from_thread(self._reply, resp, gen)
 
-    def _on_chunk(self, piece):
-        if not self.is_mounted:      # screen closed mid-stream: dropping a chunk beats crashing the worker
+    def _stale(self, gen):
+        return gen is not None and gen != getattr(self.app, "_consult_gen", 0)
+
+    def _on_chunk(self, piece, gen=None):
+        if not self.is_mounted or self._stale(gen):   # closed / RESET mid-stream: drop the chunk
             return
         self._stream_buf = getattr(self, "_stream_buf", "") + piece
         raw = self._stream_buf.split("```")[0].strip()             # hide the trailing JSON config block
         body = ("… " if len(raw) > 600 else "") + escape(raw[-600:])   # show the TAIL so the newest text stays in view
         self.query_one("#streampreview", Static).update("[#9dffce]director ›[/#9dffce] %s[dim]▌[/dim]" % body)
 
-    def _reply(self, resp):
+    def _reply(self, resp, gen=None):
         self._inflight = False
+        if self._stale(gen):         # RESET while this reply streamed: it belongs to the old conversation
+            if self.is_mounted:
+                self._reply_widgets_idle()
+                self._status("[#9dffce]chat reset — start fresh.[/#9dffce]")
+            return
         if not self.is_mounted:      # screen closed mid-reply: persist the answer, skip the dead widgets
             try:
                 if resp and resp.get("reply"):
@@ -659,15 +672,12 @@ class ConsultScreen(ModalScreen):
             except Exception:
                 pass
             return
-        self.query_one("#sendbtn", Button).disabled = False
-        sp = self.query_one("#streampreview", Static)
-        sp.display = False
-        sp.update("")
+        self._reply_widgets_idle()
         if resp.get("error"):
-            self._status(f"[#ff6d6d]error: {resp['error']}[/#ff6d6d]")
+            self._status(f"[#ff6d6d]error: {escape(str(resp['error']))}[/#ff6d6d]")
             return
         reply, cfg = resp.get("reply", ""), (resp.get("config") or {})
-        self.query_one("#chatlog", RichLog).write(f"[#9dffce]director ›[/#9dffce] {reply}")
+        self.query_one("#chatlog", RichLog).write(f"[#9dffce]director ›[/#9dffce] {escape(str(reply))}")
         self.history.append({"role": "assistant", "text": reply})
         if cfg:
             self.cfg = cfg
@@ -677,12 +687,13 @@ class ConsultScreen(ModalScreen):
             self._status("[#ffcf5c]ready — no config parsed this turn; ask again or APPLY the last one.[/#ffcf5c]")
 
     def _show_cfg(self, c):
+        e = lambda k, d="?", n=None: escape(str(c.get(k, d))[:n])   # model-written values: never markup
         self.query_one("#cfgpreview", Static).update(
-            f"[b]proposed[/b]  mode={c.get('mode','?')}  res={c.get('res','?')}  {c.get('seconds','?')}s  "
-            f"seg={c.get('seg','?')}  steps={c.get('steps','?')}  cfg={c.get('cfg','?')}  seed={c.get('seed','?')}\n"
-            f"prompt: {str(c.get('prompt',''))[:84]}\n"
-            f"directive: {str(c.get('directive',''))[:84]}\n"
-            f"anchors: {str(c.get('anchors',''))[:84]}")
+            f"[b]proposed[/b]  mode={e('mode')}  res={e('res')}  {e('seconds')}s  "
+            f"seg={e('seg')}  steps={e('steps')}  cfg={e('cfg')}  seed={e('seed')}\n"
+            f"prompt: {e('prompt', '', 84)}\n"
+            f"directive: {e('directive', '', 84)}\n"
+            f"anchors: {e('anchors', '', 84)}")
 
     def _apply(self):
         c = self.cfg
@@ -697,6 +708,12 @@ class ConsultScreen(ModalScreen):
             pass
         self.dismiss()
 
+    def _reply_widgets_idle(self):
+        self.query_one("#sendbtn", Button).disabled = False
+        sp = self.query_one("#streampreview", Static)
+        sp.display = False
+        sp.update("")
+
     def action_close(self):
         self.dismiss()
 
@@ -704,6 +721,7 @@ class ConsultScreen(ModalScreen):
         _copy_chat(self.app, self.history, self._status)
 
     def action_reset(self):
+        self.app._consult_gen = getattr(self.app, "_consult_gen", 0) + 1
         self.history.clear()
         self.cfg = {}
         self.query_one("#chatlog", RichLog).clear()
@@ -770,7 +788,7 @@ class ChatScreen(ModalScreen):
         log.clear()
         for m in self.history:
             who = "[#6dffab]you ›[/#6dffab]" if m.get("role") == "user" else "[#9dffce]model ›[/#9dffce]"
-            log.write("%s %s" % (who, m.get("text", "")))
+            log.write("%s %s" % (who, escape(str(m.get("text", "")))))
 
     def on_unmount(self):
         try:
@@ -781,22 +799,26 @@ class ChatScreen(ModalScreen):
     def _refresh_ready(self):
         d = self.app.consult
         send = self.query_one("#rawsendbtn", Button)
-        if d.ready:
-            if send.disabled:
+        inflight = getattr(self, "_inflight", False)
+        if d.ready and d.alive():                     # ready alone goes stale if the daemon dies later
+            if send.disabled and not inflight:        # mid-reply: keep SEND off and "thinking…" up
                 send.disabled = False
                 self._status("[#9dffce]ready — ask the model anything.  [dim](%s)[/dim][/#9dffce]" % (getattr(d, "info", "") or "loaded"))
                 self.query_one("#rawmsg", TextArea).focus()
-        elif d.alive():
+            return
+        if not inflight:
+            send.disabled = True                      # re-armed (with the ready line) once it's back
+        if d.alive():
             self._status("[dim]waking the model… loading[/dim]")
+            return
+        busy = self.app.mgr.active() is not None
+        if getattr(d, "last_error", ""):
+            self._status(f"[#ff6d6d]model failed to load: {escape(d.last_error)} — retrying…[/#ff6d6d]")
+        elif busy:
+            self._status("[#ffcf5c]a render is using the GPU — chat runs on CPU (~2-3 min per reply). Pause/cancel the run, or wait, for full-speed GPU.[/#ffcf5c]")
         else:
-            if getattr(d, "last_error", ""):
-                self._status(f"[#ff6d6d]model failed to load: {escape(d.last_error)} — retrying…[/#ff6d6d]")
-            busy = self.app.mgr.active() is not None
-            if busy:
-                self._status("[#ffcf5c]a render is using the GPU — chat runs on CPU (~2-3 min per reply). Pause/cancel the run, or wait, for full-speed GPU.[/#ffcf5c]")
-            else:
-                self._status("[dim]loading the model… (its VRAM is freed when you close this)[/dim]")
-            self.app.consult.warm(cpu=busy)
+            self._status("[dim]loading the model… (its VRAM is freed when you close this)[/dim]")
+        self.app.consult.warm(cpu=busy)
 
     def _status(self, msg):
         self.query_one("#rawstatus", Static).update(msg)
@@ -828,9 +850,9 @@ class ChatScreen(ModalScreen):
             return
         img = (self.query_one("#rawimg", Input).value or "").strip()
         log = self.query_one("#rawlog", RichLog)
-        log.write(f"[#6dffab]you ›[/#6dffab] {msg}")
+        log.write(f"[#6dffab]you ›[/#6dffab] {escape(msg)}")
         if img:
-            log.write(f"[dim]   (image: {img})[/dim]")
+            log.write(f"[dim]   (image: {escape(img)})[/dim]")
         self.history.append({"role": "user", "text": msg})
         self.query_one("#rawmsg", TextArea).text = ""
         self.query_one("#rawsendbtn", Button).disabled = True
@@ -838,26 +860,35 @@ class ChatScreen(ModalScreen):
         self._inflight = True
         self._stream_buf = ""
         sp = self.query_one("#rawstream", Static)
+        self._gen = getattr(self.app, "_chat_gen", 0)       # RESET bumps it -> a late reply is dropped
         sp.display = True
         sp.update("[#9dffce]model ›[/#9dffce] [dim]…[/dim]")
-        self._ask(list(self.history), img or None)
+        self._ask(list(self.history), img or None, self._gen)
 
     @work(thread=True)
-    def _ask(self, history, image):
+    def _ask(self, history, image, gen):
         resp = self.app.consult.ask_stream(
-            history, image, lambda piece: self.app.call_from_thread(self._on_chunk, piece), raw=True)
-        self.app.call_from_thread(self._reply, resp)
+            history, image, lambda piece: self.app.call_from_thread(self._on_chunk, piece, gen), raw=True)
+        self.app.call_from_thread(self._reply, resp, gen)
 
-    def _on_chunk(self, piece):
-        if not self.is_mounted:      # screen closed mid-stream: dropping a chunk beats crashing the worker
+    def _stale(self, gen):
+        return gen is not None and gen != getattr(self.app, "_chat_gen", 0)
+
+    def _on_chunk(self, piece, gen=None):
+        if not self.is_mounted or self._stale(gen):   # closed / RESET mid-stream: drop the chunk
             return
         self._stream_buf = getattr(self, "_stream_buf", "") + piece
         raw = self._stream_buf.strip()
         body = ("… " if len(raw) > 600 else "") + escape(raw[-600:])   # show the TAIL so the newest text stays in view
         self.query_one("#rawstream", Static).update("[#9dffce]model ›[/#9dffce] %s[dim]▌[/dim]" % body)
 
-    def _reply(self, resp):
+    def _reply(self, resp, gen=None):
         self._inflight = False
+        if self._stale(gen):         # RESET while this reply streamed: it belongs to the old conversation
+            if self.is_mounted:
+                self._reply_widgets_idle()
+                self._status("[#9dffce]chat reset — start fresh.[/#9dffce]")
+            return
         if not self.is_mounted:      # screen closed mid-reply: persist the answer, skip the dead widgets
             try:
                 if resp and resp.get("reply"):
@@ -865,17 +896,20 @@ class ChatScreen(ModalScreen):
             except Exception:
                 pass
             return
+        self._reply_widgets_idle()
+        if resp.get("error"):
+            self._status(f"[#ff6d6d]error: {escape(str(resp['error']))}[/#ff6d6d]")
+            return
+        reply = resp.get("reply", "")
+        self.query_one("#rawlog", RichLog).write(f"[#9dffce]model ›[/#9dffce] {escape(str(reply))}")
+        self.history.append({"role": "assistant", "text": reply})
+        self._status("[#9dffce]ready — keep chatting.[/#9dffce]")
+
+    def _reply_widgets_idle(self):
         self.query_one("#rawsendbtn", Button).disabled = False
         sp = self.query_one("#rawstream", Static)
         sp.display = False
         sp.update("")
-        if resp.get("error"):
-            self._status(f"[#ff6d6d]error: {resp['error']}[/#ff6d6d]")
-            return
-        reply = resp.get("reply", "")
-        self.query_one("#rawlog", RichLog).write(f"[#9dffce]model ›[/#9dffce] {reply}")
-        self.history.append({"role": "assistant", "text": reply})
-        self._status("[#9dffce]ready — keep chatting.[/#9dffce]")
 
     def action_close(self):
         self.dismiss()
@@ -884,6 +918,7 @@ class ChatScreen(ModalScreen):
         _copy_chat(self.app, self.history, self._status)
 
     def action_reset(self):
+        self.app._chat_gen = getattr(self.app, "_chat_gen", 0) + 1
         self.history.clear()
         self.query_one("#rawlog", RichLog).clear()
         self._status("[#9dffce]chat reset — start fresh.[/#9dffce]")
@@ -4610,6 +4645,14 @@ class Studio(App):
             self._toggle_live_term()
         elif tab == "tab-arch":
             self._toggle_arc_term()
+
+    def check_action(self, action, parameters):
+        # Ctrl+Enter is a PRIORITY app binding, and app priority bindings run before a modal's own.
+        # With a modal up (CONSULT/CHAT use Ctrl+Enter for SEND) it must fall through to the modal
+        # instead of queueing a GPU run from the hidden NEW RUN form.
+        if action == "form_queue" and len(self.screen_stack) > 1:
+            return False
+        return True
 
     def action_form_queue(self):
         """Ctrl+Enter anywhere in the NEW RUN form -> QUEUE RUN, same as clicking the button.
