@@ -27,12 +27,12 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")  # 
 import torch  # noqa: E402
 from gpu_budget import cap_vram; cap_vram()  # noqa: E402  -- leave ~12% VRAM free for the OS (always safe; the 8B is probe-gated)
 from transformers import (Qwen3VLForConditionalGeneration, AutoProcessor,  # noqa: E402
-                          BitsAndBytesConfig, TextIteratorStreamer)
+                          TextIteratorStreamer)
 from qwen_vl_utils import process_vision_info  # noqa: E402
 
 MODEL_4B = "Qwen/Qwen3-VL-4B-Instruct"           # smaller fallback brain (fp16 source for CPU load)
-QDIR_4B = "/home/wolve/video_gen/qwen3vl4b_nf4"   # 4B nf4 prequant (~2.7GB, fits alongside Windows VRAM)
-QDIR_8B = "/home/wolve/video_gen/qwen3vl8b_nf4"   # 8B nf4 prequant — built but does NOT fit 8GB at inference; reserved for cloud/bigger GPU
+QDIR_4B = os.environ.get("LTX_QWEN_4B_DIR", "/home/wolve/video_gen/qwen3vl4b_nf4")   # 4B nf4 prequant (~2.7GB, fits alongside Windows VRAM)
+QDIR_8B = os.environ.get("LTX_QWEN_8B_DIR", "/home/wolve/video_gen/qwen3vl8b_nf4")   # 8B nf4 prequant — built but does NOT fit 8GB at inference; reserved for cloud/bigger GPU
 
 try:
     from dials_help import dial_guide       # the studio's dial tooltips -> the director reads the SAME guidance

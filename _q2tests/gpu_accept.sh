@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Q2 (mine) + Q1 + P1 GPU acceptance, sequential (8GB can't run two at once). NO nvidia-smi anywhere.
 # Each run logs to outputs/<name>.log; a DRIFT/marker digest is printed at the end.
-cd /home/wolve/video_gen/FramePack || exit 1
+cd "$(dirname "$0")/.." || exit 1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 PY=venv/bin/python
 FOX="a red fox trotting in fresh snow, photoreal"

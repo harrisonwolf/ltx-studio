@@ -18,6 +18,9 @@ MODULES = ["studio.py", "studio_core.py", "studio_modals.py", "studio_themes.py"
 
 r = subprocess.run([PY, "-m", "pyflakes"] + [os.path.join(REPO, m) for m in MODULES],
                    capture_output=True, text=True)
+if "No module named pyflakes" in r.stderr:   # a missing linter must not read as a clean lint
+    print("FAIL: pyflakes is not installed for", PY, "(pip install pyflakes)")
+    sys.exit(1)
 fatal, info = [], []
 for line in (r.stdout + r.stderr).splitlines():
     (fatal if ("undefined name" in line or "used; unable to detect" in line) else info).append(line)

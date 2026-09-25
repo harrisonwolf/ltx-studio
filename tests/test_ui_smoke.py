@@ -45,7 +45,6 @@ studio.sounds = types.SimpleNamespace(play=lambda *a: sound_calls.append(("play"
                                       preview=lambda *a: sound_calls.append(("preview", a)) or "ok")
 
 async def main():
-    global ok
     app = studio.Studio()
     async with app.run_test(size=(179, 52)) as pilot:
         await pilot.pause()

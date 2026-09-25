@@ -11,17 +11,14 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from rich.markup import escape
 from textual.binding import Binding
-from textual.widgets import (Button, Footer, Input, Label, RichLog, Select, Static, Switch, TextArea,
-                             TabbedContent, TabPane, DataTable, ProgressBar, OptionList)
-from textual.widgets.option_list import Option
-from textual.theme import Theme
+from textual.widgets import (Button, Footer, Input, Label, RichLog, Select, Static, TextArea,
+                             TabbedContent, TabPane, DataTable, ProgressBar)
 from textual.screen import ModalScreen
 from PIL import Image
 from rich.text import Text
-from rich.style import Style
 from studio_core import JobManager, REPO, ARCHIVED
 
-from studio_themes import EXTRA_THEMES, ULTRA_THEMES, ULTRA_NAMES, SPAL, tmark, THEME_MIGRATE
+from studio_themes import EXTRA_THEMES, ULTRA_THEMES, ULTRA_NAMES, SPAL, tmark, THEME_MIGRATE   # ULTRA_NAMES: re-exported for the tests
 
 def _run_kind(job):
     """T11: classify a job's PURPOSE from its params, distinct from job.kind (single/chained/
@@ -80,17 +77,18 @@ def _plain(s):
     return _MARKUP_RE.sub("", str(s))
 
 FP_PY = sys.executable
-AD_REPO = "/home/wolve/video_gen/AnimateDiff"
+# machine-specific sidecar locations — override per machine via env (defaults = the author's box)
+AD_REPO = os.environ.get("LTX_ANIMATEDIFF_REPO", "/home/wolve/video_gen/AnimateDiff")
 AD_PY = os.path.join(AD_REPO, "venv/bin/python")
 NEG = ("worst quality, inconsistent motion, blurry, jittery, distorted, low detail, "
        "deformed, malformed anatomy, missing or extra limbs, mutated, fused body, headless")
 RES = {"512 x 320  fast": (512, 320), "704 x 480  balanced": (704, 480), "768 x 512  sharp": (768, 512)}
 LTX_REPO_DEFAULT = "Lightricks/LTX-Video-0.9.5"   # the checkpoint every ltx-backend run pins (Q1); recorded per run
 
-DIRECTOR_VENV_PY = "/home/wolve/video_gen/director_venv/bin/python"
+DIRECTOR_VENV_PY = os.environ.get("LTX_DIRECTOR_PY", "/home/wolve/video_gen/director_venv/bin/python")
 PLANNER_SCRIPT = os.path.join(REPO, "vlm_planner.py")
 
-from studio_config import STUDIO_CONFIG_PATH, load_studio_config, save_studio_config
+from studio_config import load_studio_config, save_studio_config
 
 def res_key(v):
     """Map a loose res token from the consultant ('512'/'704'/'768'/'704 x 480') to a RES key.
@@ -941,7 +939,6 @@ class EnhanceOptsScreen(ModalScreen):
 
     def _refresh(self):
         up_factor = int(self.query_one("#eopt_up", Select).value or "0")
-        up = up_factor > 0
         face = self.query_one("#eopt_face", Select).value != "0"
         interp = int(self.query_one("#eopt_interp", Select).value or "1")
         warn = self.query_one("#eopt_warn", Static)
@@ -3339,7 +3336,7 @@ class Studio(App):
             if value.lower() not in ("hold", "balanced", "evolve"):
                 return f"steadiness must be one of: hold, balanced, evolve (got '{value}')."
         elif var in ("cfg_rescale", "cfg_interval"):
-            ok = ("off", "on") if var == "cfg_interval" else None   # cfg_rescale accepts off + a numeric strength
+            # cfg_rescale accepts off + a numeric strength
             if var == "cfg_interval":
                 if value.lower() not in ("off", "on", "0.0:0.5"):
                     return f"cfg_interval must be off or on/0.0:0.5 (got '{value}')."

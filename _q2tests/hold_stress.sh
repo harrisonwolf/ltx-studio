@@ -2,7 +2,7 @@
 # 8-shot HOLD-scene stress test: baseline vs anchored (adain 0.7 + palette 1.0). A near-static
 # still-life isolates COLOR drift from motion, and 8 shots let any color random-walk accumulate --
 # the conditions the Q2 anchors target. Self-serializes behind any running render (8GB fits one).
-cd /home/wolve/video_gen/FramePack || exit 1
+cd "$(dirname "$0")/.." || exit 1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 PY=venv/bin/python
 # steadiness is forced to "hold" for non-director chained runs, so this is inherently a hold run.

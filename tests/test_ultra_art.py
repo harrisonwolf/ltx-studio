@@ -3,7 +3,7 @@ iterates the registry (studio_themes.ULTRA_THEMES / ultra_art.THEMES), so adding
 edit here. Guards the properties the studio relies on: purity (deterministic frames), real motion,
 the STUDIO_NO_ANIM freeze, width-fit + balanced markup at every size/beat, and the INFO running-light.
 (Panel borders are static now — the border-breathe was removed 2026-07-08, so there is no glow.)"""
-import sys, os, re, math
+import sys, os, re
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import ultra_art
 import studio_themes

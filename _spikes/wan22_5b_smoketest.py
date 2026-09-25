@@ -60,7 +60,6 @@
 import argparse
 import time
 import torch
-from PIL import Image
 from diffusers import WanImageToVideoPipeline, AutoencoderKLWan
 from diffusers.schedulers.scheduling_unipc_multistep import UniPCMultistepScheduler
 from diffusers.utils import export_to_video, load_image

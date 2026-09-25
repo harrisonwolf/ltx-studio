@@ -52,7 +52,7 @@ from transformers import Qwen3VLForConditionalGeneration, AutoProcessor  # noqa:
 from qwen_vl_utils import process_vision_info  # noqa: E402
 
 MODEL = "Qwen/Qwen3-VL-4B-Instruct"            # newer/smarter than Qwen2.5-VL-7B, at half the size
-QDIR = "/home/wolve/video_gen/qwen3vl4b_nf4"   # Qwen3-VL-4B nf4 (~2.7GB); faster reload than the old 7B
+QDIR = os.environ.get("LTX_QWEN_4B_DIR", "/home/wolve/video_gen/qwen3vl4b_nf4")   # Qwen3-VL-4B nf4 (~2.7GB); faster reload than the old 7B
 
 SYSTEM_PRE = (
     "You are the DIRECTOR of a continuous AI-generated video built from short ~2-second shots that flow "
