@@ -117,11 +117,13 @@ for key, field, choices in (("backend", "backend", ("ltx", "wan-turbo", "wan")),
 def _zone_at(bar, col):
     return [str(sp.style) for sp in bar.spans if sp.start <= col < sp.end]
 
-# label -> the narrowest panel width at which it must be shown (whole); >= 2 labels always
-for key, choices, labels, need in (
-        ("backend", ("ltx", "wan-turbo", "wan"), ("fast", "nicer (slower)"), (24, 24)),
+# label -> the narrowest panel width at which it must be shown (whole); >= 2 labels once two fit.
+# zoned: each label captions one option -> its centre must sit over THAT option's zone (a label slid
+# under the neighbouring zone is a mislabel, worse than no label)
+for key, choices, labels, need, two_from, zoned in (
+        ("backend", ("ltx", "wan-turbo", "wan"), ("fast", "nicer (slower)"), (24, 24), 24, False),
         ("steadiness", ("evolve", "balanced", "hold"), ("lots of motion", "gentle", "locked-off"),
-         (24, 37, 29))):
+         (24, 37, 29), 29, True)):
     for choice in choices:
         ref = [Text.from_markup(ln) for ln in fv.render(key, stub(**{key: choice}), width=48).split("\n")]
         want = _zone_at(ref[0], ref[1].plain.index("▲"))
@@ -137,8 +139,13 @@ for key, choices, labels, need in (
                 bad.append((w, "option order", mk))
             pos = [pins.find(lb) for lb in labels]
             shown = [p for p in pos if p >= 0]
-            if shown != sorted(shown) or len(shown) < 2 or any(p < 0 <= w - n for p, n in zip(pos, need)):
+            if shown != sorted(shown) or (w >= two_from and len(shown) < 2) \
+                    or any(p < 0 <= w - n for p, n in zip(pos, need)):
                 bad.append((w, "labels", pins))
+            if zoned and len(glyphs) == 3:
+                for i, (p, lb) in enumerate(zip(pos, labels)):
+                    if p >= 0 and _zone_at(t[0], p + (len(lb) - 1) // 2) != _zone_at(t[0], glyphs[i]):
+                        bad.append((w, "label zone", lb, pins))
         check("%s=%s: ▲ on its design zone, options + labels in order, 24..200" % (key, choice),
               not bad, bad[:3])
 
@@ -147,7 +154,7 @@ for key, w, want in (
         ("backend", 24, "    fast  nicer (slower)"), ("backend", 25, "    fast   nicer (slower)"),
         ("backend", 32, "    fast        nicer (slower)"),
         ("backend", 48, "      fast                    nicer (slower)"),
-        ("steadiness", 24, "  lots of motion gentle"), ("steadiness", 32, "  lots of motion    locked-off"),
+        ("steadiness", 24, "  lots of motion"), ("steadiness", 32, "  lots of motion    locked-off"),
         ("steadiness", 40, "  lots of motion gentle   locked-off"),
         ("steadiness", 48, "  lots of motion   gentle      locked-off")):
     got = Text.from_markup(fv.render(key, stub(), width=w)).plain.split("\n")[2]

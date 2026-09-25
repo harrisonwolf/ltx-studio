@@ -138,23 +138,20 @@ class Job:
         if j.status in ACTIVE:       # was running when app died
             j.status = "interrupted"
             # freeze elapsed() at last log activity (or start) instead of "now"
-            j.finished = j.finished or (
-                os.path.getmtime(j.logpath()) if os.path.exists(j.logpath()) else j.started)
+            j.finished = j.finished or j._leg_end_guess()
         # 'suspended' SURVIVES app restart -- never auto-flip it to 'interrupted'.
         # If a valid checkpoint exists, PREFER 'suspended'. A job killed mid-suspend
         # (transient 'suspending') recovers to 'suspended' when its checkpoint is valid,
         # else demotes to 'interrupted' so it can never become an unrecoverable zombie.
         ckpt = os.path.join(RUNS_DIR, f"{j.id}_ckpt")
         if j.status in ("interrupted", "suspended", "suspending") and j._ckpt_valid(ckpt):
-            if j.status == "suspending":     # the app died before the leg ended: freeze it at the
-                j.finished = j.finished or (  # last log activity so RESUME folds it into prior_secs
-                    os.path.getmtime(j.logpath()) if os.path.exists(j.logpath()) else j.started)
+            if j.status == "suspending":     # the app died before the leg ended: freeze it at its
+                j.finished = j.finished or j._leg_end_guess()   # last log activity -> RESUME folds it in
             j.status = "suspended"
             j.ckpt_dir = ckpt
         elif j.status == "suspending":
             j.status = "interrupted"
-            j.finished = j.finished or (
-                os.path.getmtime(j.logpath()) if os.path.exists(j.logpath()) else j.started)
+            j.finished = j.finished or j._leg_end_guess()
         tail = []
         if os.path.exists(j.logpath()):
             try:
@@ -169,6 +166,17 @@ class Job:
         a = self.started or self.created
         b = self.finished or time.time()
         return int(b - a)
+
+    def _leg_end_guess(self):
+        """End of a leg the app didn't see finish: the log's last write, never before the leg started
+        (a leg killed before it logged anything leaves the PREVIOUS leg's mtime on the log)."""
+        try:
+            t = os.path.getmtime(self.logpath())
+        except OSError:
+            t = None
+        if self.started:
+            return max(self.started, t or self.started)
+        return t
 
     def run_secs(self):
         """Wall seconds of the whole run: every earlier leg of a suspended+resumed run + this leg."""

@@ -36,13 +36,26 @@ def _frame_files(d):
     return [os.path.join(d, f) for _, f in sorted(names)]
 
 
+# What else a blind A/B's varied dial changes, so every view hides those too. "shape" = single-vs-chained,
+# shot / frame counts; "director" = the director's rewritten prompts (derived from the prompt).
+# (LIVE's progress counters -- shot/step/frame X of N -- are left real: a render must stay followable.)
+_BLIND_ALSO = {
+    "seconds": ("shape",), "fps": ("shape",), "res": ("shape",), "seg": ("shape",),
+    "backend": ("res", "steps", "fps", "cfg", "shape"),   # wan: 16 fps + upscale; turbo: steps<=8, cfg 1.0
+    "checkpoint": ("steps", "cfg"),                        # distilled forces steps<=8, cfg 1.0
+    "prompt": ("director",),
+}
+
+
 def _blind_hidden(p, *dials):
-    """True while a blind A/B run is unrevealed and its varied dial is one of `dials`."""
+    """True while a blind A/B run is unrevealed and any of `dials` is its varied dial or something that
+    dial changes (_BLIND_ALSO)."""
     p = p or {}
-    return bool(p.get("pair_blind")) and not p.get("pair_revealed") and p.get("pair_varied_dial") in dials
-
-
-_LEN_DIALS = ("seconds", "fps", "res", "seg")   # these also move single-vs-chained / shot & frame counts
+    if not p.get("pair_blind") or p.get("pair_revealed"):
+        return False
+    v = p.get("pair_varied_dial")
+    hit = {v, *_BLIND_ALSO.get(v, ())}
+    return any(d in hit for d in dials)
 
 
 def _run_secs(job):
@@ -400,14 +413,15 @@ class ConsultDaemon:
             except Exception:
                 self.proc = None
                 return
-            threading.Thread(target=self._await_ready, daemon=True).start()
+            threading.Thread(target=self._await_ready, args=(self.proc,), daemon=True).start()
 
-    def _read_json(self, tries=400):
+    def _read_json(self, tries=400, proc=None):
         """Read the next JSON object from the daemon, skipping any stray non-JSON stdout
-        (library banners, etc.) so the protocol can never wedge on an unexpected line."""
+        (library banners, etc.) so the protocol can never wedge on an unexpected line.
+        proc: read THIS process (the load watcher's own spawn), not whatever self.proc is now."""
         for _ in range(tries):
             try:
-                p = self.proc               # kill() may null it mid-read from another thread
+                p = proc if proc is not None else self.proc   # kill() may null self.proc mid-read
                 line = p.stdout.readline() if p else None
             except Exception:
                 return None
@@ -422,11 +436,12 @@ class ConsultDaemon:
                 continue
         return None
 
-    def _await_ready(self):
-        p = self.proc
-        obj = self._read_json()
-        if obj is None and self.proc is not p:
-            return                   # kill()ed / replaced mid-load (CONSULT closed, a render took the GPU): no failure
+    def _await_ready(self, p=None):
+        p = p if p is not None else self.proc   # the process THIS watcher was spawned for
+        obj = self._read_json(proc=p)
+        if self.proc is not p:
+            return                   # kill()ed / replaced mid-load (CONSULT closed, a render took the GPU):
+            #                          not a failure, and a late "ready" from it must not flip ready either
         self.ready = bool(obj and obj.get("ready"))
         self.info = (obj.get("info") or "") if obj else ""
         if self.ready:
@@ -2515,7 +2530,8 @@ class Studio(App):
         queue action + on_data_table_row_highlighted keep working unchanged."""
         m = self.mgr
         items = [(j, "QUEUED · #%d" % (i + 1), SPAL["accent"]) for i, j in enumerate(m.queued())]
-        items += [(j, "SUSPENDED · shot %s/%s" % (j.seg, j.nseg), SPAL["warning"]) for j in m.suspended()]
+        items += [(j, ("SUSPENDED" if _blind_hidden(j.params, "shape") else "SUSPENDED · shot %s/%s" % (j.seg, j.nseg)),
+                   SPAL["warning"]) for j in m.suspended()]
         t = self.query_one("#qtable", DataTable)
         try:
             w = int(t.content_size.width) - 4      # leave room for the DataTable cell padding + scrollbar
@@ -2777,8 +2793,8 @@ class Studio(App):
         # (ultra-theme animation runs on its OWN ~15fps timer — see _ultra_frame — not this 0.5s tick)
         # queue + archive tables — rebuilt only when content changes (cursor stays put; no rubber-band)
         _dt = lambda ts: time.strftime("%m-%d %H:%M", time.localtime(ts)) if ts else "—"
-        def _blind_hides(j, dial):
-            return _blind_hidden(j.params, dial)
+        def _blind_hides(j, *dials):
+            return _blind_hidden(j.params, *dials)
 
         def _atitle(j):
             pre = ("★ " if (j.params or {}).get("favorite") else "") + \
@@ -2788,7 +2804,7 @@ class Studio(App):
             return (pre + (j.title or ""))[:30]
         def _arow(j):
             return (j.id, j.id, _atitle(j), j.status, _dt(j.started), _dt(j.finished), fmt(_run_secs(j)),
-                    "—" if _blind_hides(j, "seconds") else _vidlen(j))
+                    "—" if _blind_hides(j, "seconds", "shape") else _vidlen(j))
         # a finished run's row is frozen: cache it on everything it reads, so ticks stop re-formatting
         # the whole history just for _sync_table to find the signature unchanged
         acache, arows = self._arow_cache, []
@@ -2899,15 +2915,18 @@ class Studio(App):
                 pv.styles.width = cols + 2
                 pv.update(render_preview(ppath, cols=cols))
         plans = getattr(job, "plans", None) or []
+        _hide_dir = _blind_hidden(job.params, "director")   # a blind PROMPT pair: plans/rewrites echo it
         for entry in plans[self._notes_n:]:
             seg, plan = int(entry[0]), entry[1]
             prompt = entry[2] if len(entry) > 2 else ""
+            if _hide_dir:
+                plan, prompt = "(hidden — blind A/B)", ""
             notes.write(f"[#6dffab]shot {seg + 1}[/#6dffab] — [#9dffce]plan:[/#9dffce] {plan or '…'}"
                         + (f"  [#ffcf5c]→[/#ffcf5c] {prompt}" if prompt else ""))
             cost = _dir_cost_line(job, seg)
             if cost:
                 notes.write(f"   {cost}")
-            if self._dir_raw:
+            if self._dir_raw and not _hide_dir:
                 r = _director_raw(job, seg)
                 if r and r.get("raw"):
                     notes.write(f"   [dim]raw ▾[/dim] {r['raw'].strip()[:1200]}")
@@ -2964,6 +2983,8 @@ class Studio(App):
             self._put("#pace_frames", "[dim]frames[/dim] —", fixed=True)
         # ---- STEERING strip ----
         smode = (p.get("steadiness") or ("evolve" if p.get("directive") else "—")) if job.kind == "director" else job.kind
+        if _blind_hidden(p, "steadiness" if job.kind == "director" else "shape"):
+            smode = "(hidden)"
         self._put("#steer_mode", f"[dim]mode[/dim] {smode}", fixed=True)
         if job.kind == "director":
             self._put("#steer_directive", f"[dim]arc[/dim] {(p.get('directive') or '—')[:48]}", fixed=True)
@@ -4491,8 +4512,9 @@ class Studio(App):
             if getattr(job, "status", "") == "queued":
                 note = "[#ffcf5c]≡ queued — not run yet (config below; no results until it renders)[/#ffcf5c]\n\n"
             elif getattr(job, "status", "") == "suspended":
-                note = ("[#ffcf5c]▽ suspended @ shot %s/%s — will resume from its checkpoint[/#ffcf5c]\n\n"
-                        % (getattr(job, "seg", "?"), getattr(job, "nseg", "?")))
+                where = ("" if _blind_hidden(job.params, "shape")
+                         else " @ shot %s/%s" % (getattr(job, "seg", "?"), getattr(job, "nseg", "?")))
+                note = "[#ffcf5c]▽ suspended%s — will resume from its checkpoint[/#ffcf5c]\n\n" % where
         except Exception:
             note = ""
         # _fmt_inspect returns a str -> safe to prepend the note.
@@ -4621,23 +4643,22 @@ class Studio(App):
 
         # --- blind A/B: while blind + not yet revealed, hide the ONE varied dial's value + the variant ---
         _blind = bool(p.get("pair_blind")) and not p.get("pair_revealed")
-        _varied = p.get("pair_varied_dial") if p.get("pair_id") else None
         _HIDDEN = "[hidden — blind A/B, REVEAL to show]"
 
         def brow(k, v, dial):
             """A SETTINGS row that hides its value iff this dial is the blind-varied one."""
-            return row(k, _HIDDEN if (_blind and _varied == dial) else v)
+            return row(k, _HIDDEN if _blind_hidden(p, dial) else v)
 
         _KGLYPH = {"single": "▭", "chained": "▥", "director": "✦", "enhance": "▲"}
         # a LENGTH / FPS / RES pair also differs in single-vs-chained and the shot count -> hide those too
-        _len_blind = _blind and _varied in _LEN_DIALS
+        _len_blind = _blind_hidden(p, "shape")
         _kind = "(hidden)" if _len_blind and job.kind in ("single", "chained") else job.kind
         L = [f"[b]{job.id}[/b]    {_status_glyph(job.status)} \[{job.status.upper()}]",
              time.strftime(f"[dim]{'·' if _kind != job.kind else _KGLYPH.get(job.kind, '·')} {_kind} · %b %d  %H:%M[/dim]",
                            time.localtime(job.finished or job.created)),
              "─" * 48,
              "[#6dffab]PROMPT[/#6dffab]",
-             f"  {_HIDDEN if (_blind and _varied == 'prompt') else (p.get('prompt') or job.title or '(none)')}"]
+             f"  {_HIDDEN if _blind_hidden(p, 'prompt') else (p.get('prompt') or job.title or '(none)')}"]
         if p.get("directive"):
             L += ["[#6dffab]DIRECTIVE[/#6dffab]", f"  {p['directive']}"]
         if p.get("anchors"):
@@ -4645,7 +4666,7 @@ class Studio(App):
         if p.get("image"):
             L += ["[#6dffab]START IMAGE[/#6dffab]", f"  {p['image']}"]
         L += ["", "[#6dffab]SETTINGS[/#6dffab]"]
-        if _blind and _varied == "steadiness":
+        if _blind_hidden(p, "steadiness"):
             L.append(row("mode", f"{_kind} · {_HIDDEN}" if p.get("steadiness") else _kind))
         else:
             L.append(row("mode", _kind + (f" · {p['steadiness']}" if p.get("steadiness") else "")))
@@ -4654,7 +4675,7 @@ class Studio(App):
         if _len_blind:
             L.append(row("shots", _HIDDEN))
         elif int(job.nseg or 1) > 1:
-            if _blind and _varied == "seg":
+            if _blind_hidden(p, "seg"):
                 L.append(row("shots", f"{job.nseg}  ×  {_HIDDEN}"))
             else:
                 L.append(row("shots", f"{job.nseg}  ×  {p.get('seg_sec', '?')}s each"))
@@ -4703,7 +4724,7 @@ class Studio(App):
                     L.append(row("your pick", f"variant {win_var} (varied value unavailable)"))
         neg = p.get("n_prompt")
         if neg and neg != NEG:
-            L += ["", "[#6dffab]NEGATIVE[/#6dffab]", f"  {_HIDDEN if (_blind and _varied == 'n_prompt') else neg}"]
+            L += ["", "[#6dffab]NEGATIVE[/#6dffab]", f"  {_HIDDEN if _blind_hidden(p, 'n_prompt') else neg}"]
         if job.kind == "enhance":
             modes = []
             if p.get("enh_interp") and str(p.get("enh_interp")) != "1":
@@ -4762,10 +4783,13 @@ class Studio(App):
                 loads = [v[0] for v in dm.values()]; thinks = [v[1] for v in dm.values()]
                 L.append("  [dim]per-seam cost: load {:.0f}s avg · think {:.1f}s avg · {} seams[/dim]"
                          .format(sum(loads) / len(loads) / 1000, sum(thinks) / len(thinks) / 1000, len(dm)))
-            raws = _director_raw(job) if self._dir_raw else {}   # one read of director.jsonl, not one per shot
+            _hide_dir = _blind_hidden(p, "director")         # a blind PROMPT pair: plans/rewrites echo it
+            raws = _director_raw(job) if (self._dir_raw and not _hide_dir) else {}   # one read, not one per shot
             for entry in plans:
                 seg, plan = int(entry[0]), entry[1]
                 prompt = entry[2] if len(entry) > 2 else ""
+                if _hide_dir:
+                    plan, prompt = "(hidden — blind A/B)", ""
                 L.append(f"  [#9dffce]shot {seg + 1}[/#9dffce] — {plan or '…'}")
                 c = _dir_cost_line(job, seg)
                 if c:
@@ -4777,7 +4801,8 @@ class Studio(App):
                     if r and r.get("raw"):
                         L.append(f"      [dim]raw:[/dim] {r['raw'].strip()}")
         elif job.director:
-            L += ["", "[#6dffab]LAST DIRECTOR PROMPT[/#6dffab]", f"  [#ffcf5c]{job.director}[/#ffcf5c]"]
+            L += ["", "[#6dffab]LAST DIRECTOR PROMPT[/#6dffab]",
+                  f"  [#ffcf5c]{_HIDDEN if _blind_hidden(p, 'director') else job.director}[/#ffcf5c]"]
         rel = self._related_jobs(job) if getattr(self, "mgr", None) else []
         if rel:
             L += ["", "[#6dffab]RELATED RUNS[/#6dffab]",
@@ -4829,7 +4854,7 @@ class Studio(App):
         def ts(t):
             return time.strftime("%b %d  %H:%M:%S", time.localtime(t)) if t else "—"
 
-        _lenb = _blind_hidden(p, *_LEN_DIALS)   # kind / shots / frames would give a blind length away
+        _lenb = _blind_hidden(p, "shape")   # kind / shots / frames would give a blind length away
         _H = "[hidden — blind A/B, REVEAL to show]"
         L = [f"[b]{job.id}[/b]    {_status_glyph(job.status)} \[{job.status.upper()}]",
              f"[dim]{'(hidden)' if _lenb and job.kind in ('single', 'chained') else job.kind} · provenance[/dim]",

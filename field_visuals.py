@@ -223,9 +223,13 @@ def _pin_row(width, pins, slide=False):
     `col` is the column the label is CENTERED on (same column space as the ▲ marker). Labels
     are clamped into 0..width-1; a label that would touch an already-placed one is dropped
     (earlier pins win) — or, with slide=True (left-to-right zone captions on a shrunken bar),
-    slid right to 2 cols past the obstacle while it still fits. Returns Rich markup, right-trimmed."""
+    slid right to 2 cols past the obstacle while it still fits. A pin may carry a 4th item,
+    max_center: a slid label whose centre would pass it (out of its own zone) is dropped instead
+    of captioning the wrong zone. Returns Rich markup, right-trimmed."""
     cells = [(" ", None)] * width
-    for col, text, color in pins:
+    for pin in pins:
+        col, text, color = pin[:3]
+        max_center = pin[3] if len(pin) > 3 else None
         if not text or len(text) > width:
             continue
         start = int(col) - (len(text) - 1) // 2
@@ -236,6 +240,8 @@ def _pin_row(width, pins, slide=False):
             if not busy:
                 break
             start = busy[-1] + 2 if slide and busy[-1] + 2 + len(text) <= width else None
+            if start is not None and max_center is not None and start + (len(text) - 1) // 2 > max_center:
+                start = None
         if start is None:
             continue
         for i, ch in enumerate(text):
@@ -648,7 +654,7 @@ def _steadiness(app):
     # gap left between them on a shrunken bar, else it is the one dropped
     lines.append("  " + _pin_row(pw, [(_grid(6, WIDTH), "lots of motion", "dim"),
                                       (_grid(33, WIDTH), "locked-off", "dim"),
-                                      (_grid(19, WIDTH), "gentle", "dim")], slide=True))
+                                      (_grid(19, WIDTH), "gentle", "dim", _grid(26, WIDTH) - 1)], slide=True))
 
     for key, name, tag, _pos, color in opts:    # A19: one item per line -> fits narrow panels
         tick = _c(ACCENT, "● ") if key == steadiness else "  "

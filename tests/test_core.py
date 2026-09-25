@@ -465,6 +465,19 @@ m.jobs[lj.id] = lj
 m.resume_suspended(lj.id)
 check("R7 ...so RESUME folds that leg into prior_secs", abs((lj.prior_secs or 0) - 300) < 2, lj.prior_secs)
 m.remove(lj.id)
+# a leg killed before it logged anything: the log's mtime is the PREVIOUS leg's -> never end before start
+sj2 = sc.Job("susp_early", "t", "chained", W("--nseg", 3), P(3))
+sj2.status, sj2.started, sj2.finished = "suspending", time.time() - 100, None
+sj2.save()
+ck2 = os.path.join(sc.RUNS_DIR, "susp_early_ckpt")
+os.makedirs(os.path.join(ck2, "frames"), exist_ok=True)
+json.dump({"n_frames": 1}, open(os.path.join(ck2, "state.json"), "w"))
+open(os.path.join(ck2, "frames", "0000.png"), "w").close()
+open(sj2.logpath(), "w").write("x\n")
+os.utime(sj2.logpath(), (sj2.started - 400, sj2.started - 400))
+lj2 = sc.Job.load(sj2.jpath())
+check("R7 a leg's reloaded end is never before its start (no negative runtime)",
+      lj2.finished is not None and lj2.finished >= lj2.started and lj2.run_secs() >= 0, (lj2.started, lj2.finished))
 # ======================= R8 resume_suspended takes the manager lock (runner claims under it) =======================
 rj = sc.Job("resume_lock", "t", "chained", W("--nseg", 3), P(3))
 rj.status, rj.started, rj.finished, rj.ckpt_dir = "suspended", time.time() - 100, time.time() - 50, ck

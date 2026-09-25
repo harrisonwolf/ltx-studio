@@ -18,7 +18,7 @@ removed = []
 class FakeMgr:
     def __init__(self): self.jobs, self.paused, self.vram_reserve_gb = jobs, False, 1.0
     def queued(self): return [j for j in jobs.values() if j.status == "queued"]
-    def suspended(self): return []
+    def suspended(self): return [j for j in jobs.values() if j.status == "suspended"]
     def archived(self): return [j for j in jobs.values() if j.status == "done"]
     def active(self): return None
     def counts(self): return (len(self.queued()), 0, len(self.archived()), 0)
@@ -117,6 +117,23 @@ async def main():
         a.params.update(pair_varied_dial="seed", seed="4242")
         card = app._queue_card(a, "QUEUED · #1", "#ffffff", 70)
         check("blind queue card hides the varied seed", "4242" not in card, card)
+        # the masking table: a varied dial also hides what it changes (backend -> res/steps/fps/...)
+        a.params.update(pair_blind=True, pair_revealed=False, pair_varied_dial="backend", steps="40", width=704, height=480)
+        card = app._queue_card(a, "QUEUED · #1", "#ffffff", 70)
+        check("backend-blind queue card hides steps and res too", "40st" not in card and "704×480" not in card, card)
+        a.params.update(pair_varied_dial="seconds"); a.status, a.seg = "suspended", 1
+        app._sync_queue_cards(); await pilot.pause(0.1)
+        qt = app.query_one("#qtable", DataTable)
+        cards = " ".join(str(qt.get_row(k)) for k in qt.rows)
+        check("length-blind SUSPENDED card hides the shot count", "shot 1/4" not in cards, cards[:300])
+        a.status = "done"
+        a.params.update(pair_varied_dial="prompt"); a.kind = "director"
+        a.plans = [[0, "a whale breaching at dawn", "a whale breaching at dawn, cinematic"]]
+        a.director = "a whale breaching, cinematic"
+        txt = app._fmt_inspect(a)
+        check("prompt-blind inspect hides the director's plans / rewrites", "whale" not in txt,
+              [l for l in txt.splitlines() if "whale" in l])
+        a.kind, a.plans, a.director = "chained", [], ""
         a.params["pair_blind"] = False
         # 6. "shots done" is honest for a run that failed before its first shot completed
         f = studio_core.Job("failrun", "t", "chained", [], dict(a.params, pair_blind=False, nseg=3))
