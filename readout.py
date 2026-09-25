@@ -12,6 +12,7 @@
 # two modules never step on each other.
 
 import os
+import re
 import json
 import statistics
 import time
@@ -253,6 +254,14 @@ def _read_experiments(path):
     return rows
 
 
+def _done(r):
+    """A row fit to learn from: a finished run. experiment_log also records FAILED runs (their
+    peak VRAM / phase times describe a crash, not the model) -> skip any row whose status is
+    present and not "done"; rows without a status field (older/hand-written logs) are kept."""
+    st = r.get("status")
+    return st is None or st == "done"
+
+
 def _refit(rows):
     """Re-derive per-backend VRAM k and time COEF/WARM/DECODE by median ratio (robust to the
     known outliers, e.g. the 21646s decode row). Keeps hand constants for any backend with
@@ -262,7 +271,7 @@ def _refit(rows):
         base_hand, k_hand = HAND_VRAM[be]
         ks = []
         for r in rows:
-            if r.get("backend") != be:
+            if r.get("backend") != be or not _done(r):
                 continue
             peak = _f(r.get("peak_vram_mb"))
             W, H, sf = _f(r.get("width")), _f(r.get("height")), _f(r.get("seg_frames"))
@@ -272,8 +281,9 @@ def _refit(rows):
             if mpxf <= 0:
                 continue
             ks.append((peak / 1024.0 - base_hand) / mpxf)        # MiB -> GiB, hold hand base
-        if len(ks) >= 3:
-            fit["vram"][be] = {"base_gb": base_hand, "k_gb_per_mpxf": statistics.median(ks), "rows": len(ks)}
+        k_fit = statistics.median(ks) if len(ks) >= 3 else None
+        if k_fit is not None and k_fit > 0:   # k<=0 would make longer clips read LESS VRAM -> keep hand k
+            fit["vram"][be] = {"base_gb": base_hand, "k_gb_per_mpxf": k_fit, "rows": len(ks)}
         else:
             fit["vram"][be] = {"base_gb": base_hand, "k_gb_per_mpxf": k_hand, "rows": len(ks)}
 
@@ -281,7 +291,7 @@ def _refit(rows):
         segref = ht["SEG_REF"]
         coefs, warms, decs = [], [], []
         for r in rows:
-            if r.get("backend") != be:
+            if r.get("backend") != be or not _done(r):
                 continue
             ps = r.get("phase_secs")
             if not isinstance(ps, dict) or not ps:
@@ -380,8 +390,9 @@ def _maybe_refit(repo, min_new_rows):
                 return cached                                    # nothing changed -> no parse
         rows = _read_experiments(exp_path)
         prev = _f((cached or {}).get("row_count")) if cached else 0.0
-        if cached is not None and (len(rows) - prev) < min_new_rows:
+        if cached is not None and 0 <= (len(rows) - prev) < min_new_rows:
             return cached                                        # too few new rows to bother re-fitting
+        # (fewer rows than the cache saw = the log was rotated/reset -> refit now, else it'd never update)
         fit = _refit(rows)
         fit["row_count"] = len(rows)
         fit["ts"] = time.time()
@@ -419,7 +430,7 @@ def _fitted_time(cfg, fit):
         director = _s(cfg.get("mode")).strip().lower() == "director"
         nseam = max(0, nseg - 1)
         if director and _s(cfg.get("steadiness"), "hold").strip().lower() != "evolve":
-            nseam = -(-nseam // 3)                               # ceil div — director.py redirect cadence
+            nseam = nseam // 3                                   # director.py redirects at shots 3,6,9.. < nseg
         secs = (tf.get("LOAD", 0.0)
                 + nseg * (steps * tf.get("COEF", 0.0) * px * ff + tf.get("WARM", 0.0) + tf.get("DECODE", 0.0) * ff)
                 + (tf.get("SEAM", 0.0) * nseam if director else 0.0))
@@ -470,6 +481,8 @@ def _chain_boxes(ns, width, col):
     NB the opening bracket is markup-escaped ('\\[') or Rich eats the box as a style tag."""
     ns = max(1, int(ns))
     shown = ns if ns * 5 - 1 <= width else max(1, (width - 3 + 1) // 5)   # tail '┄+N' needs ~3 cells
+    while shown > 1 and ns > shown and shown * 5 - 1 + len("┄+%d" % (ns - shown)) > width:
+        shown -= 1                                   # a multi-digit N: give the tail its real width
     parts = []
     for i in range(shown):
         if i:
@@ -509,6 +522,36 @@ def _row(title, bar, label):
     return title + " " + bar + " " + label
 
 
+# Rich markup token: an escaped "\[" (ONE visible cell) or a style tag (zero cells). Same tag
+# grammar as rich.markup (a "[" followed by [a-z#/@]); nothing else in this module's lines is markup.
+_TOK = re.compile(r"(\\\[|\[[a-z#/@][^\[]*?\])")
+
+
+def _vis(line):
+    """Visible cell count of one of this module's markup lines (all glyphs used are 1 cell)."""
+    return sum(1 if t == "\\[" else (0 if i % 2 else len(t))     # odd split pieces = tokens
+               for i, t in enumerate(_TOK.split(line)))
+
+
+def _clip(line, width):
+    """Markup-safe hard clip to `width` visible cells: every tag is kept (so the markup stays
+    balanced), visible text past the edge is dropped. A no-op for lines that already fit."""
+    if _vis(line) <= width:
+        return line
+    out, room = [], width
+    for i, t in enumerate(_TOK.split(line)):
+        if t == "\\[":
+            if room >= 1:
+                out.append(t)
+                room -= 1
+        elif i % 2:                                # a style tag: always kept -> markup stays balanced
+            out.append(t)
+        else:
+            out.append(t[:max(0, room)])
+            room -= min(len(t), max(0, room))
+    return "".join(out)
+
+
 def render_readout(cfg, secs, fit, width=None):
     """The full six-gauge strip as ONE Rich-markup string. Order: VRAM, CLIP, RAM, SHOTS, QUALITY,
     DRIFT. Defensive: a single gauge failing degrades to a dim placeholder rather than crashing
@@ -517,16 +560,23 @@ def render_readout(cfg, secs, fit, width=None):
     cfg = cfg or {}
     # per-row overhead: 5-char title + 2 separating spaces + value tag up to ~10 chars
     w_bar = max(12, min(34, int(width) - 18)) if width else W_BAR
-    narrow = bool(width) and int(width) < 40
     lines = [_c(ACCENT, "▌ READOUT")]
+
+    def bw(label):
+        """This row's bar width: w_bar, shrunk only when title+bar+label would overflow `width`
+        (a long SHOTS value / a narrow panel) so the value tag stays visible instead of clipped."""
+        if not width:
+            return w_bar
+        return max(1, min(w_bar, int(width) - 7 - len(label)))
 
     # ---- VRAM ----
     try:
         est, cap, reserve = vram_est(cfg, fit)
         red_start = cap - reserve
-        bar = _zone_bar(est, cap, w_bar, red_start=red_start, reserve_at=red_start)
         col = BAD if est >= red_start else (WARN if est >= red_start * 0.9 else CLEAN)
-        lines.append(_row("VRAM ", bar, _c(col, "%.1f/%.1fG" % (est, cap))))
+        val = "%.1f/%.1fG" % (est, cap)
+        bar = _zone_bar(est, cap, bw(val), red_start=red_start, reserve_at=red_start)
+        lines.append(_row("VRAM ", bar, _c(col, val)))
         lines.append("      " + _c("dim", "peak · red≥%.1fG rsv%.1f" % (red_start, reserve)))
     except Exception:
         lines += ["VRAM " + _c("dim", "n/a"), ""]
@@ -542,7 +592,7 @@ def render_readout(cfg, secs, fit, width=None):
             frac = _clamp(sf / 130.0, 0.0, 1.0) * 100.0     # ~130fr ~ a long single segment; bar shrinks as res climbs
             col = CLEAN if ns <= 1 else (MID if ns <= 3 else WARN)
             val = ("%dfr x%d" % (sf, ns)) if ns > 1 else ("%dfr" % sf)
-            lines.append(_row("CLIP ", _score_bar(frac, w_bar, col), _c(col, val)))
+            lines.append(_row("CLIP ", _score_bar(frac, bw(val), col), _c(col, val)))
             sper = ("%.1fs/shot " % (sf / fpsv)) if fpsv > 0 else ""
             lines.append("      " + _c("dim", sper + ". res up=shorter"))
         else:
@@ -553,9 +603,10 @@ def render_readout(cfg, secs, fit, width=None):
     # ---- RAM ----
     try:
         est, cap = ram_est(cfg)
-        bar = _zone_bar(est, cap, w_bar, red_start=24.0)
         col = BAD if est >= 24.0 else (WARN if est >= 21.0 else CLEAN)
-        lines.append(_row("RAM  ", bar, _c(col, "%d/%dG" % (int(round(est)), int(round(cap))))))
+        val = "%d/%dG" % (int(round(est)), int(round(cap)))
+        bar = _zone_bar(est, cap, bw(val), red_start=24.0)
+        lines.append(_row("RAM  ", bar, _c(col, val)))
         lines.append("      " + _c("dim", "+offload+decode · red≥24G"))
     except Exception:
         lines += ["RAM  " + _c("dim", "n/a"), ""]
@@ -573,13 +624,14 @@ def render_readout(cfg, secs, fit, width=None):
             asked = _f(cfg.get("seconds"))
             val = ("%gs→%.1fs" % (asked, actual)) if (asked > 0 and abs(asked - actual) > 0.05) \
                 else ("%.1fs" % actual)
-            lines.append(_row("SHOTS", _chain_boxes(ns, w_bar, col), _c(col, val)))
+            lines.append(_row("SHOTS", _chain_boxes(ns, bw(val), col), _c(col, val)))
             cap = "%d × %.1fs" % (ns, sf / fpsv)
             if secs is not None:
                 cap += " · " + _fmt_secs(secs) + " render"
                 ft = _fitted_time(cfg, fit)
-                if ft is not None and not narrow:  # the fit annot is the first thing to wrap when snapped
-                    cap += "  (fit %s)" % _fmt_delta(ft - secs)
+                note = "" if ft is None else "  (fit %s)" % _fmt_delta(ft - secs)
+                if note and (not width or 6 + len(cap + note) <= int(width)):
+                    cap += note                    # the fit annot is dropped (not clipped) if it won't fit
             lines.append("      " + _c("dim", cap))
         else:
             lines.append("SHOTS " + _c("dim", "enter numbers"))
@@ -591,7 +643,7 @@ def render_readout(cfg, secs, fit, width=None):
     try:
         q, note = quality_score(cfg)
         col = CLEAN if q >= 70 else (MID if q >= 50 else (WARN if q >= 30 else BAD))
-        lines.append(_row("QUAL ", _score_bar(q, w_bar, col), _c(col, "%d/100" % q)))
+        lines.append(_row("QUAL ", _score_bar(q, bw("%d/100" % q), col), _c(col, "%d/100" % q)))
         lines.append("      " + _c("dim", "rough guide · " + note))
     except Exception:
         lines += ["QUAL " + _c("dim", "rough guide"), ""]
@@ -600,9 +652,11 @@ def render_readout(cfg, secs, fit, width=None):
     try:
         d, note = drift_risk(cfg)
         col = BAD if d >= 60 else (WARN if d >= 35 else (MID if d >= 15 else CLEAN))
-        lines.append(_row("DRIFT", _score_bar(d, w_bar, col), _c(col, "%d/100" % d)))
+        lines.append(_row("DRIFT", _score_bar(d, bw("%d/100" % d), col), _c(col, "%d/100" % d)))
         lines.append("      " + _c("dim", note))
     except Exception:
         lines += ["DRIFT" + _c("dim", " n/a"), ""]
 
+    if width:                                      # the guarantee: no line ever exceeds the panel
+        lines = [_clip(ln, int(width)) for ln in lines]
     return "\n".join(lines)

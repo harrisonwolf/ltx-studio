@@ -38,7 +38,6 @@ async def main():
         await pilot.pause()
         j = mkjob(3)
         seq = []
-        now = time.time()
         def at(phase, seg, step=0, into=0.0):
             j.phase, j.seg, j.step = phase, seg, step
             j.phase_started = time.time() - into

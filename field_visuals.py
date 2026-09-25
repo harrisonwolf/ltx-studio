@@ -30,6 +30,7 @@ LAYOUT IDIOM (every bar schematic, top to bottom — keep new visuals on this gr
 """
 
 import re
+import unicodedata
 
 # ---- palette handles (keep the hex in ONE place so a Sonnet-authored visual stays on-brand) ----
 ACCENT = "#6dffab"   # bright — highlights, current-value markers
@@ -95,7 +96,8 @@ def _num(app, field_id, default=None):
         s = str(raw).strip()
         if not s:
             return default
-        return float(s)
+        v = float(s)
+        return default if v != v else v                  # NaN (as documented) -> default
     except Exception:
         return default
 
@@ -121,10 +123,26 @@ def _bar_w(default=42):
         return int(default)
 
 
+def _cw(ch):
+    """Terminal cell width of one char (stdlib approximation of Rich's cell_len): combining /
+    format marks 0, East-Asian wide/fullwidth 2, everything else (incl. the box/block art) 1."""
+    if ch < "\u0300":
+        return 1                                  # ASCII / Latin-1 fast path (the art is all 1-cell)
+    cat = unicodedata.category(ch)
+    if cat in ("Mn", "Me", "Cf"):
+        return 0
+    return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+
+
+def _cells(s):
+    return sum(_cw(ch) for ch in s)
+
+
 def _clip_line(line, w):
     """Markup-safe HARD CLIP at w visible cols. Art lines are exempt from prose wrapping, so a
     ruler/legend/caption wider than a narrow panel gets clipped at the box edge (suffix lost)
-    instead of overflowing — the systematic guarantee that no visual can ever exceed its panel."""
+    instead of overflowing — the systematic guarantee that no visual can ever exceed its panel.
+    Measured in terminal CELLS (a wide CJK glyph is 2), never split mid-glyph."""
     if _vis_len(line) <= w:
         return line
     out, vis, open_tags = [], 0, []
@@ -142,9 +160,37 @@ def _clip_line(line, w):
         room = w - vis
         if room <= 0:
             break
-        out.append(part[:room])
-        vis += min(len(part), room)
+        keep = []
+        for ch in part:
+            cw = _cw(ch)
+            if cw > room:
+                break
+            keep.append(ch)
+            room -= cw
+            vis += cw
+        out.append("".join(keep))
     out.extend("[/" + t[1:] for t in reversed(open_tags))
+    return "".join(out)
+
+
+def _grid(col, width, design=42):
+    """Map a column on the fixed 42-col DESIGN grid onto a `width`-col bar (identity at 42), so
+    hand-placed markers/pins stay on the bar when _bar_w() shrinks it on a narrow panel."""
+    if width >= design:
+        return col
+    return int(round(col * (width - 1) / float(design - 1)))
+
+
+def _grid_bar(runs, width, design=42):
+    """[(n_cols, color), ...] laid out on the 42-col DESIGN grid -> '▓' bar markup `width` cols
+    wide (run boundaries rescaled; byte-identical to the fixed-run bar at width 42)."""
+    out, acc, prev = [], 0, 0
+    for n, color in runs:
+        acc += n
+        edge = acc if width >= design else int(round(acc * width / float(design)))
+        if edge > prev:
+            out.append(_c(color, "▓" * (edge - prev)))
+        prev = edge
     return "".join(out)
 
 
@@ -332,7 +378,7 @@ def _res(app):
 def _backend(app):
     WIDTH = _bar_w()
     # a speed<->quality axis, fast on the left, nicer/slower on the right
-    bar = _c(DIM, "▓" * 10) + _c(MID, "▓" * 12) + _c(CLEAN, "▓" * 12) + _c(WARN, "▓" * 8)
+    bar = _grid_bar([(10, DIM), (12, MID), (12, CLEAN), (8, WARN)], WIDTH)
     opts = [
         ("ltx",       "LTX-2B",    "fast draft",          5,  DIM),
         ("wan-turbo", "Wan-turbo", "fast 4-step distill", 20, MID),
@@ -348,9 +394,10 @@ def _backend(app):
 
     marker = [" "] * WIDTH
     for key, _name, _tag, pos, color in opts:
-        marker[pos] = _c(ACCENT, "▲") if key == backend else _c(color, "·")
+        marker[_grid(pos, WIDTH)] = _c(ACCENT, "▲") if key == backend else _c(color, "·")
     lines = ["  " + bar, "  " + "".join(marker)]
-    lines.append("  " + _pin_row(WIDTH, [(5, "fast", "dim"), (36, "nicer (slower)", "dim")]))
+    lines.append("  " + _pin_row(WIDTH, [(_grid(5, WIDTH), "fast", "dim"),
+                                         (_grid(36, WIDTH), "nicer (slower)", "dim")]))
 
     for key, name, tag, _pos, color in opts:    # A19: one item per line -> fits narrow panels
         tick = _c(ACCENT, "● ") if key == backend else "  "
@@ -562,7 +609,7 @@ def _steadiness(app):
         ("balanced", "Balanced", "gentle variation",      19, MID),
         ("hold",     "Hold",     "faithful / locked-off", 34, CLEAN),
     ]
-    bar = _c(BAD, "▓" * 12) + _c(MID, "▓" * 14) + _c(CLEAN, "▓" * 16)
+    bar = _grid_bar([(12, BAD), (14, MID), (16, CLEAN)], WIDTH)
 
     steadiness = None
     try:
@@ -573,10 +620,11 @@ def _steadiness(app):
 
     marker = [" "] * WIDTH
     for key, _name, _tag, pos, color in opts:
-        marker[pos] = _c(ACCENT, "▲") if key == steadiness else _c(color, "·")
+        marker[_grid(pos, WIDTH)] = _c(ACCENT, "▲") if key == steadiness else _c(color, "·")
     lines = ["  " + bar, "  " + "".join(marker)]
-    lines.append("  " + _pin_row(WIDTH, [(6, "lots of motion", "dim"), (19, "gentle", "dim"),
-                                         (33, "locked-off", "dim")]))
+    lines.append("  " + _pin_row(WIDTH, [(_grid(6, WIDTH), "lots of motion", "dim"),
+                                         (_grid(19, WIDTH), "gentle", "dim"),
+                                         (_grid(33, WIDTH), "locked-off", "dim")]))
 
     for key, name, tag, _pos, color in opts:    # A19: one item per line -> fits narrow panels
         tick = _c(ACCENT, "● ") if key == steadiness else "  "
@@ -692,22 +740,54 @@ def _wan_ref_anchor(app):
 # =====================================================================================
 # SEED — reproducibility card: same seed -> same clip, change -> new take
 # =====================================================================================
+_UNSAFE = {"[": "(", "]": ")", "\\": "/"}   # markup metachars in USER text -> inert lookalikes
+
+
+def _safe_text(s):
+    """User-typed text (the SEED field) -> markup-inert, single-line text: '[' / ']' / '\\' would
+    open/close/escape Rich tags ('[/]' crashed the app, '[b]' bolded), so swap them for inert
+    lookalikes; control / zero-width / line-break chars -> '?' so the card's cell math holds."""
+    out = []
+    for ch in s:
+        if ch in _UNSAFE:
+            ch = _UNSAFE[ch]
+        elif ch >= "\u0300" or ch < " " or "\x7f" <= ch < "\xa0":
+            cat = unicodedata.category(ch)
+            if cat[0] in "CM" or cat in ("Zl", "Zp"):
+                ch = "?"
+        out.append(ch)
+    return "".join(out)
+
+
+def _fit_cells(s, n):
+    """Longest prefix of `s` that is <= n terminal cells wide."""
+    out, used = [], 0
+    for ch in s:
+        cw = _cw(ch)
+        if used + cw > n:
+            break
+        out.append(ch)
+        used += cw
+    return "".join(out)
+
+
 def _seed(app):
     seed = None
     try:
         seed = app.v("seed")
     except Exception:
         seed = None
-    seed_s = str(seed).strip() if seed not in (None, "") else ""
+    seed_s = _safe_text(str(seed).strip()) if seed not in (None, "") else ""
 
     top = "┌" + "─" * 10 + "┐"              # all four boxes share one 12-col footprint
     bot = "└" + "─" * 10 + "┘"
     arrow = " " + "─" * 14 + "▶ "           # 17-col connector, same width as the gap labels
-    shown = (seed_s[:4] or "?")
+    shown = _fit_cells(seed_s, 4) or "?"
+    shown += " " * (4 - _cells(shown))      # pad in CELLS (a CJK glyph is 2) -> box stays 12 wide
 
     lines = [
         "  " + _c(CLEAN, top) + _c("dim", "  same settings  ") + _c(CLEAN, top),
-        "  " + _c(CLEAN, "│ seed %-4s│" % shown) + _c("dim", arrow) + _c(CLEAN, "│ identical│"),
+        "  " + _c(CLEAN, "│ seed %s│" % shown) + _c("dim", arrow) + _c(CLEAN, "│ identical│"),
         "  " + _c(CLEAN, bot) + " " * 17 + _c(CLEAN, bot),
         "",
         "  " + _c(WARN, top) + _c("dim", " any other seed  ") + _c(WARN, top),
@@ -715,7 +795,7 @@ def _seed(app):
         "  " + _c(WARN, bot) + " " * 17 + _c(WARN, bot),
     ]
     if seed_s:
-        lines.append(_caption(_c(ACCENT, "seed=%s" % seed_s[:10])))
+        lines.append(_caption(_c(ACCENT, "seed=%s" % _fit_cells(seed_s, 10))))
     else:
         lines.append(_caption(_c(WARN, "blank"), _c("dim", "random seed every run")))
     lines.append(_c("dim", "  fix the seed to change ONE thing at a time"))
@@ -758,7 +838,7 @@ def _vis_runs(s):
     for tok in _TAGRE.split(s):
         if not tok:
             continue
-        if tok[0] == "[" and tok[-1] == "]":
+        if _TAGRE.fullmatch(tok):                    # a real tag (NOT a literal "[███]" box)
             if tok[1:2] == "/":
                 if stack:
                     stack.pop()
@@ -770,7 +850,7 @@ def _vis_runs(s):
 
 
 def _vis_len(s):
-    return sum(len(t) for _, t in _vis_runs(s))
+    return sum(_cells(t) for _, t in _vis_runs(s))
 
 
 def _is_prose(s):
@@ -835,7 +915,8 @@ def render(field_id, app, width=None):
         return None
     try:
         w = _AVAIL
-        out = "\n".join(_clip_line(_fit_line(ln, w), w) for ln in out.split("\n"))
+        out = "\n".join(_clip_line(sub, w) for ln in out.split("\n")
+                        for sub in _fit_line(ln, w).split("\n"))
     except Exception:
         pass
     return out

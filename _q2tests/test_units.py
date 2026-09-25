@@ -101,35 +101,68 @@ check("fuse(overlap=1) concatenates", cc.shape[2] == 1 + T)
 
 
 # ---------- _denorm_stash invariant: RAW enters the stash/carry, corrections are decode-only ----------
-# Mirrors director.LTXBackend._denorm_stash's op order (raw -> adain -> fuse -> decode-only output)
-# without instantiating the full LTX pipeline. Falsified 2026-07-03: the original design carried the
-# CORRECTED latents forward, causing a positive-feedback drift loop (anchored drift ~5x baseline by
-# shot 3 in an 8-shot hold-stress test). This guards the fix: nothing touched by adain/fuse may reach
-# the stash/carry, even with both switched on.
+# Exercises the REAL director.LTXBackend._denorm_stash. It is a closure built inside LTXBackend.__init__
+# (which loads the whole LTX pipeline), so its exact source is lifted out of director.py via ast and bound
+# to stand-ins for its free variables (args / self / _lat_stash / _lat_inj / _orig_denorm). Falsified 2026-07-03: the
+# original design carried the CORRECTED latents forward, causing a positive-feedback drift loop (anchored
+# drift ~5x baseline by shot 3 in an 8-shot hold-stress test). This guards the fix: nothing touched by
+# adain/fuse may reach the stash/carry, even with both switched on.
+import ast, types
+
+
+def _load_denorm_stash(args, backend_self):
+    src = open(director.__file__).read()
+    fn = next(n for n in ast.walk(ast.parse(src))
+              if isinstance(n, ast.FunctionDef) and n.name == "_denorm_stash")
+    decoded = {}
+
+    def _orig_denorm(latents, latents_mean, latents_std, scaling_factor=1.0):
+        decoded["lat"] = latents                     # what the decoder receives
+        return latents
+
+    ns = {"args": args, "self": backend_self, "_lat_stash": {"lat": None}, "_orig_denorm": _orig_denorm,
+          "_lat_inj": {"lat": None},                 # no recorded injection length -> the overlap fallback
+          "adain_normalize_latents": director.adain_normalize_latents,
+          "linear_overlap_fuse": director.linear_overlap_fuse, "print": lambda *a, **k: None}
+    exec(compile(ast.Module(body=[fn], type_ignores=[]), director.__file__, "exec"), ns)
+    return ns["_denorm_stash"], ns["_lat_stash"], decoded
+
+
 rng3 = torch.Generator().manual_seed(13)
 raw = torch.randn(1, 4, 6, 8, 8, generator=rng3) * 3.0 + 2.0
 raw_ref = raw.clone()
 anchor3 = torch.randn(1, 4, 4, 8, 8, generator=rng3) * 0.3 - 1.0
 prev_carry = torch.randn(1, 4, 5, 8, 8, generator=rng3)
 
-# simulate the hook with adain>0 AND fuse on (the ON path that caused the regression)
-out = raw
-out = director.adain_normalize_latents(out, anchor3, factor=0.7)   # simulate --latent_adain 0.7
-K = 3
-out = director.linear_overlap_fuse(prev_carry[:, :, -K:], out, K)  # simulate --latent_fuse on
-stashed = raw.detach()   # what _denorm_stash puts in _lat_stash["lat"] -> becomes _carry in gen()
-
-check("simulated shot (adain>0 + fuse ON): stash/carry stays bit-identical to the RAW input",
-      torch.equal(stashed, raw_ref))
-check("simulated shot (adain>0 + fuse ON): the raw tensor itself is never mutated in place",
+# ON path: adain>0 AND fuse on, continuation shot (anchor captured, a previous carry exists)
+_on_self = types.SimpleNamespace(_anchor_lat=anchor3.clone(), _resumed=False, _adain_resume_warned=False,
+                                 _carry=prev_carry.clone(), _overlap_lat=3, _fuse_warned=False)
+_hook, _stash, _dec = _load_denorm_stash(types.SimpleNamespace(latent_adain=0.7, latent_fuse=True), _on_self)
+_hook(raw, torch.zeros(4), torch.ones(4))
+check("_denorm_stash (adain>0 + fuse ON): stash/carry is bit-identical to the RAW input",
+      _stash["lat"] is not None and torch.equal(_stash["lat"], raw_ref))
+check("_denorm_stash (adain>0 + fuse ON): the raw tensor itself is never mutated in place",
       torch.equal(raw, raw_ref))
-check("simulated shot (adain>0 + fuse ON): decode-path output DOES differ from raw (corrections applied)",
-      not torch.equal(out, raw_ref))
+check("_denorm_stash (adain>0 + fuse ON): decode-path tensor DOES differ from raw (corrections applied)",
+      _dec.get("lat") is not None and not torch.equal(_dec["lat"], raw_ref))
 
-# OFF path (adain=0, fuse off) must still be bit-identical end to end, decode included
-out_off = raw
-check("simulated shot (OFF path): decode-path output is RAW, unchanged (bit-identical)",
-      torch.equal(out_off, raw_ref))
+# first shot with adain on: the anchor is captured from RAW (and nothing is corrected yet)
+_s1 = types.SimpleNamespace(_anchor_lat=None, _resumed=False, _adain_resume_warned=False,
+                            _carry=None, _overlap_lat=3, _fuse_warned=False)
+_hook, _stash, _dec = _load_denorm_stash(types.SimpleNamespace(latent_adain=0.7, latent_fuse=True), _s1)
+_hook(raw, torch.zeros(4), torch.ones(4))
+check("_denorm_stash (shot 1): anchor captured from RAW; stash + decode input are RAW",
+      torch.equal(_s1._anchor_lat, raw_ref) and torch.equal(_stash["lat"], raw_ref)
+      and torch.equal(_dec["lat"], raw_ref))
+
+# OFF path (adain=0, fuse off) must be bit-identical end to end, decode included
+_off_self = types.SimpleNamespace(_anchor_lat=anchor3.clone(), _resumed=False, _adain_resume_warned=False,
+                                  _carry=prev_carry.clone(), _overlap_lat=3, _fuse_warned=False)
+_hook, _stash, _dec = _load_denorm_stash(types.SimpleNamespace(latent_adain=0.0, latent_fuse=False), _off_self)
+_hook(raw, torch.zeros(4), torch.ones(4))
+check("_denorm_stash (OFF path): decode-path tensor is RAW, unchanged (bit-identical)",
+      _dec.get("lat") is not None and torch.equal(_dec["lat"], raw_ref))
+check("_denorm_stash (OFF path): stash is RAW", torch.equal(_stash["lat"], raw_ref))
 
 
 # ---------- experiment_log provenance (P2) ----------

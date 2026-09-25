@@ -56,6 +56,13 @@ EFFECTS = {
 _SAME_COLOR_SEAM = re.compile(r"(?<!\\)\[/(#[0-9a-fA-F]{6})\]\[\1\]")
 
 
+# per-char markup escapes for arbitrary text: "[" would open a tag, and a lone backslash right
+# before the cell's closing "[/#..]" tag would ESCAPE that tag (unbalanced markup). A doubled
+# backslash renders as ONE literal backslash when it sits right before a tag; _SAME_COLOR_SEAM's
+# lookbehind never merges the seam after it, so it always stays directly before its closing tag.
+_ESC = {"[": "\\[", "\\": "\\\\"}
+
+
 def _merge_runs(markup):
     return _SAME_COLOR_SEAM.sub("", markup) if markup else markup
 
@@ -341,7 +348,7 @@ def electron_text(text, beat, base, hot, mode="electron", speed=2, tail=6, wavel
                     buf.append(" ")
                     continue
                 c = gcol.get((li, ci), base)
-                buf.append("[%s]%s[/%s]" % (c, ("\\[" if ch == "[" else ch), c))
+                buf.append("[%s]%s[/%s]" % (c, _ESC.get(ch, ch), c))
             out.append("".join(buf))
         return _merge_runs("\n".join(out))
     except Exception:
@@ -382,7 +389,7 @@ def render_electrons(text, heads, base, hot, tail=6):
                     buf.append(" ")
                     continue
                 c = gcol.get((li, ci), base)
-                buf.append("[%s]%s[/%s]" % (c, ("\\[" if ch == "[" else ch), c))
+                buf.append("[%s]%s[/%s]" % (c, _ESC.get(ch, ch), c))
             out.append("".join(buf))
         return _merge_runs("\n".join(out))
     except Exception:
@@ -846,8 +853,8 @@ def render(theme_name, beat, width=None):
     fn = THEMES.get(theme_name)
     if fn is None:
         return None
-    b = 0.0 if _frozen() else float(beat)             # float clock -> smooth sparkle/star twinkle
     try:
+        b = 0.0 if _frozen() else float(beat)         # float clock -> smooth sparkle/star twinkle
         return _merge_runs(fn(b, width))
     except Exception:
         return None

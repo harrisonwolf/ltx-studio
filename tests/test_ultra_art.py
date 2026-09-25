@@ -44,7 +44,9 @@ for n in NAMES:
             except Exception:
                 raised = True; art = ""
             art = art or ""
-            if art.count("[") != art.count("]"):
+            try:
+                _RT.from_markup(art)          # the authoritative check: what the studio parses
+            except Exception:
                 balanced = False
             for ln in art.split("\n"):
                 worst = max(worst, len(plain(ln)))
@@ -71,6 +73,47 @@ check("render_electrons: pure + moves + bracket-safe",
       _ea == ultra_art.render_electrons(_ITXT, [5.0], "#c9a24a", "#fff3c4")
       and _ea != ultra_art.render_electrons(_ITXT, [15.0], "#c9a24a", "#fff3c4")
       and _RT.from_markup(_ea).plain == _ITXT)
+
+# backslashes in the text must not escape a cell's closing tag (a trailing "\\" used to swallow the
+# next "[/#..]" -> MarkupError / garbled text). Plain text AND per-char colors must round-trip.
+def _chars(markup):
+    t = _RT.from_markup(markup)
+    st = [None] * len(t.plain)
+    for sp in t.spans:
+        for i in range(sp.start, sp.end):
+            st[i] = str(sp.style)
+    return t.plain, st
+_BS = ["\\", "a\\", "\\a", "C:\\path\\to\\x", "\\[x]", "[\\]", "\\\\", "a\\ b",
+       "x\\\ny\\", "cfg \\[1..7] \\", "[/#e0a0d0]\\[#e0a0d0]"]
+_bs_ok, _bs_bad = True, []
+for _t in _BS:
+    for _b in (0.0, 0.7, 3.3, 9.9):
+        for _f in (lambda t, b: ultra_art.electron_text(t, b, "#e0a0d0", "#5cffe0", mode="wave"),
+                   lambda t, b: ultra_art.electron_text(t, b, "#c9a24a", "#c9a24a", mode="electron"),
+                   lambda t, b: ultra_art.render_electrons(t, [b, b * 3], "#c9a24a", "#fff3c4")):
+            _m = _f(_t, _b)
+            try:
+                _pl, _st = _chars(_m or "")
+                _unmerged = ultra_art._merge_runs
+                ultra_art._merge_runs = lambda m: m          # merged vs per-char markup: same styles
+                try:
+                    _ref = _chars(_f(_t, _b) or "")
+                finally:
+                    ultra_art._merge_runs = _unmerged
+                if _pl != _t or (_pl, _st) != _ref:
+                    _bs_ok = False; _bs_bad.append((_t, _pl))
+            except Exception as _e:
+                _bs_ok = False; _bs_bad.append((_t, str(_e)[:50]))
+check("electron_text/render_electrons: backslash-safe (text + colors round-trip)", _bs_ok, _bs_bad[:3])
+
+# render() "never raises" -- even for a junk beat (float() used to sit outside the try)
+_raised = []
+for _b in ("x", None, [], object(), float("nan"), float("inf")):
+    try:
+        ultra_art.render(NAMES[0], _b)
+    except Exception as _e:
+        _raised.append((repr(_b), type(_e).__name__))
+check("render: junk beat never raises", not _raised, _raised)
 
 # freeze switch: STUDIO_NO_ANIM pins everything to frame 0 (headless / reduce-motion)
 os.environ["STUDIO_NO_ANIM"] = "1"

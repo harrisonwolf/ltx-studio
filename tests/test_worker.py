@@ -7,7 +7,7 @@ early SIGUSR1, fps -> LTX frame_rate, 9-frame floor, latent_fuse seam alignment,
 markdown-bold PLAN/PROMPT labels. Plus default-path invariants (frame counts/order, resume equivalence).
 
 WORKER_SRC=<dir> runs the same checks against another copy of the worker scripts (e.g. HEAD's)."""
-import os, sys, io, json, glob, shutil, signal, tempfile, types, runpy, contextlib, subprocess, time
+import os, sys, io, json, glob, shutil, tempfile, types, runpy, contextlib, subprocess, time
 os.environ["STUDIO_MUTE"] = "1"
 os.environ["CUDA_VISIBLE_DEVICES"] = ""          # never touch a GPU, even if one exists
 os.environ["HF_HUB_OFFLINE"] = "1"

@@ -5,21 +5,26 @@ Run: venv/bin/python _t22tests/test_readout.py   (from the repo root)
 Prints ALL_T22_CHECKS_PASS and exits 0 on success; raises AssertionError otherwise.
 """
 import os
-import re
 import sys
 import json
 import tempfile
+
+from rich.text import Text
+from rich.cells import cell_len
 
 # running `python _t22tests/test_readout.py` puts _t22tests/ (not the repo root) on sys.path[0]
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import readout  # noqa: E402
 
-_TAG = re.compile(r"\[/?[^\]]*\]")
-
-
 def strip(s):
-    """Remove Rich [..] markup so we can measure visible columns / search plain text."""
-    return _TAG.sub("", s)
+    """Rich markup -> the plain text the panel actually shows (the studio renders via
+    Text.from_markup, so a MarkupError here is a real crash, and escaped '\\[██]' boxes stay)."""
+    return Text.from_markup(s).plain
+
+
+# the narrowest content width the studio can hand render_readout(): #readout sits in #rleft
+# (min-width 30) minus its round border (2) and padding (2) -> 26 cells
+MIN_STUDIO_WIDTH = 26
 
 
 def base_cfg(**over):
@@ -60,17 +65,60 @@ def check_1_render_titles():
 
 
 def check_2_line_widths():
-    # a fit with an active ltx time-fit forces the SHOTS caption's "(fit ...)" annotation,
-    # and a wildly wrong COEF makes that delta huge -> widest possible caption line.
-    annot_fit = {"vram": {}, "time": {"ltx": {"COEF": 40.0, "WARM": 4000.0, "DECODE": 900.0,
-                                              "LOAD": 9000.0, "SEAM": 90.0, "SEG_REF": 49.0, "rows": 6}}}
-    for name, cfg in VARIANTS.items():
+    # a fit with an active time-fit forces the SHOTS caption's "(fit ...)" annotation, and a
+    # wildly wrong COEF makes that delta huge -> widest possible caption line. The long-chain
+    # variants force the '┄+N' tail + a long 'asked→actual' SHOTS value.
+    tf = {"COEF": 40.0, "WARM": 4000.0, "DECODE": 900.0, "LOAD": 9000.0, "SEAM": 90.0, "rows": 6}
+    annot_fit = {"vram": {}, "time": {"ltx": dict(tf, SEG_REF=49.0), "wan": dict(tf, SEG_REF=29.0),
+                                      "wan-turbo": dict(tf, SEG_REF=29.0)}}
+    variants = dict(VARIANTS)
+    variants["wan-112-shots"] = base_cfg(backend="wan", mode="director", W=832, H=480, fps=16,
+                                         seg_frames=45, total_frames=4001, nseg=112, chain=True,
+                                         seconds="250.25", steadiness="evolve")
+    variants["ltx-14-shots"] = base_cfg(mode="director", W=768, H=512, seg_frames=49,
+                                        total_frames=577, nseg=14, chain=True, seconds="24.03")
+    variants["thin-quality"] = base_cfg(W=512, H=320, steps=4, cfg=9.0)
+    for name, cfg in variants.items():
         for fit in (None, annot_fit):
-            for secs in (5.0, 600.0, 9000.0, 90000.0, None):
-                out = readout.render_readout(cfg, secs, fit)
-                for ln in out.split("\n"):
-                    w = len(strip(ln))
-                    assert w <= 48, "%s/%s: line %d cols > 48: %r" % (name, secs, w, strip(ln))
+            for secs in (600.0, 90000.0, None):
+                for width in [None] + list(range(MIN_STUDIO_WIDTH, 81)) + [100, 130]:
+                    out = readout.render_readout(cfg, secs, fit, width=width)
+                    budget = width or 48
+                    for ln in strip(out).split("\n"):   # MarkupError -> the test fails loudly
+                        w = cell_len(ln)
+                        assert w <= budget, "%s/%s/width=%s: line %d cells > %d: %r" % (
+                            name, secs, width, w, budget, ln)
+                    if width:                            # the fit note is dropped whole, never clipped
+                        for ln in strip(out).split("\n"):
+                            assert "(fit" not in ln or ln.rstrip().endswith(")"), \
+                                "%s/width=%s: clipped fit note %r" % (name, width, ln)
+
+
+def check_2c_value_tags_stay_visible():
+    """On a narrow panel the BARS give way, not the numbers: every gauge row still ends with its
+    complete value tag (the same tag the default-width render shows) at every studio width."""
+    for name, cfg in VARIANTS.items():
+        for secs in (600.0, None):
+            ref = strip(readout.render_readout(cfg, secs, None)).split("\n")
+            tags = {ln.split()[0]: ln.split()[-1] for ln in ref if ln.split() and ln.split()[0] in TITLES}
+            for width in range(MIN_STUDIO_WIDTH, 81):
+                for ln in strip(readout.render_readout(cfg, secs, None, width=width)).split("\n"):
+                    parts = ln.split()
+                    if parts and parts[0] in tags:
+                        assert parts[-1] == tags[parts[0]], "%s/width=%d: %s value tag %r, want %r" % (
+                            name, width, parts[0], parts[-1], tags[parts[0]])
+
+
+def check_2b_chain_boxes_fit_their_cell():
+    """The SHOTS chain is padded to the bar width so the value tag lines up with the gauges above;
+    its '┄+N' overflow tail must be budgeted too (a multi-digit N used to push it 1+ cells over)."""
+    for width in range(10, 40):
+        for ns in list(range(1, 130)) + [999, 1000, 1001, 1234, 99999]:
+            if ns > 1 and 4 + len("┄+%d" % (ns - 1)) > width:
+                continue                             # not even one box + tail fits: nothing to budget
+            plain = strip(readout._chain_boxes(ns, width, "#ffffff"))
+            assert cell_len(plain) == width, "chain ns=%d width=%d -> %d cells: %r" % (
+                ns, width, cell_len(plain), plain)
 
 
 def check_3_vram_monotonic_and_anchor():
@@ -252,12 +300,99 @@ def check_10_sub_threshold_growth_parses_once():
     assert all(o == first for o in outs), "memoized fit differs from the cached one"
 
 
+def check_11_failed_runs_excluded_from_refit():
+    """experiment_log records FAILED runs too; their peak VRAM / phase times describe a crash,
+    not the model. Only status=="done" rows (or rows with no status) may feed the fit."""
+    rows, K, COEF = _synth_rows()                   # no "status" field -> kept
+    done = [dict(r, status="done") for r in rows[:5]]
+    failed = []
+    for r in rows[:10] + rows[:10]:                  # 20 failed rows, all wildly off -> would own the median
+        f = dict(r, status="failed", peak_vram_mb=r["peak_vram_mb"] * 3.0)
+        f["phase_secs"] = {k: v * 7.0 for k, v in r["phase_secs"].items()}
+        failed.append(f)
+    fit = readout._refit(rows + done + failed)
+    kv, tv = fit["vram"]["ltx"], fit["time"]["ltx"]
+    assert kv["rows"] == len(rows) + len(done), "vram fit used %s rows (failed rows leaked?)" % kv["rows"]
+    assert abs(kv["k_gb_per_mpxf"] - K) / K <= 0.25, "failed rows skewed k: %s" % kv["k_gb_per_mpxf"]
+    assert abs(tv["COEF"] - COEF) / COEF <= 0.25, "failed rows skewed COEF: %s" % tv["COEF"]
+    assert tv["rows"] == len(rows) + len(done), "time fit used %s rows" % tv["rows"]
+
+
+def check_12_nonpositive_k_keeps_hand():
+    """Rows whose peak sits BELOW the hand base give k<=0; accepting it would make longer clips
+    read LESS VRAM. The fit must fall back to the hand k and the estimate stay monotonic."""
+    rows = [{"backend": "ltx", "status": "done", "width": W, "height": H, "seg_frames": sf,
+             "steps": 30, "nseg": 1, "peak_vram_mb": 1.5 * 1024.0}             # 1.5 GB < base 2.3
+            for (W, H, sf) in ((512, 320, 49), (704, 480, 49), (768, 512, 97), (704, 480, 121))]
+    fit = readout._refit(rows)
+    kv = fit["vram"]["ltx"]
+    assert kv["k_gb_per_mpxf"] > 0, "accepted a non-positive k %s" % kv["k_gb_per_mpxf"]
+    assert kv["k_gb_per_mpxf"] == readout.HAND_VRAM["ltx"][1], "expected the hand k, got %s" % kv
+    short = readout.vram_est(base_cfg(seg_frames=25), fit)[0]
+    long_ = readout.vram_est(base_cfg(seg_frames=121), fit)[0]
+    assert long_ > short, "longer clips must not read less VRAM (%s !> %s)" % (long_, short)
+
+
+def check_13_log_shrink_refits():
+    """A rotated/reset experiments.jsonl has FEWER rows than the cache saw; len(rows)-prev goes
+    negative and the fit used to never update again. Shrinkage must refit immediately."""
+    repo = tempfile.mkdtemp(prefix="t22shrink_")
+    exp = os.path.join(repo, readout.EXPERIMENTS)
+    rows, K, _COEF = _synth_rows()
+    _write_jsonl(exp, rows * 2)                      # 22 rows -> cached fit, row_count 22
+    first = readout.maybe_refit(repo, min_new_rows=5)
+    assert first and first.get("row_count") == 22, first and first.get("row_count")
+    new_rows = []                                     # rotated log: 6 fresh rows at k = 2*K
+    for r in rows[:6]:
+        mpxf = r["width"] * r["height"] * r["seg_frames"] / 1e6
+        new_rows.append(dict(r, peak_vram_mb=(2.3 + 2 * K * mpxf) * 1024.0))
+    _write_jsonl(exp, new_rows)
+    t = os.path.getmtime(os.path.join(repo, readout.FIT_CACHE)) + 10
+    os.utime(exp, (t, t))
+    fit = readout.maybe_refit(repo, min_new_rows=5)
+    assert fit.get("row_count") == 6, "shrunken log not refit (row_count %s)" % fit.get("row_count")
+    assert abs(fit["vram"]["ltx"]["k_gb_per_mpxf"] - 2 * K) / (2 * K) <= 0.25, \
+        "refit after rotation didn't pick up the new rows: k=%s" % fit["vram"]["ltx"]["k_gb_per_mpxf"]
+
+
+def _director_redirects(nseg, every):
+    """Mirror of director.py's main loop redirect gate: after shot 1 and after every continuation,
+    redirect iff the clip is still short of target (i.e. more shots follow) and
+    (seg_idx - last_redirect) >= redirect_every."""
+    last, n, seg = 0, 0, 1
+    if seg < nseg and (seg - last) >= every:
+        n, last = n + 1, seg
+    while seg < nseg:
+        seg += 1
+        if seg < nseg and (seg - last) >= every:
+            n, last = n + 1, seg
+    return n
+
+
+def check_14_fitted_time_director_seams():
+    """The '(fit ...)' ETA must charge SEAM once per ACTUAL director redirect: hold/balanced
+    redirect every 3rd shot (nseam // 3), evolve every shot."""
+    tf = {"COEF": 1.0, "WARM": 0.0, "DECODE": 0.0, "LOAD": 0.0, "SEAM": 90.0, "SEG_REF": 49.0, "rows": 6}
+    fit = {"vram": {}, "time": {"ltx": tf}}
+    for steady, every in (("hold", 3), ("balanced", 3), ("evolve", 1)):
+        for nseg in range(1, 30):
+            cfg = base_cfg(mode="director", chain=nseg > 1, nseg=nseg, steadiness=steady)
+            base = readout._fitted_time(dict(cfg, mode="single"), fit)
+            got = readout._fitted_time(cfg, fit) - base
+            want = 90.0 * _director_redirects(nseg, every)
+            assert abs(got - want) < 1e-6, "%s nseg=%d: seam time %s != %s" % (steady, nseg, got, want)
+
+
 def main():
     checks = [
-        check_1_render_titles, check_2_line_widths, check_3_vram_monotonic_and_anchor,
+        check_1_render_titles, check_2_line_widths, check_2b_chain_boxes_fit_their_cell,
+        check_2c_value_tags_stay_visible,
+        check_3_vram_monotonic_and_anchor,
         check_4_ram_ordering, check_5_drift, check_6_quality_range,
         check_7_refit_recovers_and_caches, check_8_sparse_history_keeps_hand,
         check_9_missing_and_corrupt_no_raise, check_10_sub_threshold_growth_parses_once,
+        check_11_failed_runs_excluded_from_refit, check_12_nonpositive_k_keeps_hand,
+        check_13_log_shrink_refits, check_14_fitted_time_director_seams,
     ]
     for c in checks:
         c()

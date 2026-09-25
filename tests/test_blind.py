@@ -2,7 +2,7 @@
 are identical are refused (for blind A/B and PAIR), BALANCED/EVOLVE need a real directive, the inspect
 view and archive table hide the varied value until REVEAL, back-to-back enhances of one run get
 distinct outputs, "shots done" is honest, and restoring saved sound prefs at launch keeps the INFO intro."""
-import sys, os, asyncio, types, tempfile
+import sys, os, asyncio, tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ["STUDIO_NO_ANIM"] = "1"
 import studio, studio_core
