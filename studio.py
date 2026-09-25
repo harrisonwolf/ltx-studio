@@ -76,6 +76,24 @@ def _plain(s):
     """Strip Rich markup tags -> visible text (used to re-animate the INFO panel over its base text)."""
     return _MARKUP_RE.sub("", str(s))
 
+
+# Static.update() re-lays-out the WHOLE screen by default, changed or not. The 0.5s tick and the
+# 15fps ultra timer skip no-op updates and, where the widget's size is pinned, the layout pass.
+# Both are feature-detected so older Textual releases (no .content / no layout=) just update.
+_UPDATE_HAS_LAYOUT = "layout" in __import__("inspect").signature(Static.update).parameters
+
+
+def _shown(w):
+    """What a Static was last given (Textual >=2: .content; older: .renderable)."""
+    return getattr(w, "content", getattr(w, "renderable", None))
+
+
+def _update(w, content, layout=True):
+    if not layout and _UPDATE_HAS_LAYOUT:
+        w.update(content, layout=False)
+    else:
+        w.update(content)
+
 FP_PY = sys.executable
 # machine-specific sidecar locations — override per machine via env (defaults = the author's box)
 AD_REPO = os.environ.get("LTX_ANIMATEDIFF_REPO", "/home/wolve/video_gen/AnimateDiff")
@@ -1187,6 +1205,8 @@ class Studio(App):
         self._current_base = {}          # live current: widget id -> captured 4-edge (type, hex) CSS base
         self._current_glow = {}          # live current: widget id -> last glow written (skip no-ops)
         self._current_panel = None       # live current: (tab, panel idx) the spark was on last frame
+        self._ultra_last_decor = self._ultra_last_topbar = self._ultra_last_info = None   # last frames painted
+        self._arow_cache = {}            # archive job id -> (row key, formatted row); see tick()
         self._info_calm = False          # True once the calm (electron-less) INFO base is painted -> skip idle repaints
         self._info_base = INFO           # markup an ultra theme's electron animates over (see _set_info)
         self.consult = ConsultDaemon()
@@ -1686,8 +1706,16 @@ class Studio(App):
                 w = 0
             art = ultra_art.render(name, self._ultra_t, width=(w if w >= 8 else None))
             if art:
+                last = self._ultra_last_decor               # (markup, Text we wrote) or None
+                if last is not None and _shown(decor) is last[1]:
+                    if last[0] == art:
+                        return                               # identical frame (common: vhs/matrix/kaiju)
+                    same_rows = last[0].count("\n") == art.count("\n")
+                else:
+                    same_rows = False                        # first paint / someone else wrote -> full layout
                 t = Text.from_markup(art); t.no_wrap = True
-                decor.update(t)
+                _update(decor, t, layout=not same_rows)      # height: auto -> reflow only if rows change
+                self._ultra_last_decor = (art, t)
         except Exception:
             pass
 
@@ -1703,7 +1731,14 @@ class Studio(App):
             art = ultra_art.electron_text(self.TOPBAR_TITLE, self._ultra_t, eff.get("base", "#cccccc"),
                                           eff.get("hot", "#ffffff"), mode="wave", speed=1, wavelen=14, amp=0.6)
             if art:
-                self.query_one("#topbartitle", Static).update(Text.from_markup(art))
+                bar = self.query_one("#topbartitle", Static)
+                last = self._ultra_last_topbar
+                ours = last is not None and _shown(bar) is last[1]
+                if ours and last[0] == art:
+                    return
+                t = Text.from_markup(art)
+                _update(bar, t, layout=not ours)             # same title text every frame -> same size
+                self._ultra_last_topbar = (art, t)
         except Exception:
             pass
 
@@ -1791,7 +1826,8 @@ class Studio(App):
                 return
             w = self.query_one("#newinfo", Static)
             plain = _plain(base)
-            if not force:      # only animate when the panel currently shows the base (not a transient msg)
+            ours = self._ultra_last_info is not None and _shown(w) is self._ultra_last_info   # our last frame?
+            if not force and not ours:   # only animate when the panel shows the base (not a transient msg)
                 try:
                     if "".join(str(w.render()).split()) != "".join(plain.split()):
                         return
@@ -1806,7 +1842,9 @@ class Studio(App):
             art = ultra_art.render_electrons(plain, heads, eff.get("base", "#cccccc"),
                                              eff.get("hot", "#ffffff"))
             if art:
-                w.update(Text.from_markup(art))
+                t = Text.from_markup(art)
+                _update(w, t, layout=not (ours and not force))   # same base text -> same size
+                self._ultra_last_info = t
                 self._info_calm = not self._electron_starts
         except Exception:
             pass
@@ -1863,6 +1901,11 @@ class Studio(App):
 
     # any dial change -> refresh the plan estimate
     def on_input_changed(self, event):
+        try:
+            if event.input.screen is not self.screen_stack[0]:   # a modal's Input (rename, consult, ...)
+                return                                            # isn't the form -> no estimate to redo
+        except Exception:
+            pass
         self.update_est()
 
     def on_resize(self, event=None):
@@ -2512,6 +2555,18 @@ class Studio(App):
         except Exception:
             pass
 
+    def _put(self, sel, content, fixed=False):
+        """Static.update for the per-tick paths: no-op when the content is unchanged; fixed=True
+        (height/width pinned by CSS) also skips the full-screen layout pass; fixed="width" skips it
+        only while the visible text keeps its length (for width: auto widgets)."""
+        w = self.query_one(sel, Static)
+        cur = _shown(w)
+        if type(cur) is type(content) and cur == content:
+            return
+        if fixed == "width":
+            fixed = isinstance(cur, str) and isinstance(content, str) and len(_plain(cur)) == len(_plain(content))
+        _update(w, content, layout=not fixed)
+
     def tick(self):
         if not self.is_running:     # timer can fire once more during shutdown/teardown -> widgets gone
             return
@@ -2539,9 +2594,9 @@ class Studio(App):
         st = "PAUSED" if m.paused else ("RUNNING" if a else "idle")
         _eta = self._queue_eta()
         _etastr = ("  " + tmark("accent", "(~%s to empty)" % fmt(_eta))) if _eta > 1 else ""
-        self.query_one("#status", Static).update(
-            f"  ▌ QUEUED {q}{_etastr}    ▶ {st}    ✓ DONE {d}    ▽ SUSP {s}     │     {self._gpu_str}{self._stall_note}")
-        self.query_one("#statusmeter", Static).update(self._meter())
+        self._put("#status",
+            f"  ▌ QUEUED {q}{_etastr}    ▶ {st}    ✓ DONE {d}    ▽ SUSP {s}     │     {self._gpu_str}{self._stall_note}", fixed=True)
+        self._put("#statusmeter", self._meter(), fixed="width")     # width: auto
         # (ultra-theme animation runs on its OWN ~15fps timer — see _ultra_frame — not this 0.5s tick)
         # queue + archive tables — rebuilt only when content changes (cursor stays put; no rubber-band)
         _dt = lambda ts: time.strftime("%m-%d %H:%M", time.localtime(ts)) if ts else "—"
@@ -2549,7 +2604,20 @@ class Studio(App):
             pre = ("★ " if (j.params or {}).get("favorite") else "") + \
                   ("▲ " if (j.kind == "enhance" and not (j.title or "").startswith("▲")) else "")
             return (pre + (j.title or ""))[:30]
-        arows = [(j.id, j.id, _atitle(j), j.status, _dt(j.started), _dt(j.finished), fmt(j.elapsed()), _vidlen(j)) for j in m.archived()]
+        def _arow(j):
+            return (j.id, j.id, _atitle(j), j.status, _dt(j.started), _dt(j.finished), fmt(j.elapsed()), _vidlen(j))
+        # a finished run's row is frozen: cache it on everything it reads, so ticks stop re-formatting
+        # the whole history just for _sync_table to find the signature unchanged
+        acache, arows = self._arow_cache, []
+        for j in m.archived():
+            p = j.params or {}
+            key = (j.status, j.title, j.kind, j.created, j.started, j.finished, p.get("favorite"), p.get("seconds"))
+            hit = acache.get(j.id) if j.finished else None
+            if hit is None or hit[0] != key:
+                hit = (key, _arow(j))
+                if j.finished:
+                    acache[j.id] = hit
+            arows.append(hit[1])
         if not arows:                                # empty state hint row (every action no-ops on its key)
             arows = [("__empty__", "", Text.from_markup("[dim]no finished runs yet — outputs land here[/dim]"),
                       "", "", "", "", "")]
@@ -2557,7 +2625,6 @@ class Studio(App):
         self._sync_table("#atable", arows, "_asig")
         # live
         job = m.active()
-        hdr = self.query_one("#livehdr", Static)
         over = self.query_one("#overbar", ProgressBar)
         live = self.query_one("#livelog", RichLog)
         for bid in ("pausebtn", "resumebtn", "suspendbtn", "cancelbtn"):
@@ -2566,15 +2633,15 @@ class Studio(App):
             except Exception:
                 pass
         if job is None:
-            hdr.update("[dim]no active run — queue one in NEW RUN[/dim]")
-            self.query_one("#livephase", Static).update("[dim]Nothing is generating right now.[/dim]")
-            self.query_one("#director", Static).update("")
-            self.query_one("#progtext", Static).update("")
-            self.query_one("#livebar", Static).update("")
-            self.query_one("#preview", Static).update(Text())
+            self._put("#livehdr", "[dim]no active run — queue one in NEW RUN[/dim]")
+            self._put("#livephase", "[dim]Nothing is generating right now.[/dim]", fixed=True)
+            self._put("#director", "")
+            self._put("#progtext", "", fixed=True)
+            self._put("#livebar", "", fixed=True)
+            self._put("#preview", Text())
             for sid in ("pace_rate", "pace_frames", "pace_shot", "pace_eta",
                         "steer_mode", "steer_directive", "steer_anchors", "ph_timeline"):
-                self.query_one(f"#{sid}", Static).update("")
+                self._put(f"#{sid}", "", fixed=True)
             over.update(total=100, progress=0)
             if self._live_id is not None:
                 self._live_id = None
@@ -2585,7 +2652,7 @@ class Studio(App):
         tag = "‖ PAUSED" if m.paused else "▶ RUNNING"
         kglyph, klabel = _run_kind(job)
         _ttl = _demark((job.title or job.params.get('prompt', ''))[:48])
-        hdr.update(f"[b]{tag}[/b]   [#9dffce]{kglyph} {klabel}[/#9dffce]   {_ttl}")
+        self._put("#livehdr", f"[b]{tag}[/b]   [#9dffce]{kglyph} {klabel}[/#9dffce]   {_ttl}")
         loading = job.is_loading() if hasattr(job, "is_loading") else False
         # The big load-bar takeover is for the INITIAL load only: is_loading() includes "warmup", so
         # every later shot's warmup used to flip the header back to "5/5 · warming up" + a dead
@@ -2603,8 +2670,9 @@ class Studio(App):
         if initial_load:
             over.update(total=max(1, getattr(job, "load_total", 0) or 1),
                         progress=getattr(job, "load_step", 0))
-            self.query_one("#progtext", Static).update(
-                f"{getattr(job, 'load_step', 0)}/{getattr(job, 'load_total', 0)}   ·   {getattr(job, 'load_msg', '')}")
+            self._put("#progtext",
+                      f"{getattr(job, 'load_step', 0)}/{getattr(job, 'load_total', 0)}   ·   {getattr(job, 'load_msg', '')}",
+                      fixed=True)
         else:
             # T25: expected-wall-time overall %, latched monotonic per run so it never steps back.
             try:
@@ -2618,11 +2686,12 @@ class Studio(App):
             # keep the "shot X of N · step Y of Z" text; overall % now reflects wall-time progress
             _phase_hint = {"decoding": "  ·  decoding…", "saving": "  ·  saving…"}.get(
                 getattr(job, "phase", ""), "")
-            self.query_one("#progtext", Static).update(
-                f"shot {job.seg} of {job.nseg}   ·   step {job.step} of {job.nstep}   ·   {sp}% overall{_phase_hint}")
-        self.query_one("#livephase", Static).update(self._phase(job, m.paused))
+            self._put("#progtext",
+                      f"shot {job.seg} of {job.nseg}   ·   step {job.step} of {job.nstep}   ·   {sp}% overall{_phase_hint}",
+                      fixed=True)
+        self._put("#livephase", self._phase(job, m.paused), fixed=True)
         now_painting = job.director or job.params.get("prompt", "")
-        self.query_one("#director", Static).update(
+        self._put("#director",
             ("[dim]this shot →[/dim] " + now_painting) if now_painting
             else ("[dim]—[/dim]" if job.kind != "director" else ""))
         # live frame preview + director's notes (both reset on job change)
@@ -2674,27 +2743,27 @@ class Studio(App):
         _slept = getattr(job, "slept", 0.0)
         _elstr = (f"t+{fmt(max(0, el - int(_slept)))} (+{fmt(int(_slept))} standby)" if _slept > 120
                   else f"t+{fmt(el)} elapsed")
-        self.query_one("#livebar", Static).update(
-            f"  {_elstr}   ·   {eta}      {p.get('res', '')}   {p.get('steps', '')} steps   "
-            f"seed {p.get('seed', '')}      → {os.path.basename(job.out or '')}")
+        self._put("#livebar",
+                  f"  {_elstr}   ·   {eta}      {p.get('res', '')}   {p.get('steps', '')} steps   "
+                  f"seed {p.get('seed', '')}      → {os.path.basename(job.out or '')}", fixed=True)
         # ---- PACE strip ----
         nstp = job.nstep or 0
         if first_ts and job.step > 0 and nstp:
             base = getattr(job, "first_step_seg", 1) or 1
             sps = ((job.seg - base) * nstp + job.step) / max(0.001, time.time() - first_ts)
-            self.query_one("#pace_rate", Static).update(f"[dim]rate[/dim] {sps:.2f} steps/s")
+            self._put("#pace_rate", f"[dim]rate[/dim] {sps:.2f} steps/s", fixed=True)
         else:
-            self.query_one("#pace_rate", Static).update("[dim]rate[/dim] —")
+            self._put("#pace_rate", "[dim]rate[/dim] —", fixed=True)
         ssecs = getattr(job, "seg_secs", []) or []
         seg_t0 = getattr(job, "seg_started", None)
         if ssecs:
             mean = sum(ssecs) / len(ssecs)
-            self.query_one("#pace_shot", Static).update(f"[dim]per shot[/dim] {fmt(int(mean))} avg")
+            self._put("#pace_shot", f"[dim]per shot[/dim] {fmt(int(mean))} avg", fixed=True)
         elif seg_t0:                   # no completed shot yet -> show the current shot ticking (warmup too)
-            self.query_one("#pace_shot", Static).update(f"[dim]this shot[/dim] {fmt(int(time.time() - seg_t0))}")
+            self._put("#pace_shot", f"[dim]this shot[/dim] {fmt(int(time.time() - seg_t0))}", fixed=True)
         else:
-            self.query_one("#pace_shot", Static).update("[dim]per shot[/dim] ~measuring")
-        self.query_one("#pace_eta", Static).update(f"[dim]left[/dim] {eta.removesuffix(' left')}")
+            self._put("#pace_shot", "[dim]per shot[/dim] ~measuring", fixed=True)
+        self._put("#pace_eta", f"[dim]left[/dim] {eta.removesuffix(' left')}", fixed=True)
         sf = int(p.get("seg_frames") or 0)
         tf = int(p.get("total_frames") or (sf * job.nseg if sf else 0))
         if sf and tf and nstp:
@@ -2703,17 +2772,17 @@ class Studio(App):
             base = 0 if job.seg <= 1 else sf + (job.seg - 2) * eff
             cur = sf if job.seg <= 1 else eff
             fdone = min(tf, base + int(cur * job.step / nstp))
-            self.query_one("#pace_frames", Static).update(f"[dim]frames[/dim] ~{fdone}/{tf}")
+            self._put("#pace_frames", f"[dim]frames[/dim] ~{fdone}/{tf}", fixed=True)
         else:
-            self.query_one("#pace_frames", Static).update("[dim]frames[/dim] —")
+            self._put("#pace_frames", "[dim]frames[/dim] —", fixed=True)
         # ---- STEERING strip ----
         smode = (p.get("steadiness") or ("evolve" if p.get("directive") else "—")) if job.kind == "director" else job.kind
-        self.query_one("#steer_mode", Static).update(f"[dim]mode[/dim] {smode}")
+        self._put("#steer_mode", f"[dim]mode[/dim] {smode}", fixed=True)
         if job.kind == "director":
-            self.query_one("#steer_directive", Static).update(f"[dim]arc[/dim] {(p.get('directive') or '—')[:48]}")
+            self._put("#steer_directive", f"[dim]arc[/dim] {(p.get('directive') or '—')[:48]}", fixed=True)
         else:                          # no arc on single/chained -> show what it's actually rendering
-            self.query_one("#steer_directive", Static).update(f"[dim]subject[/dim] {(p.get('prompt') or '—')[:48]}")
-        self.query_one("#steer_anchors", Static).update(f"[dim]anchors[/dim] {(p.get('anchors') or '—')[:40]}")
+            self._put("#steer_directive", f"[dim]subject[/dim] {(p.get('prompt') or '—')[:48]}", fixed=True)
+        self._put("#steer_anchors", f"[dim]anchors[/dim] {(p.get('anchors') or '—')[:40]}", fixed=True)
         # ---- PHASE timeline strip ----
         psecs = getattr(job, "phase_secs", {}) or {}
         cur, cur_t0 = getattr(job, "phase", ""), getattr(job, "phase_started", None)
@@ -2727,7 +2796,7 @@ class Studio(App):
                 cells.append(f"[dim]{lbl} {fmt(int(t))}[/dim]")
             else:
                 cells.append(f"[dim]{lbl} ·[/dim]")
-        self.query_one("#ph_timeline", Static).update("  →  ".join(cells))
+        self._put("#ph_timeline", "  →  ".join(cells), fixed=True)
         if job.id != self._live_id:
             self._live_id, self._live_n, self._live_last = job.id, 0, None
             live.clear()
@@ -4373,6 +4442,7 @@ class Studio(App):
                 loads = [v[0] for v in dm.values()]; thinks = [v[1] for v in dm.values()]
                 L.append("  [dim]per-seam cost: load {:.0f}s avg · think {:.1f}s avg · {} seams[/dim]"
                          .format(sum(loads) / len(loads) / 1000, sum(thinks) / len(thinks) / 1000, len(dm)))
+            raws = _director_raw(job) if self._dir_raw else {}   # one read of director.jsonl, not one per shot
             for entry in plans:
                 seg, plan = int(entry[0]), entry[1]
                 prompt = entry[2] if len(entry) > 2 else ""
@@ -4383,7 +4453,7 @@ class Studio(App):
                 if prompt:
                     L.append(f"      [#ffcf5c]→[/#ffcf5c] {prompt}")
                 if self._dir_raw:
-                    r = _director_raw(job, seg)
+                    r = raws.get(seg)
                     if r and r.get("raw"):
                         L.append(f"      [dim]raw:[/dim] {r['raw'].strip()}")
         elif job.director:
