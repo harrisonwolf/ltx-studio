@@ -20,6 +20,22 @@ from studio_core import JobManager, REPO, ARCHIVED
 
 from studio_themes import EXTRA_THEMES, ULTRA_THEMES, ULTRA_NAMES, SPAL, tmark, THEME_MIGRATE   # ULTRA_NAMES: re-exported for the tests
 
+_FRAME_RE = re.compile(r"^(\d+)\.png$")
+
+
+def _frame_files(d):
+    """NNNN.png frames in `d`, oldest -> newest. Numeric order: past 9999 frames the names outgrow the
+    4-digit padding and a plain sort scrambles the timeline. *.tmp / *.new staging files never match."""
+    try:
+        files = os.listdir(d)
+    except OSError:
+        return []
+    names = [(int(m.group(1)), f) for f in files for m in [_FRAME_RE.match(f)] if m]
+    if not names:                   # differently named frames (e.g. an external enhancer's): plain order
+        return sorted(os.path.join(d, f) for f in files if f.lower().endswith(".png"))
+    return [os.path.join(d, f) for _, f in sorted(names)]
+
+
 def _argv_core(cmd):
     """A worker argv minus the per-job output paths and the seed: two runs whose cores match would
     render the same thing (used to refuse A/B and PAIR variants that differ only in a dropped dial)."""
@@ -1314,11 +1330,25 @@ class Studio(App):
                         yield field("RESERVE (GB)", Select([("0.5 GB", "0.5"), ("1.0 GB (default)", "1.0"),
                                                              ("1.5 GB", "1.5"), ("2.0 GB", "2.0")],
                                                             value="1.0", id="vram_reserve", allow_blank=False), "vram_reserve")
-                        yield field("SOUND", Select([("on", "on"), ("off", "off")],
-                                                         value="on", id="sound_enabled", allow_blank=False), "sound_enabled")
+                        # the pickers start ON the saved prefs, so launch never "changes" them; each one's
+                        # initial Select.Changed is swallowed once (_snd_init) instead of read as a pick
+                        try:
+                            _snd0 = load_studio_config().get("sounds", {}) or {}
+                        except Exception:
+                            _snd0 = {}
+                        _evm0 = dict(_snd0.get("events") or {})
                         _sfx = _sfx_options()
-                        _v1 = "run_done.wav" if any(v == "run_done.wav" for _, v in _sfx) else _sfx[0][1]
-                        _v2 = "run_stall.wav" if any(v == "run_stall.wav" for _, v in _sfx) else _sfx[0][1]
+                        _have = {v for _, v in _sfx}
+                        def _pick(ev):
+                            for c in (os.path.basename(_evm0.get(ev) or ""), f"{ev}.wav", "run_done.wav"):
+                                if c in _have:
+                                    return c
+                            return _sfx[0][1]
+                        _v0 = "on" if _snd0.get("enabled", True) else "off"
+                        _v1, _v2 = _pick("run_done"), _pick("run_stall")
+                        self._snd_init = {"sound_enabled": _v0, "snd_done": _v1, "snd_stall": _v2}
+                        yield field("SOUND", Select([("on", "on"), ("off", "off")],
+                                                         value=_v0, id="sound_enabled", allow_blank=False), "sound_enabled")
                         yield field("DONE SOUND", Select(_sfx, value=_v1, id="snd_done", allow_blank=False), "snd_done")
                         yield field("STALL SOUND", Select(_sfx, value=_v2, id="snd_stall", allow_blank=False), "snd_stall")
                         yield Button("▶ TEST SOUND", id="sndtestbtn")
@@ -1602,18 +1632,13 @@ class Studio(App):
         self._sync_backend_disable()  # initial BACKEND=ltx -> Wan-only dials start grayed
         try:      # sound/alert prefs: master toggle + stall threshold/action/grace (defaults ON / 240s / suspend / 180s)
             _snd = load_studio_config().get("sounds", {}) or {}
-            self.query_one("#sound_enabled", Select).value = "on" if _snd.get("enabled", True) else "off"
             self._stall_secs = float(_snd.get("stall_secs", 240) or 240)
             self._stall_action = str(_snd.get("stall_action", "suspend"))     # "suspend" | "alert"
             self._stall_grace = float(_snd.get("stall_grace_secs", 180) or 180)
             self._stall_decode_secs = float(_snd.get("stall_decode_secs", 600) or 600)   # warmup/decode/save fuse
             self._stall_max_secs = float(_snd.get("stall_max_secs", 7200) or 7200)       # any-phase catch-all
-            _evm = dict(_snd.get("events") or {})    # reflect persisted per-event WAV picks in the pickers
-            for _sid, _ev in (("snd_done", "run_done"), ("snd_stall", "run_stall")):
-                try:
-                    self.query_one("#" + _sid, Select).value = os.path.basename(_evm.get(_ev) or "")
-                except Exception:
-                    pass
+            # (the SOUND / DONE / STALL pickers are composed from the saved prefs -- see compose)
+            self.set_timer(2.0, lambda: setattr(self, "_snd_init", {}))   # only launch events are swallowed
         except Exception:
             self._stall_secs, self._stall_action, self._stall_grace = 240.0, "suspend", 180.0
             self._stall_decode_secs, self._stall_max_secs = 600.0, 7200.0
@@ -2026,8 +2051,8 @@ class Studio(App):
             try:
                 _cfg = load_studio_config()
                 _snd = dict(_cfg.get("sounds") or {})
-                # equal to the saved pref = the launch-time restore, not a pick: keep the INFO intro
-                if (event.select.value == "on") != bool(_snd.get("enabled", True)):
+                # the picker's own launch-time event is not a pick: keep the INFO intro, save nothing
+                if getattr(self, "_snd_init", {}).pop(sid, None) != event.select.value:
                     _snd["enabled"] = (event.select.value == "on")
                     save_studio_config({**_cfg, "sounds": _snd})
                     self.query_one("#newinfo", Static).update(
@@ -2042,8 +2067,8 @@ class Studio(App):
                 _cfg = load_studio_config()
                 _snd = dict(_cfg.get("sounds") or {})
                 _evm = dict(_snd.get("events") or {})
-                # already the effective pick (launch restore / initial value) -> no save, no notice
-                if event.select.value != os.path.basename(_evm.get(ev) or "%s.wav" % ev):
+                # the picker's own launch-time event is not a pick -> no save, no notice
+                if getattr(self, "_snd_init", {}).pop(sid, None) != event.select.value:
                     _evm[ev] = "sfx/%s" % event.select.value
                     _snd["events"] = _evm
                     save_studio_config({**_cfg, "sounds": _snd})
@@ -2229,10 +2254,7 @@ class Studio(App):
             if not d:
                 continue
             dabs = d if os.path.isabs(d) else os.path.join(REPO, d)
-            try:      # 4-digit pattern skips write_checkpoint's atomic *.png.tmp files
-                fs = sorted(glob.glob(os.path.join(dabs, "[0-9][0-9][0-9][0-9].png")))
-            except Exception:
-                fs = []
+            fs = _frame_files(dabs)   # skips write_checkpoint's *.png.tmp / staged *.new files
             if fs:
                 return fs
         pv = getattr(job, "preview", None)
@@ -2917,23 +2939,27 @@ class Studio(App):
                 cells.append(f"[dim]{lbl} ·[/dim]")
         self._put("#ph_timeline", "  →  ".join(cells), fixed=True)
         if job.id != self._live_id:
-            self._live_id, self._live_n, self._live_last = job.id, 0, None
+            self._live_id, self._live_n, self._live_last = job.id, None, None
             live.clear()
         tail = job.tail
-        # tail is a 300-line ring: once saturated, len() stops growing while content rotates, so a
-        # plain cursor freezes forever. Re-anchor on the last line we wrote when the ring has moved.
-        if self._live_n >= len(tail) and tail and tail[-1] != getattr(self, "_live_last", None) and self._live_n > 0:
-            try:
-                self._live_n = len(tail) - tail[::-1].index(self._live_last)
-            except (ValueError, TypeError):      # our anchor rotated out entirely -> repaint
+        # tail is a 300-line ring: once full, len() stops growing while content rotates. Track the job's
+        # monotonic tail_count (lines ever appended) -- re-anchoring on the TEXT of the last line
+        # dropped a repeated identical line.
+        total = getattr(job, "tail_count", None)
+        if total is None:                        # older manager without the counter: old behavior
+            total = len(tail)
+        if self._live_n is None or total < self._live_n:
+            new = list(tail)                     # first paint for this job (or the counter reset)
+            if self._live_n is not None:
                 live.clear()
-                self._live_n = 0
-        new = tail[self._live_n:]
+        else:
+            k = total - self._live_n             # lines appended since the last tick
+            if k > len(tail):                    # more than the ring holds -> repaint what we have
+                live.clear()
+            new = tail[-k:] if k else []
         for ln in new:
             live.write(ln)
-        if new:
-            self._live_last = new[-1]
-        self._live_n = len(tail)
+        self._live_n = total
 
     # ---------- planning: cap per-segment memory, auto-chain for length ----------
     SAFE_PX = 20_000_000  # frames*W*H budget per segment that fits 8GB (704x480 -> ~59 frames)
@@ -3739,7 +3765,10 @@ class Studio(App):
             if not j:                            # still refused (checkpoint refusal, ...) -> abort, and take
                 for other in jobs.values():      # back the half already queued: a lone blind run is no pair
                     try:
-                        self.mgr.remove(other.id)
+                        if not self.mgr.remove(other.id):
+                            act = self.mgr.active()
+                            if act is not None and act.id == other.id:
+                                self.mgr.cancel()        # the runner had already started it
                     except Exception:
                         pass
                 self._blind_msg(
@@ -3881,8 +3910,8 @@ class Studio(App):
                 self.push_screen(ChatScreen())
         elif b == "removebtn":
             jid = self._selected("#qtable")
-            if jid:
-                self.mgr.remove(jid)
+            if jid and self.mgr.remove(jid) == "suspended":
+                self.notify("Resume undone — the run is back in SUSPENDED (its checkpoint is kept).")
         elif b == "qresumebtn":
             jid = self._selected("#qtable")
             if jid:
@@ -3926,7 +3955,7 @@ class Studio(App):
         elif b == "resumebtn":
             self.mgr.resume()
         elif b == "suspendbtn":
-            self.mgr.suspend()
+            self._suspend_active()
         elif b == "cancelbtn":
             self.mgr.cancel()
         elif b == "livetermbtn":
@@ -4150,7 +4179,7 @@ class Studio(App):
             fd = (job.params or {}).get("frames_dir") or ""
             fdabs = fd if os.path.isabs(fd) else os.path.join(REPO, fd)
             try:
-                frames = sorted(os.path.join(fdabs, f) for f in os.listdir(fdabs) if f.lower().endswith(".png"))
+                frames = _frame_files(fdabs)
             except Exception:
                 frames = []
             if not frames:
@@ -4845,7 +4874,14 @@ class Studio(App):
         self._queue_current_run()
 
     def action_suspend(self):
-        self.mgr.suspend()
+        self._suspend_active()
+
+    def _suspend_active(self):
+        """SUSPEND button / 's': the manager says whether it took (and why not, e.g. a single-shot
+        run has nothing to checkpoint) -- show that instead of failing silently."""
+        res = self.mgr.suspend()
+        if isinstance(res, tuple) and len(res) == 2 and res[1]:
+            self.notify(str(res[1]), severity=("information" if res[0] else "warning"))
 
     def action_resume(self):
         jid = self._selected("#qtable")

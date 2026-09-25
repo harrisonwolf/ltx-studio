@@ -72,6 +72,22 @@ async def main():
         check("resume shifts seg_started by the paused span", abs((j2.seg_started - (t0 - 100)) - 600) < 5, j2.seg_started - (t0 - 100))
         check("a pause is not tallied as standby", not getattr(j2, "slept", 0.0), getattr(j2, "slept", None))
         ACTIVE["job"] = None
+        # LIVE log: once the 300-line tail ring is full, a repeated identical line still shows up
+        from textual.widgets import RichLog
+        jl = mkjob(1); jl.phase, jl.seg = "generating", 1
+        jl.tail = [f"line {i}" for i in range(300)]; jl.tail_count = 300
+        log = app.query_one("#livelog", RichLog)
+        written = []
+        real_write = log.write
+        log.write = lambda content, *a, **k: (written.append(str(content)), real_write(content, *a, **k))[1]
+        ACTIVE["job"] = jl; app.tick(); await pilot.pause(0.1)
+        n0 = len(written)
+        for ln in ("warning: same", "warning: same", "after"):   # one tick per line: the 2nd line equals
+            jl.tail = (jl.tail + [ln])[-300:]; jl.tail_count += 1   # the last one written (the old anchor)
+            app.tick(); await pilot.pause(0.05)
+        check("LIVE log keeps repeated lines past a full ring", written[n0:] == ["warning: same", "warning: same", "after"], written[n0:])
+        log.write = real_write
+        ACTIVE["job"] = None; app.tick()
         # director redirect cadence in the budget matches director.py (every 3rd seam): 3 shots -> 0
         jd = mkjob(3); jd.params.update(mode="director", steadiness="hold", directive="storm")
         jc = mkjob(3)

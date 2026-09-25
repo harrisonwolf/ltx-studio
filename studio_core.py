@@ -10,12 +10,14 @@ RUNS_DIR = os.path.join(REPO, "runs")
 os.makedirs(RUNS_DIR, exist_ok=True)
 
 _PROG = re.compile(r"\[\[(SEG|STEP)\s+(\d+)\s+(\d+)\]\]")
-_DIRX = re.compile(r"\[\[DIRECT\s+(.*?)\]\]")
+# PLAN/DIRECT text may END in "]" ("... [left]]]"): the lazy body must stop at the LAST "]]" of the run,
+# i.e. a "]]" not followed by another "]". director.py's _ascii1 strips every "]]" from the text itself.
+_DIRX = re.compile(r"\[\[DIRECT\s+(.*?)\]\](?!\])")
 _PHASE = re.compile(r"\[\[PHASE\s+(\w+)\]\]")
 _LOAD = re.compile(r"\[\[LOAD\s+(\d+)\s+(\d+)\s+(.*?)\]\]")
 _CKPT = re.compile(r"\[\[CKPT\s+(\d+)\s+(\d+)\]\]")
 _SUSP = re.compile(r"\[\[SUSPENDED\s+(.*?)\]\]")
-_PLAN = re.compile(r"\[\[PLAN\s+(\d+)\s+(.*?)\]\]")
+_PLAN = re.compile(r"\[\[PLAN\s+(\d+)\s+(.*?)\]\](?!\])")
 _DMS = re.compile(r"\[\[DIRECT_MS\s+(\d+)\s+(\d+)\s+(\d+)\]\]")   # space-form: seg load_ms infer_ms
 _VRAM = re.compile(r"\[\[VRAM\s+(\d+)\]\]")                       # per-shot peak CUDA MB (experiment_log DV)
 _SEAMMSE = re.compile(r"\[\[SEAMMSE\s+(\d+)\s+(-?\d+)\]\]")       # seam continuity: [seg, mse*100] (Q3)
@@ -27,7 +29,7 @@ _FIELDS = ["id", "title", "kind", "cmd", "params", "status", "seg", "nseg", "ste
            "phase", "load_step", "load_total", "load_msg", "saw_step", "first_step_ts", "first_step_seg",
            "ckpt_dir", "resumes", "last_ckpt_seg", "preview", "plans", "dir_ms",
            "phase_started", "phase_secs", "seg_started", "seg_secs", "peak_vram",
-           "seam_mse", "drift", "tok_counts", "dcfg"]
+           "seam_mse", "drift", "tok_counts", "dcfg", "qorder"]
 # Blind A/B pair state (pair_id, pair_variant, pair_blind, pair_varied_dial, pair_revealed) lives INSIDE
 # each job's `params` dict, which is itself in _FIELDS above and round-trips through save()/load() -- so
 # pair_revealed already survives an app restart with no extra top-level field needed.
@@ -46,8 +48,10 @@ class Job:
         self.error = ""
         self.director = ""          # latest director prompt (director mode)
         self.created = time.time()
+        self.qorder = self.created   # queue position (PROMOTE lowers it); `created` stays the true creation time
         self.started = self.finished = None
         self.tail = []              # last log lines, in-memory
+        self.tail_count = 0         # total lines ever appended to tail in this process (not persisted)
         # ---- load/phase tracking + checkpoint/suspend (per integration contract) ----
         self.phase = ""
         self.load_step, self.load_total, self.load_msg = 0, 0, ""
@@ -97,6 +101,8 @@ class Job:
         for k in _FIELDS:
             if k in d:
                 setattr(j, k, d[k])
+        if "qorder" not in d:        # pre-qorder JSON: queue position = creation time (the old sort key)
+            j.qorder = j.created
         j.dir_ms = {int(k): v for k, v in (getattr(j, "dir_ms", {}) or {}).items()}   # JSON str keys -> int
         if j.status in ACTIVE:       # was running when app died
             j.status = "interrupted"
@@ -120,6 +126,7 @@ class Job:
                 j.tail = open(j.logpath()).read().splitlines()[-300:]
             except Exception:
                 pass
+        j.tail_count = len(j.tail)
         return j
 
     def elapsed(self):
@@ -143,14 +150,17 @@ class Job:
 
     @staticmethod
     def _ckpt_valid(ckpt):
-        """A checkpoint is valid IFF state.json exists AND n_frames == #PNGs in frames/."""
+        """A checkpoint is valid IFF state.json exists AND frames/ holds at least n_frames PNGs. Extra
+        *.png (an interrupted crash-safe write) are fine -- the loader reads only the first n_frames;
+        pending *.png.new / *.tmp files never match the *.png glob."""
         try:
             sp = os.path.join(ckpt, "state.json")
             if not os.path.exists(sp):
                 return False
-            st = json.load(open(sp))
-            npng = len(glob.glob(os.path.join(ckpt, "frames", "*.png")))
-            return int(st.get("n_frames", -1)) == npng
+            with open(sp) as f:
+                n = int(json.load(f).get("n_frames", -1))
+            # mirror director.load_checkpoint exactly: it reads frames/0000.png .. frames/{n-1}.png
+            return n >= 1 and all(os.path.exists(os.path.join(ckpt, "frames", f"{i:04d}.png")) for i in range(n))
         except Exception:
             return False
 
@@ -163,9 +173,14 @@ class JobManager:
         self.paused = False
         self._stop = False
         self._suspend_req = False
-        self._interrupt_req = False   # stall-sentry hard-kill -> land 'interrupted' (ckpt kept), not 'cancelled'
-        self._cancel_req = False      # set ONLY by an explicit user cancel()
-        self._wake_proc = None        # Windows-side Modern-Standby wake lock (held while rendering)
+        self._interrupt_req = None    # job id; stall-sentry hard-kill -> land 'interrupted' (ckpt kept), not 'cancelled'
+        self._cancel_req = None       # job id, set ONLY by an explicit user cancel() of THAT job
+        # Guards every status transition shared by the UI thread (pause/resume/suspend/remove) and the
+        # runner's start/final-status change, so a UI action can never overwrite a finished job's status.
+        self._lock = threading.RLock()
+        self._usr1_ready = False      # worker printed its first [[marker]] -> its SIGUSR1 handler is installed
+        self._suspend_pending = None  # job id whose suspend() arrived before that; sent once it's ready
+        self._wake_proc = None       # Windows-side Modern-Standby wake lock (held while rendering)
         self.vram_reserve_gb = 1.0   # T14: GB of the 8GB card to leave for the desktop; studio.py loads/persists this
         for p in glob.glob(os.path.join(RUNS_DIR, "*.json")):
             try:
@@ -178,8 +193,12 @@ class JobManager:
     def _sorted(self):
         return sorted(self.jobs.values(), key=lambda j: j.created)
 
+    def _by_qorder(self):
+        """Queue order (PROMOTE-aware). Archive order stays by true creation time (_sorted)."""
+        return sorted(self.jobs.values(), key=lambda j: (getattr(j, "qorder", j.created), j.created))
+
     def queued(self):
-        return [j for j in self._sorted() if j.status == "queued"]
+        return [j for j in self._by_qorder() if j.status == "queued"]
 
     def archived(self):
         return list(reversed([j for j in self._sorted() if j.status in ARCHIVED]))
@@ -195,7 +214,7 @@ class JobManager:
         return q, a, d, s
 
     def suspended(self):
-        return [j for j in self._sorted() if j.status == "suspended"]
+        return [j for j in self._by_qorder() if j.status == "suspended"]
 
     # ---- mutations ----
     def enqueue(self, title, kind, cmd, params):
@@ -212,13 +231,32 @@ class JobManager:
         return j
 
     def remove(self, jid):
-        j = self.jobs.get(jid)
-        if j and j.status == "queued":
+        """Take a queued run off the queue. A RESUMED run (queued with --resume on a valid checkpoint)
+        goes back to 'suspended' -- REMOVE undoes the RESUME instead of silently destroying a
+        resumable render (suspended runs aren't removable either). Returns "removed"/"suspended"/None."""
+        with self._lock:
+            j = self.jobs.get(jid)
+            if not (j and j.status == "queued"):
+                return None
+            ck = os.path.join(RUNS_DIR, f"{j.id}_ckpt")
+            if "--resume" in j.cmd and j._ckpt_valid(ck):
+                j.status, j.ckpt_dir = "suspended", ck
+                j.resumes = max(0, int(j.resumes or 0) - 1)
+                j.finished = j.finished or time.time()     # resume_suspended cleared it; freeze elapsed()
+                j.save()
+                return "suspended"
             self.jobs.pop(jid, None)
+        paths = [j.jpath()]
+        if "--resume" in j.cmd:          # a resumed run whose checkpoint is gone: don't orphan its leftovers
+            shutil.rmtree(ck, ignore_errors=True)
+            paths += [j.logpath(), getattr(j, "preview", None)]
+        for p in paths:
             try:
-                os.remove(j.jpath())
+                if p:
+                    os.remove(p)
             except OSError:
                 pass
+        return "removed"
 
     def deletable(self, jid):
         """Only finished runs shown in ARCHIVE (never the active job) can be hard-deleted."""
@@ -301,38 +339,66 @@ class JobManager:
         j.save()
         return True, slug
 
+    @staticmethod
+    def _signal_group(proc, sig):
+        """Signal the worker's whole process GROUP (start_new_session=True makes it the leader), so
+        director.py's VLM sidecar / enhance children stop and continue WITH it; fall back to the leader.
+        Never after the worker has been reaped (returncode set): its pid/pgid may already be reused."""
+        if proc.returncode is not None:
+            return
+        try:
+            os.killpg(proc.pid, sig)
+        except Exception:
+            proc.send_signal(sig)
+
     def pause(self):
-        if self.proc and self.current and not self.paused:
-            try:
-                self.proc.send_signal(signal.SIGSTOP)
-                self.paused = True
-                self.jobs[self.current].status = "paused"; self.jobs[self.current].save()
-            except Exception:
-                pass
+        with self._lock:
+            proc, cur = self.proc, self.current
+            job = self.jobs.get(cur) if cur else None
+            if proc and job and not self.paused and job.status in ("running", "suspending"):
+                try:
+                    self._signal_group(proc, signal.SIGSTOP)
+                    self.paused = True
+                    job.status = "paused"; job.save()
+                except Exception:
+                    pass
 
     def resume(self):
-        if self.proc and self.current and self.paused:
-            try:
-                self.proc.send_signal(signal.SIGCONT)
-                self.paused = False
-                self.jobs[self.current].status = "running"; self.jobs[self.current].save()
-            except Exception:
-                pass
+        with self._lock:
+            proc, cur = self.proc, self.current
+            job = self.jobs.get(cur) if cur else None
+            if proc and job and self.paused and job.status == "paused":
+                try:
+                    self._signal_group(proc, signal.SIGCONT)
+                    self.paused = False
+                    job.status = "running"; job.save()
+                except Exception:
+                    pass
 
-    def cancel(self):
-        if self.proc and self.current:
-            self._cancel_req = True   # explicit user cancel -> 'cancelled' (vs kernel OOM-kill -> 'interrupted')
-            try:
-                if self.paused:
-                    self.proc.send_signal(signal.SIGCONT)
+    def cancel(self, interrupt=False):
+        # Capture proc/current ONCE: re-reading self.proc after the check could kill the NEXT job if
+        # this one finished in between. The cancel request names THIS job, so it can't leak onto the next.
+        with self._lock:
+            proc, cur = self.proc, self.current
+            if not (proc and cur):
+                return
+            if interrupt:
+                self._interrupt_req = cur   # stall-sentry kill -> 'interrupted' (ckpt kept)
+            else:
+                self._cancel_req = cur      # explicit user cancel -> 'cancelled' (vs kernel OOM-kill -> 'interrupted')
+            paused = self.paused
+        try:
+            if paused:
+                self._signal_group(proc, signal.SIGCONT)
+            if proc.returncode is None:
                 try:
                     # kill the whole process GROUP: director.py's VLM sidecar/daemon children must die
                     # too, or an orphan keeps holding GPU/RAM and OOMs the next queued run.
-                    os.killpg(self.proc.pid, signal.SIGKILL)
+                    os.killpg(proc.pid, signal.SIGKILL)
                 except Exception:
-                    self.proc.kill()
-            except Exception:
-                pass
+                    proc.kill()
+        except Exception:
+            pass
 
     def shutdown(self):
         """Clean app-exit (T9): stop the runner + kill the running subprocess so it can't orphan onto
@@ -347,23 +413,37 @@ class JobManager:
         instead of 'cancelled' (checkpoint deleted). The exit path then promotes it straight to
         'suspended' when a valid checkpoint exists, so it is resumable without an app restart.
         The runner loop moves on to the next queued job either way."""
-        if self.proc and self.current:
-            self._interrupt_req = True
-            self.cancel()
+        self.cancel(interrupt=True)
 
     def suspend(self):
-        """Clean checkpointed suspend (multi-segment jobs only) via SIGUSR1. Works even if paused."""
-        job = self.jobs.get(self.current)
-        if self.proc and self.current and job and int(job.nseg or 1) > 1:
+        """Clean checkpointed suspend (multi-segment jobs only) via SIGUSR1. Works even if paused.
+        Returns (ok, message) for the UI. A worker that hasn't printed its first real marker yet may
+        not have installed its SIGUSR1 handler (the default action KILLS it), so the signal is held
+        and sent the moment it is listening -- the engine only acts on it at a shot boundary anyway."""
+        with self._lock:
+            proc, cur = self.proc, self.current
+            job = self.jobs.get(cur) if cur else None
+            if not (proc and job):
+                return False, "no active run to suspend"
+            if int(job.nseg or 1) <= 1:
+                return False, "single-shot run: nothing to checkpoint (use CANCEL)"
+            if job.status not in ("running", "paused", "suspending"):
+                return False, f"run is already {job.status}"
             try:
                 self._suspend_req = True
                 if self.paused:                  # a SIGSTOP'd process must be continued to run its handler
-                    self.proc.send_signal(signal.SIGCONT)
+                    self._signal_group(proc, signal.SIGCONT)
                     self.paused = False
-                self.proc.send_signal(signal.SIGUSR1)
+                if self._usr1_ready:
+                    proc.send_signal(signal.SIGUSR1)   # leader ONLY: children keep SIGUSR1's default (die)
+                    msg = "suspending: checkpoints at the next shot boundary"
+                else:
+                    self._suspend_pending = cur
+                    msg = "suspend queued: sent as soon as the engine finishes starting up"
                 job.status = "suspending"; job.save()
-            except Exception:
-                pass
+                return True, msg
+            except Exception as e:
+                return False, f"suspend failed: {e}"
 
     def resume_suspended(self, jid):
         job = self.jobs.get(jid)
@@ -376,9 +456,12 @@ class JobManager:
             job.save()
 
     def promote(self, jid):
+        """Move a queued/suspended run to the FRONT of the queue. Only the persisted queue-order key
+        changes -- `created` (experiment ts_created, archive order, queued-wait) stays the truth."""
         job = self.jobs.get(jid)
         if job and job.status in ("queued", "suspended"):
-            job.created = min(j.created for j in self.jobs.values()) - 1
+            job.qorder = min(getattr(j, "qorder", j.created) for j in list(self.jobs.values())
+                             if j.status in ("queued", "suspended")) - 1
             job.save()
 
     # ---- runner ----
@@ -420,7 +503,7 @@ class JobManager:
         # queue silently freezes forever (worst possible overnight failure).
         while not self._stop:
             try:
-                nxt = next((j for j in self._sorted() if j.status == "queued"), None)
+                nxt = next((j for j in self._by_qorder() if j.status == "queued"), None)
             except RuntimeError:      # jobs dict mutated by the UI thread mid-iteration -> just retry
                 time.sleep(0.05); continue
             if nxt is None:
@@ -438,6 +521,19 @@ class JobManager:
                 self.proc, self.current, self.paused = None, None, False
                 time.sleep(1.0)
 
+    @staticmethod
+    def _resume_seg(job):
+        """Last shot held by the checkpoint a --resume run starts from (its state.json seg_idx);
+        falls back to the last [[CKPT]] seen, 0 if neither is known."""
+        try:
+            ck = job.cmd[job.cmd.index("--resume") + 1]
+            if not os.path.isabs(ck):
+                ck = os.path.join(job.params.get("cwd") or REPO, ck)
+            with open(os.path.join(ck, "state.json")) as f:
+                return int(json.load(f)["seg_idx"])
+        except Exception:
+            return int(getattr(job, "last_ckpt_seg", 0) or 0)
+
     def _run(self, job):
         env = dict(os.environ, PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
         # T14: VRAM headroom reserved for the Windows desktop, as a fraction of the 8GB card.
@@ -446,37 +542,77 @@ class JobManager:
             env["STUDIO_VRAM_HEADROOM"] = str(max(0.0, float(self.vram_reserve_gb)) / 8.0)
         except Exception:
             pass
-        job.status, job.started, job.seg, job.step = "running", time.time(), 0, 0
+        resumed = "--resume" in job.cmd
+        with self._lock:
+            if job.status != "queued" or self.jobs.get(job.id) is not job:
+                return            # REMOVEd (or put back to 'suspended') after _loop picked it
+            job.status, job.started, job.seg, job.step = "running", time.time(), 0, 0
+            self.current, self.paused = job.id, False
+            self._usr1_ready, self._suspend_pending = False, None
         # reset load/phase tracking on every (re)start
         job.phase, job.load_step, job.load_total, job.load_msg = "", 0, 0, ""
         job.saw_step, job.first_step_ts, job.first_step_seg = False, None, 1
-        job.phase_started, job.phase_secs = None, {}
-        job.seg_started, job.seg_secs = None, []
-        job.dir_ms = {}
-        job.dcfg = {}
-        job.seam_mse, job.drift, job.tok_counts = [], [], []
+        job.phase_started, job.seg_started = None, None
+        if resumed:
+            # A resumed leg KEEPS the earlier legs' telemetry (the experiment row must cover the whole
+            # run). Drop only what lies past the checkpoint we resume from: a hard-killed leg's
+            # in-flight shot is re-rendered and would otherwise be counted twice.
+            c = self._resume_seg(job)
+            job.phase_secs = dict(job.phase_secs or {})
+            job.seg_secs = list(job.seg_secs or [])
+            job.dir_ms = dict(job.dir_ms or {})
+            job.seam_mse, job.drift, job.tok_counts = (list(x or []) for x in (job.seam_mse, job.drift, job.tok_counts))
+            if c > 0:
+                job.seg_secs = job.seg_secs[:c]
+                job.dir_ms = {k: v for k, v in job.dir_ms.items() if int(k) <= c}
+                job.seam_mse, job.drift, job.tok_counts = (
+                    [e for e in x if e and int(e[0]) <= c] for x in (job.seam_mse, job.drift, job.tok_counts))
+        else:
+            job.phase_secs, job.seg_secs = {}, []
+            job.dir_ms = {}
+            job.dcfg = {}
+            job.seam_mse, job.drift, job.tok_counts = [], [], []
         job.save()
-        self.current, self.paused = job.id, False
         self._suspend_req = False
         suspended_ckpt = None
+        seg_closed = False        # the current shot's time is already in seg_secs (closed on saving/suspend)
         last_save = time.time()
         cwd = job.params.get("cwd") or REPO
-        with open(job.logpath(), "w") as lf:
+
+        def _close_shot():
+            nonlocal seg_closed
+            if job.seg_started is not None and not seg_closed:
+                job.seg_secs.append(int(time.time() - job.seg_started))
+                seg_closed = True
+
+        with open(job.logpath(), "a" if resumed else "w") as lf:   # a resumed leg APPENDS to the run's log
             try:
+                # errors="replace": ONE non-UTF-8 byte from some library must not abort the read loop
                 self.proc = subprocess.Popen(job.cmd, cwd=cwd, env=env, stdout=subprocess.PIPE,
-                                             stderr=subprocess.STDOUT, text=True, bufsize=1,
+                                             stderr=subprocess.STDOUT, text=True, errors="replace", bufsize=1,
                                              start_new_session=True)   # own process group -> cancel can killpg children
                 for line in self.proc.stdout:
                     line = line.rstrip()
                     lf.write(line + "\n"); lf.flush()
+                    if not self._usr1_ready and line.startswith("[[") and line != "[[PHASE importing]]":
+                        # the worker is past its imports -> director.py's SIGUSR1 handler is installed
+                        with self._lock:
+                            self._usr1_ready = True
+                            if self._suspend_pending == job.id:
+                                self._suspend_pending = None
+                                try:
+                                    self.proc.send_signal(signal.SIGUSR1)
+                                except Exception:
+                                    pass
                     transition = False
                     m = _PROG.search(line)
                     if m:
                         a, b = int(m.group(2)), int(m.group(3))
                         if m.group(1) == "SEG":
                             _now = time.time()
-                            if job.seg_started is not None and a > job.seg:
+                            if job.seg_started is not None and a > job.seg and not seg_closed:
                                 job.seg_secs.append(int(_now - job.seg_started))
+                            seg_closed = False
                             job.seg, job.nseg, job.step = a, b, 0
                             job.seg_started = _now
                             transition = True
@@ -520,6 +656,8 @@ class JobManager:
                     ph = _PHASE.search(line)
                     if ph:
                         _now = time.time()
+                        if ph.group(1) == "saving":
+                            _close_shot()       # the LAST shot has no next [[SEG]] to close it
                         if job.phase and job.phase_started is not None:
                             job.phase_secs[job.phase] = job.phase_secs.get(job.phase, 0) + (_now - job.phase_started)
                         job.phase = ph.group(1)
@@ -538,41 +676,66 @@ class JobManager:
                     su = _SUSP.search(line)
                     if su:
                         suspended_ckpt = su.group(1)
+                        _close_shot()           # printed where the next [[SEG]] would be: last shot of this leg
                         transition = True
                     if line and "vision_model" not in line and not line.startswith("[["):
                         job.tail.append(line); job.tail = job.tail[-300:]
+                        job.tail_count += 1     # monotonic: lets the LIVE view re-anchor on a full ring
                     now = time.time()
                     if transition or (now - last_save) >= 3:
                         job.save(); last_save = now
                 rc = self.proc.wait()
-                if suspended_ckpt or rc == 99:
-                    job.status = "suspended"
-                    job.ckpt_dir = os.path.join(RUNS_DIR, f"{job.id}_ckpt")
-                elif rc == 0:
-                    job.status = "done"
-                elif rc < 0:
-                    # killed: ONLY an explicit user CANCEL -> 'cancelled' (artifacts cleaned below).
-                    # App-exit shutdown(), a stall-sentry hard_interrupt(), or an UNEXPLAINED SIGKILL
-                    # (kernel OOM killer under overnight swap thrash!) -> 'interrupted', so the
-                    # checkpoint SURVIVES and the job stays resumable.
-                    _user_cancel = self._cancel_req and not (self._stop or self._interrupt_req)
-                    job.status = "cancelled" if _user_cancel else "interrupted"
-                else:
-                    job.status, job.error = "failed", f"exit {rc}"
+                with self._lock:     # vs pause/resume/suspend: the final status can't be overwritten
+                    if suspended_ckpt or rc == 99:
+                        job.status = "suspended"
+                        job.ckpt_dir = os.path.join(RUNS_DIR, f"{job.id}_ckpt")
+                    elif rc == 0:
+                        job.status = "done"
+                    elif rc < 0:
+                        # killed: ONLY an explicit user CANCEL -> 'cancelled' (artifacts cleaned below).
+                        # App-exit shutdown(), a stall-sentry hard_interrupt(), or an UNEXPLAINED SIGKILL
+                        # (kernel OOM killer under overnight swap thrash!) -> 'interrupted', so the
+                        # checkpoint SURVIVES and the job stays resumable.
+                        _user_cancel = self._cancel_req == job.id and not (
+                            self._stop or self._interrupt_req == job.id)
+                        job.status = "cancelled" if _user_cancel else "interrupted"
+                    else:
+                        job.status, job.error = "failed", f"exit {rc}"
             except Exception as e:
-                job.status, job.error = "failed", str(e)[:200]
+                with self._lock:
+                    job.status, job.error = "failed", str(e)[:200]
+                # the worker may still be rendering: kill its whole group + reap it BEFORE the runner
+                # moves on, or the next job starts beside it on the same 8GB GPU (OOM)
+                p = self.proc
+                if p is not None and p.poll() is None:
+                    try:
+                        os.killpg(p.pid, signal.SIGKILL)
+                    except Exception:
+                        try:
+                            p.kill()
+                        except Exception:
+                            pass
+                    try:
+                        p.wait(timeout=30)
+                    except Exception:
+                        pass
             finally:
-                job.finished = time.time()
-                self.proc, self.current, self.paused = None, None, False
-                self._suspend_req = False
-                # stall-kill: promote LIVE to 'suspended' when the checkpoint is valid (same rule
-                # Job.load applies at app start) so the run is resumable from the QUEUE right away.
-                if job.status == "interrupted" and not self._stop:
-                    _ck = os.path.join(RUNS_DIR, f"{job.id}_ckpt")
-                    if job._ckpt_valid(_ck):
-                        job.status, job.ckpt_dir = "suspended", _ck
-                self._interrupt_req = False
-                self._cancel_req = False
+                if job.phase and job.phase_started is not None:   # the phase still open at exit
+                    job.phase_secs[job.phase] = job.phase_secs.get(job.phase, 0) + (time.time() - job.phase_started)
+                    job.phase_started = None
+                with self._lock:
+                    job.finished = time.time()
+                    self.proc, self.current, self.paused = None, None, False
+                    self._suspend_req = False
+                    self._usr1_ready, self._suspend_pending = False, None
+                    # stall-kill: promote LIVE to 'suspended' when the checkpoint is valid (same rule
+                    # Job.load applies at app start) so the run is resumable from the QUEUE right away.
+                    if job.status == "interrupted" and not self._stop:
+                        _ck = os.path.join(RUNS_DIR, f"{job.id}_ckpt")
+                        if job._ckpt_valid(_ck):
+                            job.status, job.ckpt_dir = "suspended", _ck
+                    self._interrupt_req = None
+                    self._cancel_req = None
                 if job.status in ("done", "cancelled"):
                     ck = os.path.join(RUNS_DIR, f"{job.id}_ckpt")
                     try:                 # keep the director's notes readable after cleanup (DIR RAW view)

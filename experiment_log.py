@@ -61,6 +61,7 @@ def build_record(job):
         "pair_revealed": (bool(p.get("pair_revealed")) if p.get("pair_blind") else None),  # blind A/B: unblinded yet?
         "replicate_set_id": p.get("replicate_set_id"),  # Q3: ×N REPLICATE linkage (source job's id)
         "status": job.status,
+        "resumes": int(getattr(job, "resumes", 0) or 0),   # >0: suspended + resumed; telemetry spans every leg
         "machine": _MACHINE,
         # ---- independent variables (the dials) ----
         "kind": job.kind,

@@ -30,8 +30,10 @@ class FakeMgr:
     def remove(self, jid):
         removed.append(jid); jobs.pop(jid, None); return "removed"
     def shutdown(self): pass
+studio.REPO = tempfile.mkdtemp(prefix="blindrepo_")   # blind A/B writes runs/pair_blinds.jsonl: never the real one
 studio.JobManager = FakeMgr
-studio.save_studio_config = lambda cfg: None
+SAVES = []
+studio.save_studio_config = lambda cfg: SAVES.append(cfg)
 studio.load_studio_config = lambda: {"sounds": {"enabled": False}}
 studio.gpu_budget.budget_ok = lambda *a, **k: (True, 99999)
 
@@ -42,6 +44,7 @@ async def main():
         # 0. launch restore of a saved "sound off" must not replace the INFO intro
         info = str(app.query_one("#newinfo").render())
         check("saved sound prefs don't clobber the INFO intro", "event sounds" not in info and "♪" not in info, info[:60])
+        check("launch never saves a sound pick the user didn't make", all(c.get("sounds", {"enabled": False}) == {"enabled": False} for c in SAVES), SAVES)
         app.query_one("#prompt", TextArea).text = "a lighthouse at dusk"
         app.query_one("#seconds", Input).value = "2"      # one clip -> run_ltx.py
         await pilot.pause(0.2)
