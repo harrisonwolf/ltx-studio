@@ -88,7 +88,8 @@ async def main():
         c = enqueued[-1].cmd if enqueued else []
         check("re-roll queues one run", len(enqueued) == 1, len(enqueued))
         check("re-roll keeps --ltx_variant distilled", "--ltx_variant" in c and c[c.index("--ltx_variant") + 1] == "distilled", c)
-        check("re-roll uses the new seed + the run's prompt", "4242" in c and "a lighthouse at dusk" in c, c)
+        check("re-roll uses the new seed + the run's prompt",   # (--seed's value: the out path is a timestamp)
+              "--seed" in c and c[c.index("--seed") + 1] == "4242" and "a lighthouse at dusk" in c, c)
         # 6. ×N builds from the run too
         await press("replbtn", {"n": "2"})
         check("×N queues N runs", len(enqueued) == 3, len(enqueued))

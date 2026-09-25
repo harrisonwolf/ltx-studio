@@ -92,7 +92,8 @@ async def main():
         a.status, a.finished, a.started = "done", 2.0, 1.0
         a.params.update(pair_varied_dial="seed", seed="4242")
         txt = app._fmt_inspect(a)
-        check("blind inspect hides a varied seed", "4242" not in txt, [l for l in txt.splitlines() if "seed" in l])
+        seed_rows = [l for l in txt.splitlines() if l.strip().startswith("seed")]   # (the job id is a timestamp:
+        check("blind inspect hides a varied seed", seed_rows and all("4242" not in l for l in seed_rows), seed_rows)   # match rows)
         a.params.update(pair_varied_dial="prompt")
         txt = app._fmt_inspect(a)
         check("blind inspect hides a varied prompt", "lighthouse" not in txt)
@@ -117,7 +118,7 @@ async def main():
               and "hidden" in prov, [l for l in prov.splitlines() if "chained" in l or "frames" in l])
         a.params.update(pair_varied_dial="seed", seed="4242")
         card = app._queue_card(a, "QUEUED · #1", "#ffffff", 70)
-        check("blind queue card hides the varied seed", "4242" not in card, card)
+        check("blind queue card hides the varied seed", "seed 4242" not in card and "seed ?" in card, card)
         # the masking table: a varied dial also hides what it changes (backend -> res/steps/fps/...)
         a.params.update(pair_blind=True, pair_revealed=False, pair_varied_dial="backend", steps="40", width=704, height=480)
         card = app._queue_card(a, "QUEUED · #1", "#ffffff", 70)

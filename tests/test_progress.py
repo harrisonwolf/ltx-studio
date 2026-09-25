@@ -177,7 +177,7 @@ async def main():
         app._alerts()
         check("250 s into a director redirect is not a STALL", "STALL" not in (app._stall_note or ""), app._stall_note)
         # ...nor is 1250 s, and a redirect is never auto-suspended / killed (director.py times out and
-        # recovers its own waits: daemon load 900 s + request 600 s)
+        # recovers its own waits: daemon load 900 s + request 600 s + sidecar fallback 600 s = 2100 s)
         calls = []
         app.mgr.suspend = lambda: calls.append("suspend"); app.mgr.hard_interrupt = lambda: calls.append("kill")
         for idle in (1250, 2150, 2500):
