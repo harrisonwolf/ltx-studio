@@ -117,10 +117,14 @@ def daemon_kill_mid_load():
         d2.proc = subprocess.Popen([sys.executable, "-c", "import time; print('{\"ready\": true}', flush=True); time.sleep(30)"],
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         spawned = d2.proc
+        time.sleep(0.8)                       # its "ready" line is already in the pipe when kill() lands
         d2.kill()
-        t2 = threading.Thread(target=d2._await_ready, args=(spawned,), daemon=True); t2.start(); t2.join(5)
-        check("daemon: kill() before the watcher runs -> no error, no late 'ready'", not d2.last_error and not d2.ready,
-              (d2.last_error, d2.ready))
+        ran = []
+        def _watch():
+            d2._await_ready(spawned); ran.append(1)   # must RETURN normally (not die on an exception)
+        t2 = threading.Thread(target=_watch, daemon=True); t2.start(); t2.join(5)
+        check("daemon: a killed daemon's late 'ready' is ignored (no error, not ready)",
+              ran and not d2.last_error and not d2.ready, (ran, d2.last_error, d2.ready))
     finally:
         studio.REPO = real_repo
 

@@ -41,9 +41,9 @@ def _frame_files(d):
 # (LIVE's progress counters -- shot/step/frame X of N -- are left real: a render must stay followable.)
 _BLIND_ALSO = {
     "seconds": ("shape",), "fps": ("shape",), "res": ("shape",), "seg": ("shape",),
-    "backend": ("res", "steps", "fps", "cfg", "shape"),   # wan: 16 fps + upscale; turbo: steps<=8, cfg 1.0
-    "checkpoint": ("steps", "cfg"),                        # distilled forces steps<=8, cfg 1.0
+    "backend": ("res", "steps", "fps", "shape"),          # wan: 16 fps + upscaled dims; turbo: steps<=8
     "prompt": ("director",),
+    "steadiness": ("director",),                           # hold skips / evolve rewrites show in the notes
 }
 
 
@@ -445,19 +445,23 @@ class ConsultDaemon:
     def _await_ready(self, p=None):
         p = p if p is not None else self.proc   # the process THIS watcher was spawned for
         obj = self._read_json(proc=p)
-        if self.proc is not p:
-            return                   # kill()ed / replaced mid-load (CONSULT closed, a render took the GPU):
-            #                          not a failure, and a late "ready" from it must not flip ready either
-        self.ready = bool(obj and obj.get("ready"))
-        self.info = (obj.get("info") or "") if obj else ""
-        if self.ready:
-            self.last_error = ""
+        err = None
         if obj is None:              # the daemon died during load -> surface WHY instead of 'waking…' forever
             try:
                 lines = [l.strip() for l in open(os.path.join(REPO, "consult_daemon.err")).read().splitlines() if l.strip()]
-                self.last_error = (lines[-1][-160:] if lines else "model failed to load")
+                err = (lines[-1][-160:] if lines else "model failed to load")
             except Exception:
-                self.last_error = "model failed to load (see consult_daemon.err)"
+                err = "model failed to load (see consult_daemon.err)"
+        with self._lock:             # check + publish atomically vs kill()/warm() on the UI thread
+            if self.proc is not p:
+                return               # kill()ed / replaced mid-load (CONSULT closed, a render took the GPU):
+                #                      not a failure, and a late "ready" from it must not flip ready either
+            self.ready = bool(obj and obj.get("ready"))
+            self.info = (obj.get("info") or "") if obj else ""
+            if self.ready:
+                self.last_error = ""
+            elif err is not None:
+                self.last_error = err
 
     def ask(self, history, image, raw=False):
         """Blocking request/response (call from a worker thread). raw=True -> plain chat, no config."""
@@ -2899,7 +2903,7 @@ class Studio(App):
                       fixed=True)
         self._put("#livephase", self._phase(job, m.paused), fixed=True)
         now_painting = job.director or job.params.get("prompt", "")
-        if _blind_hidden(job.params, "prompt"):
+        if _blind_hidden(job.params, "prompt", "director"):
             now_painting = "(hidden — blind A/B)"
         self._put("#director",
             ("[dim]this shot →[/dim] " + now_painting) if now_painting
@@ -2923,18 +2927,24 @@ class Studio(App):
                 pv.styles.width = cols + 2
                 pv.update(render_preview(ppath, cols=cols))
         plans = getattr(job, "plans", None) or []
-        _hide_dir = _blind_hidden(job.params, "director")   # a blind PROMPT pair: plans/rewrites echo it
-        for entry in plans[self._notes_n:]:
+        # a blind pair whose notes would give it away (prompt/steadiness: the plans; a length pair: the
+        # number of shots / seams) shows ONE hidden line instead of the per-shot enumeration
+        _hide_dir = _blind_hidden(job.params, "director", "shape")
+        if _hide_dir:
+            if plans and self._notes_n == 0:
+                notes.write("[dim](director's notes hidden — blind A/B, REVEAL to show)[/dim]")
+            plans_new = []
+        else:
+            plans_new = plans[self._notes_n:]
+        for entry in plans_new:
             seg, plan = int(entry[0]), entry[1]
             prompt = entry[2] if len(entry) > 2 else ""
-            if _hide_dir:
-                plan, prompt = "(hidden — blind A/B)", ""
             notes.write(f"[#6dffab]shot {seg + 1}[/#6dffab] — [#9dffce]plan:[/#9dffce] {plan or '…'}"
                         + (f"  [#ffcf5c]→[/#ffcf5c] {prompt}" if prompt else ""))
             cost = _dir_cost_line(job, seg)
             if cost:
                 notes.write(f"   {cost}")
-            if self._dir_raw and not _hide_dir:
+            if self._dir_raw:
                 r = _director_raw(job, seg)
                 if r and r.get("raw"):
                     notes.write(f"   [dim]raw ▾[/dim] {r['raw'].strip()[:1200]}")
@@ -4806,20 +4816,19 @@ class Studio(App):
             L += ["", "[#ff6d6d]✕ ERROR[/#ff6d6d]", f"  {job.error[:240]}",
                   "  [dim]full trace → » TERMINAL[/dim]"]
         plans = getattr(job, "plans", None) or []
-        if plans:
+        if plans and _blind_hidden(p, "director", "shape"):   # plans / shot + seam counts would give it away
+            L += ["", "[#6dffab]DIRECTOR'S NOTES[/#6dffab]", f"  {_HIDDEN}"]
+        elif plans:
             L += ["", "[#6dffab]DIRECTOR'S NOTES[/#6dffab]"]
             dm = getattr(job, "dir_ms", None) or {}
             if dm:
                 loads = [v[0] for v in dm.values()]; thinks = [v[1] for v in dm.values()]
                 L.append("  [dim]per-seam cost: load {:.0f}s avg · think {:.1f}s avg · {} seams[/dim]"
                          .format(sum(loads) / len(loads) / 1000, sum(thinks) / len(thinks) / 1000, len(dm)))
-            _hide_dir = _blind_hidden(p, "director")         # a blind PROMPT pair: plans/rewrites echo it
-            raws = _director_raw(job) if (self._dir_raw and not _hide_dir) else {}   # one read, not one per shot
+            raws = _director_raw(job) if self._dir_raw else {}   # one read of director.jsonl, not one per shot
             for entry in plans:
                 seg, plan = int(entry[0]), entry[1]
                 prompt = entry[2] if len(entry) > 2 else ""
-                if _hide_dir:
-                    plan, prompt = "(hidden — blind A/B)", ""
                 L.append(f"  [#9dffce]shot {seg + 1}[/#9dffce] — {plan or '…'}")
                 c = _dir_cost_line(job, seg)
                 if c:

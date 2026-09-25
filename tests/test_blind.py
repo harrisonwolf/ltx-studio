@@ -133,7 +133,20 @@ async def main():
         txt = app._fmt_inspect(a)
         check("prompt-blind inspect hides the director's plans / rewrites", "whale" not in txt,
               [l for l in txt.splitlines() if "whale" in l])
-        a.kind, a.plans, a.director = "chained", [], ""
+        # a STEADINESS pair: hold's "(skipped …)" plans vs evolve's rewrites give it away -> hidden
+        a.params.update(pair_varied_dial="steadiness")
+        a.plans = [[1, "(skipped - scene holding steady; prompt unchanged)", ""]]
+        txt = app._fmt_inspect(a)
+        check("steadiness-blind inspect hides the director's notes", "holding steady" not in txt,
+              [l for l in txt.splitlines() if "steady" in l])
+        # a LENGTH pair in director mode: the number of noted shots / seams gives the length away
+        a.params.update(pair_varied_dial="seconds")
+        a.plans = [[i, f"plan {i}", ""] for i in range(1, 8)]
+        a.dir_ms = {i: [1000, 2000] for i in range(1, 8)}
+        txt = app._fmt_inspect(a)
+        check("length-blind inspect hides the per-shot notes and seam count", "7 seams" not in txt and "shot 8" not in txt,
+              [l for l in txt.splitlines() if "seams" in l or "shot 8" in l])
+        a.kind, a.plans, a.director, a.dir_ms = "chained", [], "", {}
         a.params["pair_blind"] = False
         # derived runs (clone / re-roll / ×N / enhance) of an unrevealed blind run are refused
         br = studio_core.Job("blindsrc", "t", "single", [], dict(a.params, pair_blind=True, pair_revealed=False,
