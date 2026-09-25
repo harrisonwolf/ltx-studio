@@ -25,7 +25,9 @@ def log(*a):
 import os  # noqa: E402
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")  # de-fragment the cap so the 8B fits
 import torch  # noqa: E402
-from gpu_budget import cap_vram; cap_vram()  # noqa: E402  -- leave ~12% VRAM free for the OS (always safe; the 8B is probe-gated)
+from gpu_budget import cap_vram  # noqa: E402
+if os.environ.get("CONSULT_DEVICE") != "cpu":   # leave ~12% VRAM free for the OS (always safe; the 8B is probe-gated).
+    cap_vram()   # CPU consult (a render holds the GPU): cap_vram would create a CUDA context on the busy card -> skip
 from transformers import (Qwen3VLForConditionalGeneration, AutoProcessor,  # noqa: E402
                           TextIteratorStreamer)
 from qwen_vl_utils import process_vision_info  # noqa: E402

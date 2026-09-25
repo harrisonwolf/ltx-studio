@@ -10,6 +10,23 @@ Both backends emit the SAME stdout markers + outputs, so studio_core/studio.py s
   python director.py --prompt "..." --total 12 --seg 3 [--image start.png] [--backend wan]
 """
 import argparse, os, gc, json, signal, sys, glob, re, types, time
+
+# --- suspend signal ---
+# Installed HERE, before the multi-second torch/diffusers imports below: SIGUSR1's default action is
+# terminate, so a studio suspend in the first seconds used to KILL the run. The handler only records the
+# request; main()'s chaining loop honors it at the first seam (checkpoint -> [[SUSPENDED]] -> exit 99).
+# Only when run as the worker script -- importing director (tests/tools) must not claim the importer's SIGUSR1.
+_SUSPEND = False
+
+
+def _on_suspend(signum, frame):
+    global _SUSPEND
+    _SUSPEND = True
+
+
+if __name__ == "__main__":
+    signal.signal(signal.SIGUSR1, _on_suspend)
+
 import numpy as np
 import torch
 from gpu_budget import cap_vram
@@ -20,9 +37,6 @@ from diffusers.utils import export_to_video, load_image
 import ltx_preview
 import style_presets
 
-
-# --- suspend signal ---
-_SUSPEND = False
 
 # Q4 interval-CFG: sentinel for "no step seen yet" — distinct from any real _current_timestep (incl. None,
 # which the pipelines set after the denoise loop) so per-shot rewind can't collide with a real value.
@@ -40,15 +54,28 @@ def _preview_sec():
 PREVIEW_SEC = _preview_sec()
 
 
-def _on_suspend(signum, frame):
-    global _SUSPEND
-    _SUSPEND = True
-
-
 def _ascii1(s, n=200):
     """One ASCII line, no ']]', truncated -> safe inside a [[...]] marker."""
     s = " ".join(str(s).split())
     return s.encode("ascii", "ignore").decode().replace("]]", ") ")[:n]
+
+
+def export_video_atomic(video, out, fps):
+    """export_to_video into a temp file in out's directory, then os.replace -> a kill mid-encode never
+    leaves a truncated mp4 at `out`. The temp keeps out's extension (imageio picks the container from it)
+    and is hidden (leading '.') so glob-based output listings never see it."""
+    d, base = os.path.split(out)
+    root, ext = os.path.splitext(base)
+    tmp = os.path.join(d, ".%s.part%d%s" % (root, os.getpid(), ext or ".mp4"))
+    try:
+        export_to_video(video, tmp, fps=fps)
+        os.replace(tmp, out)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _write_preview(path, video):
@@ -189,24 +216,41 @@ def _fold_anchors(prompt, anchors):
 
 def write_checkpoint(ckpt_dir, seg_idx, video, current_prompt, directive,
                      W, H, seg_frames, target, overlap, est_segs, args):
-    """Persist all accumulated frames + state.json atomically (state.json LAST)."""
+    """Persist all accumulated frames + state.json atomically (state.json LAST).
+    Crash-safe: a kill at ANY point leaves the previously committed checkpoint loadable and unchanged.
+    Frames the committed state already owns (index < its n_frames: the re-crossfaded seam) are NOT
+    overwritten in place -- they are staged as <i>.png.<seg_idx>.new, state.json is replaced (the commit,
+    which lists them as "pending"), and only then renamed over the old PNGs. load_checkpoint finishes any
+    pending renames of the committed state and ignores uncommitted leftovers / extra PNGs past n_frames."""
     frames_dir = os.path.join(ckpt_dir, "frames")
     os.makedirs(frames_dir, exist_ok=True)
+    n_committed = 0                      # frames owned by the checkpoint on disk right now (0 = none yet)
+    try:
+        with open(os.path.join(ckpt_dir, "state.json")) as fh:
+            n_committed = max(0, int(json.load(fh).get("n_frames", 0)))
+    except Exception:
+        n_committed = 0
     # Incremental: frames are append-only except near the seam (crossfade touches ~overlap frames), so
     # re-encoding EVERY frame each shot is O(n^2) and stalls late shots. Atomic per-frame (tmp+replace)
     # so a mid-write kill can never leave a torn PNG that passes _ckpt_valid's count check.
     rewrite_from = max(0, len(video) - seg_frames - overlap - 1)
+    pending = []
     for i, im in enumerate(video):
-        fp = os.path.join(frames_dir, f"{i:04d}.png")
-        if i < rewrite_from and os.path.exists(fp):
+        fp = _ckpt_frame_path(frames_dir, i)
+        if i < rewrite_from and i < n_committed and os.path.exists(fp):
             continue
-        tmp = fp + ".tmp"
+        if i < n_committed:              # committed frame -> stage it; renamed in only after the commit
+            im.save(_ckpt_pending_path(frames_dir, i, seg_idx), format="PNG")
+            pending.append(i)
+            continue
+        tmp = fp + ".tmp"                # beyond the committed range: extras are ignored until committed
         im.save(tmp, format="PNG")
         os.replace(tmp, fp)
     state = {
         "schema": 1,
         "seg_idx": int(seg_idx),
         "n_frames": int(len(video)),
+        "pending_gen": int(seg_idx), "pending": pending,     # staged seam frames (see _ckpt_finish_pending)
         "current_prompt": current_prompt,
         "directive": directive,
         "W": int(W), "H": int(H),
@@ -225,8 +269,62 @@ def write_checkpoint(ckpt_dir, seg_idx, video, current_prompt, directive,
     tmp = os.path.join(ckpt_dir, "state.json.tmp")
     with open(tmp, "w") as fh:
         json.dump(state, fh)
-    os.replace(tmp, os.path.join(ckpt_dir, "state.json"))
+    os.replace(tmp, os.path.join(ckpt_dir, "state.json"))       # <- the commit point
+    _ckpt_finish_pending(frames_dir, state)
     print("[[CKPT %d %d]]" % (seg_idx, len(video)), flush=True)
+
+
+def _ckpt_frame_path(frames_dir, i):
+    return os.path.join(frames_dir, f"{i:04d}.png")
+
+
+def _ckpt_pending_path(frames_dir, i, gen):
+    # NOT *.png (so studio_core's frames/*.png count and every PNG glob ignore it); tagged with the
+    # checkpoint generation so an uncommitted stage is never mistaken for the committed state's.
+    return os.path.join(frames_dir, f"{i:04d}.png.{int(gen)}.new")
+
+
+def _ckpt_finish_pending(frames_dir, state):
+    """Rename the committed state's staged seam frames over the old PNGs (idempotent: an already-renamed
+    frame has no .new left). Then drop leftover staging/tmp files from an interrupted, UNcommitted write."""
+    gen = state.get("pending_gen")
+    for i in state.get("pending", []) or []:
+        src = _ckpt_pending_path(frames_dir, int(i), gen)
+        if os.path.exists(src):
+            os.replace(src, _ckpt_frame_path(frames_dir, int(i)))
+    for junk in glob.glob(os.path.join(frames_dir, "*.new")) + glob.glob(os.path.join(frames_dir, "*.tmp")):
+        try:
+            os.remove(junk)
+        except OSError:
+            pass
+
+
+def _save_palette_pool(ckpt_dir, pool, seg_idx):
+    """#2 Q2: persist the (decay-refreshed) palette-lock pool beside the checkpoint, tagged with the seg_idx
+    it belongs to -- a resume used to REBUILD it from shot-1 frames (already crossfaded on LTX) and lose
+    every refresh. Written BEFORE state.json commits; a tag mismatch (kill in between) falls back to the
+    legacy rebuild. No-op when palette_lock is off (pool None). Never raises."""
+    if not ckpt_dir or pool is None:
+        return
+    try:
+        os.makedirs(ckpt_dir, exist_ok=True)
+        tmp = os.path.join(ckpt_dir, "palette_pool.npz.tmp")
+        with open(tmp, "wb") as fh:
+            np.savez(fh, pool=pool, seg_idx=np.int64(seg_idx))
+        os.replace(tmp, os.path.join(ckpt_dir, "palette_pool.npz"))
+    except Exception:
+        pass
+
+
+def _load_palette_pool(ckpt_dir, seg_idx):
+    """The persisted pool if it belongs to checkpoint seg_idx, else None (absent / stale / unreadable)."""
+    try:
+        with np.load(os.path.join(ckpt_dir, "palette_pool.npz")) as z:
+            if int(z["seg_idx"]) == int(seg_idx):
+                return np.array(z["pool"], dtype=np.uint8)
+    except Exception:
+        pass
+    return None
 
 
 def load_checkpoint(ckpt_dir, expect_backend=None):
@@ -242,12 +340,18 @@ def load_checkpoint(ckpt_dir, expect_backend=None):
             "(tail/seam semantics differ; resume with the original backend)"
             % (saved_backend, expect_backend))
     frames_dir = os.path.join(ckpt_dir, "frames")
-    png_paths = sorted(glob.glob(os.path.join(frames_dir, "*.png")))
-    video = [load_image(p) for p in png_paths]
-    if state["n_frames"] != len(video):
+    _ckpt_finish_pending(frames_dir, state)      # complete a commit whose renames a kill interrupted
+    # Read EXACTLY frames 0..n_frames-1 by index (numeric order -- a lexicographic sort scrambles the
+    # timeline once names outgrow the 4-digit padding at 10000 frames). Extra PNGs past n_frames (an
+    # interrupted, uncommitted append) are ignored; the next checkpoint overwrites them.
+    n = int(state["n_frames"])
+    png_paths = [_ckpt_frame_path(frames_dir, i) for i in range(n)]
+    missing = [p for p in png_paths if not os.path.exists(p)]
+    if missing:
         raise RuntimeError(
-            "checkpoint corrupt: state.json n_frames=%d but found %d PNGs in %s"
-            % (state["n_frames"], len(video), frames_dir))
+            "checkpoint corrupt: state.json n_frames=%d but %d of those PNGs are missing in %s (first: %s)"
+            % (n, len(missing), frames_dir, os.path.basename(missing[0])))
+    video = [load_image(p) for p in png_paths]
     return video, int(state["seg_idx"]), state["current_prompt"]
 
 
@@ -355,6 +459,16 @@ class VideoBackend:
                              {"do_classifier_free_guidance": property(_gated),
                               "_q4_gated_subclass": True})
             pipe.__class__ = gated_cls
+
+
+def ltx_frame_rate_kw(fps):
+    """--fps -> the LTX pipelines' `frame_rate` kwarg (default 25 in diffusers), which scales the RoPE
+    temporal coordinates (i.e. the motion pacing the model generates for). It was never passed, so every
+    run was paced for 25fps. Passed only when fps != 24 (the project default): at 24 it is omitted so the
+    default path stays byte-identical (still paced for 25, a 4% mismatch -- the effect has not been
+    measured, so it is not silently changed); any other fps now reaches the model."""
+    fps = int(fps)
+    return {} if fps == 24 else {"frame_rate": fps}
 
 
 class LTXBackend(VideoBackend):
@@ -467,6 +581,7 @@ class LTXBackend(VideoBackend):
                 if _lat_inj["lat"] is None:
                     return real
                 K = real.shape[2]
+                _lat_inj["k"] = K                   # latent frames injected (the seam the fuse must align to)
                 tail = _lat_inj["lat"][:, :, -K:, :, :].to(real.dtype).to(real.device)
                 m = pipe.vae.latents_mean.view(1, -1, 1, 1, 1).to(tail.device, tail.dtype)
                 s = pipe.vae.latents_std.view(1, -1, 1, 1, 1).to(tail.device, tail.dtype)
@@ -502,9 +617,14 @@ class LTXBackend(VideoBackend):
                         out = adain_normalize_latents(raw, anchor, factor=args.latent_adain)
                 if args.latent_fuse and self._carry is not None:            # continuations only (carry = prev tail)
                     prev_tail = self._carry.to(out.device, out.dtype)
-                    K = min(self._overlap_lat, prev_tail.shape[2], out.shape[2])
+                    # The shot's leading latent frames reproduce the INJECTED carry[-Kc:] (Kc = the condition's
+                    # latent length, recorded by _retrieve_patched), so out[:, :, j] pairs with carry[-Kc + j].
+                    # Blending carry[-K:] (K = Kc-1) paired every frame with its successor -- one frame off.
+                    Kc = min(_lat_inj.get("k") or (self._overlap_lat + 1), prev_tail.shape[2])
+                    K = min(self._overlap_lat, Kc, out.shape[2])
                     if K >= 2:
-                        out = linear_overlap_fuse(prev_tail[:, :, -K:], out, K)   # blend leading K frames -> seam
+                        F = prev_tail.shape[2]
+                        out = linear_overlap_fuse(prev_tail[:, :, F - Kc:F - Kc + K], out, K)   # blend leading K frames -> seam
                     elif not self._fuse_warned:
                         print("latent_fuse: overlap too small (<2 latent frames), no-op — use --overlap 17+", flush=True)
                         self._fuse_warned = True
@@ -547,6 +667,7 @@ class LTXBackend(VideoBackend):
         # only inside the do_cfg branch, i.e. cfg>1.0 -- the verified 1.01 floor). Pass it straight through;
         # at cfg<=1 the pipeline never enters that branch, so this is an automatic no-op (default 0 anyway).
         gr = {"guidance_rescale": args.cfg_rescale} if args.cfg_rescale > 0 else {}
+        gr.update(ltx_frame_rate_kw(args.fps))
         out = self.pipe(conditions=cond, prompt=prompt, negative_prompt=neg,
                         width=self.W, height=self.H, num_frames=self.seg_frames,
                         num_inference_steps=args.steps, guidance_scale=args.cfg,
@@ -934,8 +1055,10 @@ def main():
     backend = make_backend(args)
     fps = backend.fps_for(args.fps)     # Wan runs at its native 16fps; LTX keeps the requested fps
     W, H = backend.dims(args.width, args.height)
-    seg_frames = backend.to_frames(args.seg, fps)
-    target = backend.to_frames(args.total, fps)
+    # floor at 9 frames like studio_core's _plan (a 0.3s request at 24fps quantized to 1 frame); 9 is valid
+    # for both backends (LTX 8k+1, Wan 4k+1). Unchanged for any request that already yields >= 9 frames.
+    seg_frames = max(9, backend.to_frames(args.seg, fps))
+    target = max(9, backend.to_frames(args.total, fps))
     overlap = max(1, min(args.overlap, seg_frames - 8))   # floor at 1: a short Wan seg_frames must never go negative
     backend.configure(W, H, seg_frames, overlap)
 
@@ -1018,13 +1141,23 @@ def main():
     _last_directed = None       # the seam frame the director last looked at (for the HOLD static-skip)
     _dproc = [None]             # the resident CPU director daemon (A1); None until first spawned
 
-    def _save_director_state(ckpt, beats_l, last_r):
+    def _save_director_state(ckpt, beats_l, last_r, last_dir=None):
         """Audit H2: beats / last_redirect were never checkpointed, so a resumed evolve run re-planned
         with an EMPTY story ('do not repeat' against a blank list) and fired an immediate off-cadence
-        redirect. Written next to every checkpoint; tiny, atomic-enough (single json dump)."""
+        redirect. Written next to every checkpoint; tiny, atomic-enough (single json dump).
+        last_dir (_last_directed, the seam frame the director last looked at) -> last_directed.png, so a
+        resumed HOLD run keeps its 'scene holding steady' static-skip instead of forcing a VLM redirect."""
         try:
+            _ldp = os.path.join(ckpt, "last_directed.png")
+            if last_dir is not None:
+                has_ld = bool(ltx_preview.atomic_save_png(last_dir, _ldp))
+            else:
+                has_ld = False
+                if os.path.exists(_ldp):
+                    os.remove(_ldp)
             with open(os.path.join(ckpt, "director_state.json"), "w") as fh:
-                json.dump({"beats": [str(b) for b in beats_l[-6:]], "last_redirect": int(last_r)}, fh)
+                json.dump({"beats": [str(b) for b in beats_l[-6:]], "last_redirect": int(last_r),
+                           "last_directed": has_ld}, fh)
         except Exception:
             pass
 
@@ -1217,12 +1350,17 @@ def main():
                 _ds = json.load(fh)
             beats.extend([str(b) for b in _ds.get("beats", [])][-6:])
             last_redirect = int(_ds.get("last_redirect", 0))
+            _ldp = os.path.join(args.resume, "last_directed.png")
+            if _ds.get("last_directed") and os.path.exists(_ldp):
+                _last_directed = load_image(_ldp)
         except Exception:
             pass
         if args.wan_ref_anchor:                # Q5: shot-1 last frame -> VACE reference on continuations
             setattr(backend, "_ref_anchor", anchor_frame)
-        if args.palette_lock > 0:              # #2 Q2: never persisted -- recompute the pool from shot-1 frames
-            palette_pool = build_palette_pool(video[:seg_frames], args.seed)
+        if args.palette_lock > 0:              # #2 Q2: restore the persisted (refreshed) pool of this checkpoint;
+            palette_pool = _load_palette_pool(args.resume, seg_idx)      # older ckpts lack it -> legacy
+            if palette_pool is None:           # rebuild from the (partly crossfaded) shot-1 frames
+                palette_pool = build_palette_pool(video[:seg_frames], args.seed)
         print(f"resumed from {args.resume}: {len(video)} frames, seg_idx={seg_idx}")
         print(f"[[SEG {seg_idx + 1} {est_segs}]]", flush=True)   # the shot we're about to make
         print("[[PHASE warmup]]", flush=True)
@@ -1258,10 +1396,11 @@ def main():
                 last_redirect = 1
                 _last_directed = video[-1]
         if args.ckpt_dir:
+            _save_palette_pool(args.ckpt_dir, palette_pool, seg_idx)   # before the commit (tagged seg_idx)
             write_checkpoint(args.ckpt_dir, seg_idx, video, current_prompt, directive,
                              W, H, seg_frames, target, overlap, est_segs, args)
             if director:
-                _save_director_state(args.ckpt_dir, beats, last_redirect)
+                _save_director_state(args.ckpt_dir, beats, last_redirect, _last_directed)
 
     # --- continuations ---
     while len(video) < target:
@@ -1293,10 +1432,21 @@ def main():
         else:
             # seam polish: crossfade the overlap region -> blend shot N's tail (fading out) with
             # shot N+1's matched head (fading in) so the join is seamless instead of a hard cut.
-            tail_n, head = video[-overlap:], out[:overlap]
+            # color_match measures against the PRIOR tail (prev_last), like the Wan / --no_crossfade branches,
+            # and BEFORE the blend: matching after it measured the shot against its own ~90%-new-head blend,
+            # which silently disabled per-shot drift correction on this (default) path. The head is matched
+            # too so the blend fades between two drift-corrected frames. palette_lock (anchored to the shot-1
+            # pool, not the tail) keeps its original order: raw head blended, body locked -> unchanged.
+            if palette_active and palette_pool is not None:
+                head, new = out[:overlap], None
+            else:
+                outc = color_match(out, prev_last)
+                head, new = outc[:overlap], outc[overlap:]
+            tail_n = video[-overlap:]
             video = video[:-overlap] + [Image.blend(tail_n[i], head[i], (i + 1) / (overlap + 1))
                                         for i in range(overlap)]
-            new = _recolor(out[overlap:], video[-1])
+            if new is None:
+                new = _recolor(out[overlap:], video[-1])
             video += new
         # Q3 telemetry: seam continuity + drift-vs-anchor, measured AFTER whichever correction just ran
         # (color_match OR #2 Q2's palette_lock / AdaIN), so the marker directly scores this work.
@@ -1317,16 +1467,17 @@ def main():
                 last_redirect = seg_idx
                 _last_directed = video[-1]
         if args.ckpt_dir:
+            _save_palette_pool(args.ckpt_dir, palette_pool, seg_idx)   # before the commit (tagged seg_idx)
             write_checkpoint(args.ckpt_dir, seg_idx, video, current_prompt, directive,
                              W, H, seg_frames, target, overlap, est_segs, args)
             if director:
-                _save_director_state(args.ckpt_dir, beats, last_redirect)
+                _save_director_state(args.ckpt_dir, beats, last_redirect, _last_directed)
 
     _kill_director_daemon()
     video = video[:target]
     print("[[PHASE saving]]", flush=True)
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-    export_to_video(video, args.out, fps=fps)
+    export_video_atomic(video, args.out, fps)
     if args.frames_dir:
         os.makedirs(args.frames_dir, exist_ok=True)
         for i, im in enumerate(video):

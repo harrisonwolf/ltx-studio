@@ -202,22 +202,36 @@ def load(cpu=False):
     return m, proc
 
 
+def _label(name):
+    """Regex for a 'NAME:' label, tolerating markdown bold/italics around it ('**PROMPT:**', '**PROMPT**:',
+    '*PLAN:*') -- the 4B model sometimes formats its answer as markdown."""
+    return r"\*{0,2}" + name + r"\*{0,2}:\s*\*{0,2}"
+
+
 def extract_prompt(resp):
     """Return (prompt, plan_text) from the PLAN/PROMPT response."""
-    plan = re.search(r"PLAN:\s*(.+?)(?:\n|PROMPT:|$)", resp, flags=re.I | re.S)
-    plan_txt = " ".join(plan.group(1).split()) if plan else ""
+    plan = re.search(_label("PLAN") + r"\s*(.+?)(?:\n|" + _label("PROMPT") + r"|$)", resp, flags=re.I | re.S)
+    plan_txt = " ".join(plan.group(1).split()).strip("*").strip() if plan else ""
     if plan_txt:
         log("director PLAN> " + plan_txt[:200])
-    m = re.search(r"PROMPT:\s*(.+)", resp, flags=re.I | re.S)
+    m = re.search(_label("PROMPT") + r"\s*(.+)", resp, flags=re.I | re.S)
     s = m.group(1) if m else resp
     s = s.strip().splitlines()[0] if s.strip() else s
     s = re.sub(r"^\s*(next shot|in the next (frame|shot)|shot\s*\d+|prompt|plan)\s*[:\-,.]?\s*",
-               "", s, flags=re.I).strip().strip('"').strip("'").strip()
+               "", s, flags=re.I).strip().strip("*").strip().strip('"').strip("'").strip()
     out = " ".join(s.split())
     if not plan_txt:                       # model skipped the "PLAN:" line -> salvage the reasoning head
-        head = " ".join(re.split(r"PROMPT:", resp, flags=re.I)[0].split())
+        head = " ".join(re.split(_label("PROMPT"), resp, flags=re.I)[0].split())
         plan_txt = head[:300] if head else "(no explicit plan)"
     return out, plan_txt
+
+
+def is_keep(resp):
+    """KEEP detection hardened (audit F1): KEEP at response start, as any standalone line, or as the
+    PROMPT -- each optionally markdown-bolded ('**KEEP**', '**PROMPT:** KEEP')."""
+    return (re.match(r"\s*\*{0,2}KEEP\b", resp, re.I) is not None
+            or any(re.match(r"\s*\*{0,2}KEEP\s*[.!]?\s*\*{0,2}\s*$", ln, re.I) for ln in resp.splitlines())
+            or re.search(_label("PROMPT") + r"\s*KEEP\s*[.!]?\s*\*{0,2}\s*$", resp, re.I | re.M) is not None)
 
 
 def run_once(model, proc, dev):
@@ -249,10 +263,7 @@ def run_once(model, proc, dev):
     # KEEP detection hardened (audit F1): accept KEEP at response start, as any standalone line, or as
     # "PROMPT: KEEP" — a 4B model at temp 0.7 emits all three shapes, and a missed KEEP used to ship
     # prose (or the literal word KEEP) as the next shot's prompt for the following 3 shots.
-    kept = bool(args.fit_check) and (
-        re.match(r"\s*KEEP\b", resp, re.I) is not None
-        or any(re.match(r"\s*KEEP\s*[.!]?\s*$", ln, re.I) for ln in resp.splitlines())
-        or re.search(r"PROMPT:\s*KEEP\s*[.!]?\s*$", resp, re.I | re.M) is not None)
+    kept = bool(args.fit_check) and is_keep(resp)
     if kept:
         out = (args.prev or out).strip()                    # reuse the previous prompt (anchors may re-append)
         plan_txt = "frame still fits the scene — keeping the current prompt (no change)"

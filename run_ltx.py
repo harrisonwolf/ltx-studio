@@ -60,7 +60,7 @@ if _distilled:
 W = (args.width // 32) * 32
 H = (args.height // 32) * 32
 num_frames = int(args.seconds * args.fps)
-num_frames = (num_frames // 8) * 8 + 1
+num_frames = max(9, (num_frames // 8) * 8 + 1)   # floor at 9 like studio's _plan (0.3s@24fps -> 1 frame); >=9 unchanged
 
 from diffusers import LTXPipeline, LTXImageToVideoPipeline
 from diffusers.utils import export_to_video, load_image
@@ -125,6 +125,8 @@ if repo != base:      # 0.9.5's VAE is timestep-conditioned -- pass the decode k
 if args.cfg_rescale > 0 and args.cfg > 1.0:   # default 0 -> kwarg absent -> identical to before
     kw["guidance_rescale"] = args.cfg_rescale     # (the distilled variant forces cfg=1.0 above -> skipped)
     print("guidance_rescale=%.3f (LTX native passthrough)" % args.cfg_rescale, flush=True)
+if args.fps != 24:    # frame_rate scales LTX's RoPE time axis (pipeline default 25). Omitted at the project
+    kw["frame_rate"] = args.fps   # default 24 -> byte-identical default run; other fps now reach the model
 if args.image:
     kw["image"] = load_image(args.image)
 
@@ -163,7 +165,19 @@ if args.preview and frames:
         pass
 print("[[PHASE saving]]", flush=True)
 os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-export_to_video(frames, args.out, fps=args.fps)
+# temp file in the same dir (same extension -> imageio picks the same container) + os.replace, so a kill
+# mid-encode never leaves a truncated mp4 at args.out
+_od, _ob = os.path.split(args.out)
+_tmp_out = os.path.join(_od, ".%s.part%d%s" % (os.path.splitext(_ob)[0], os.getpid(), os.path.splitext(_ob)[1] or ".mp4"))
+try:
+    export_to_video(frames, _tmp_out, fps=args.fps)
+    os.replace(_tmp_out, args.out)
+except BaseException:
+    try:
+        os.remove(_tmp_out)
+    except OSError:
+        pass
+    raise
 if args.frames_dir:
     os.makedirs(args.frames_dir, exist_ok=True)
     for i, im in enumerate(frames):
