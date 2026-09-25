@@ -223,12 +223,41 @@ def check_9_missing_and_corrupt_no_raise():
     assert out and "READOUT" in strip(out)
 
 
+def check_10_sub_threshold_growth_parses_once():
+    """jsonl newer than the cache but < min_new_rows new rows leaves the cache untouched; the
+    memo must stop that state from re-parsing the whole history on every call (every keystroke)."""
+    repo = tempfile.mkdtemp(prefix="t22memo_")
+    exp = os.path.join(repo, readout.EXPERIMENTS)
+    rows, _K, _COEF = _synth_rows()
+    _write_jsonl(exp, rows)
+    first = readout.maybe_refit(repo, min_new_rows=5)
+    with open(exp, "a") as f:                      # one new run: below the refit threshold
+        f.write(json.dumps(rows[0]) + "\n")
+    cache = os.path.join(repo, readout.FIT_CACHE)
+    t = os.path.getmtime(cache) + 10
+    os.utime(exp, (t, t))                          # jsonl strictly newer than the cache
+    calls = {"n": 0}
+    orig = readout._read_experiments
+
+    def spy(path):
+        calls["n"] += 1
+        return orig(path)
+
+    readout._read_experiments = spy
+    try:
+        outs = [readout.maybe_refit(repo, min_new_rows=5) for _ in range(5)]
+    finally:
+        readout._read_experiments = orig
+    assert calls["n"] == 1, "sub-threshold history re-parsed %d times (want 1)" % calls["n"]
+    assert all(o == first for o in outs), "memoized fit differs from the cached one"
+
+
 def main():
     checks = [
         check_1_render_titles, check_2_line_widths, check_3_vram_monotonic_and_anchor,
         check_4_ram_ordering, check_5_drift, check_6_quality_range,
         check_7_refit_recovers_and_caches, check_8_sparse_history_keeps_hand,
-        check_9_missing_and_corrupt_no_raise,
+        check_9_missing_and_corrupt_no_raise, check_10_sub_threshold_growth_parses_once,
     ]
     for c in checks:
         c()

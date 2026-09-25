@@ -5,8 +5,10 @@ Split out of studio.py (2026-07-06 light restructuring): pure code motion, no be
 change — imports are the only wiring. See tests/ for the regression net."""
 
 import os
+from collections import OrderedDict
 
 from PIL import Image
+from rich.color import Color
 from rich.style import Style
 from rich.text import Text
 
@@ -14,8 +16,8 @@ from rich.text import Text
 # Modes: "sextant" (2x3 px/cell, ~3x sharper), "quadrant" (2x2, universally font-safe),
 # "half" (1x2, the original). Cell grid stays cols x rows in every mode, so the panel
 # width math (cols+2) never changes. Sextants (U+1FB00..) need Cascadia 2404+, which
-# Windows Terminal ships; we DEFAULT to sextant when $WT_SESSION says we're in WT, else
-# quadrant. PREVIEW_MODE env or Ctrl+P (in-app) overrides if glyphs render as tofu.
+# Windows Terminal ships; the default is sextant everywhere. PREVIEW_MODE env or Ctrl+P
+# (in-app) switches to quadrant/half if the glyphs render as tofu.
 PREVIEW_MODE = os.environ.get("PREVIEW_MODE", "").strip().lower()
 if PREVIEW_MODE not in ("sextant", "quadrant", "half"):
     PREVIEW_MODE = "sextant"   # sharpest; if glyphs show as boxes (old Cascadia) press Ctrl+P -> quadrant
@@ -60,11 +62,39 @@ def _two_color_cell(sub):
     return mask, (fr // nf, fg_ // nf, fb // nf), (br // nb, bg_ // nb, bb // nb)
 
 
+_RENDER_CACHE = OrderedDict()   # (path, mtime_ns, size, cols, mode) -> Text; the frame viewer steps back and forth
+_RENDER_CACHE_MAX = 32
+
+
 def render_preview(path, cols=48):
     """Render a preview PNG as truecolor sub-cell ANSI art. Cell grid is cols x rows; each cell
     packs 2x3 (sextant), 2x2 (quadrant) or 1x2 (half) sub-pixels with one fg + one bg color,
     chosen per-cell by luminance clustering (chafa algorithm). Torch-free (PIL + Rich), never
-    raises -> Text() on error. Returns a rich.text.Text, drop-in for the original half-block one."""
+    raises -> Text() on error. Returns a rich.text.Text, drop-in for the original half-block one.
+    Memoized on the file's (mtime, size) + cols + mode; callers get a copy they may mutate."""
+    try:
+        st = os.stat(path)
+        key = (path, st.st_mtime_ns, st.st_size, cols, PREVIEW_MODE)
+    except OSError:
+        return Text()
+    hit = _RENDER_CACHE.get(key)
+    if hit is None:
+        hit = _render_preview(path, cols)
+        if not hit.plain:
+            return hit                                   # don't pin a failed decode (file mid-write)
+        _RENDER_CACHE[key] = hit
+        while len(_RENDER_CACHE) > _RENDER_CACHE_MAX:
+            _RENDER_CACHE.popitem(last=False)
+    else:
+        _RENDER_CACHE.move_to_end(key)
+    return hit.copy()
+
+
+def _rgb_color(c):
+    return Color.from_rgb(*c)   # same Color as parsing "#rrggbb", without formatting + re-parsing a string
+
+
+def _render_preview(path, cols):
     try:
         mode = PREVIEW_MODE
         sx, sy = {"sextant": (2, 3), "quadrant": (2, 2), "half": (1, 2)}.get(mode, (2, 3))
@@ -82,24 +112,19 @@ def render_preview(path, cols=48):
             for cx in range(cols):
                 x0 = cx * sx
                 if mode == "half":
-                    tr, tg, tb = px[x0, y0]
-                    br, bg, bb = px[x0, y0 + 1]
-                    t.append("▀", Style(color=f"#{tr:02x}{tg:02x}{tb:02x}", bgcolor=f"#{br:02x}{bg:02x}{bb:02x}"))
+                    t.append("▀", Style(color=_rgb_color(px[x0, y0]), bgcolor=_rgb_color(px[x0, y0 + 1])))
                     continue
                 sub = [px[x0 + dx, y0 + dy] for dy in range(sy) for dx in range(sx)]
                 m, fg, bg = _two_color_cell(sub)
                 if m == 0:
-                    t.append(" ", Style(bgcolor=f"#{bg[0]:02x}{bg[1]:02x}{bg[2]:02x}"))
+                    t.append(" ", Style(bgcolor=_rgb_color(bg)))
                 elif m == -1:
-                    t.append("█", Style(color=f"#{fg[0]:02x}{fg[1]:02x}{fg[2]:02x}"))
+                    t.append("█", Style(color=_rgb_color(fg)))
                 else:
                     glyph = _sextant_char(m) if mode == "sextant" else _QUAD[m]
-                    t.append(glyph, Style(color=f"#{fg[0]:02x}{fg[1]:02x}{fg[2]:02x}",
-                                          bgcolor=f"#{bg[0]:02x}{bg[1]:02x}{bg[2]:02x}"))
+                    t.append(glyph, Style(color=_rgb_color(fg), bgcolor=_rgb_color(bg)))
             if ry != rows - 1:
                 t.append("\n")
         return t
     except Exception:
         return Text()
-
-

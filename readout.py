@@ -334,11 +334,35 @@ def load_fit(repo):
         return None
 
 
+def _stat_key(path):
+    try:
+        st = os.stat(path)
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+_REFIT_MEMO = {}   # (repo, min_new_rows) -> (stat key of jsonl + cache, result)
+
+
 def maybe_refit(repo, min_new_rows=5):
+    """Memoized on the (mtime, size) of experiments.jsonl and the fit cache: this runs on every
+    keystroke (update_est), and the "too few new rows" branch below leaves the cache untouched —
+    without the memo, 4 of every 5 runs would re-parse the whole jsonl per keystroke."""
+    key = (_stat_key(os.path.join(repo, EXPERIMENTS)), _stat_key(os.path.join(repo, FIT_CACHE)))
+    hit = _REFIT_MEMO.get((repo, min_new_rows))
+    if hit is not None and hit[0] == key and key[0] is not None:
+        return hit[1]
+    res = _maybe_refit(repo, min_new_rows)
+    _REFIT_MEMO[(repo, min_new_rows)] = (key, res)
+    return res
+
+
+def _maybe_refit(repo, min_new_rows):
     """Cheap gate: if experiments.jsonl mtime <= cache mtime, return cached fit. Else parse the
     jsonl (skip corrupt lines), and if it has >= min_new_rows more rows than the cache's recorded
     row_count, refit + atomically rewrite the cache. First call (no cache) always builds a fit.
-    Runs inline — sub-millisecond on this history; no threads. Never raises."""
+    Runs inline; no threads. Never raises."""
     try:
         cache_path = os.path.join(repo, FIT_CACHE)
         exp_path = os.path.join(repo, EXPERIMENTS)
