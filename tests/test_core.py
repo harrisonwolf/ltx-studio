@@ -490,6 +490,12 @@ ps = dict(pj.phase_secs or {})
 check("R9 pause/resume: no negative or pause-inflated shot / phase times",
       pj.status == "done" and pj.seg_secs and min(pj.seg_secs) >= 0 and max(pj.seg_secs) < 1
       and all(v >= 0 for v in ps.values()) and ps.get("generating", 0) < 2.5, (pj.status, pj.seg_secs, ps))
+# ======================= R9b CANCEL while paused: the pause isn't charged to the open phase =======================
+cj = enq("cancel-paused", "director", 4, "--steps", 20, "--step_sleep", 0.05)
+wait(lambda: cj.status == "running" and cj.step >= 2)
+m.pause(); time.sleep(1.5); m.cancel(); settled(cj)
+check("R9b CANCEL while paused doesn't charge the pause to phase_secs",
+      cj.status == "cancelled" and sum((cj.phase_secs or {}).values()) < 1.3, (cj.status, cj.phase_secs))
 # ======================= R10 a resumed leg starts after its checkpointed shots =======================
 rs = enq("resume-seg", "director", 4, "--steps", 3, "--step_sleep", 0.1)
 wait(lambda: rs.seg >= 2 and rs.step >= 1)

@@ -2224,8 +2224,10 @@ class Studio(App):
         nseg, nstep = job.nseg, job.nstep
         near_end = bool(nstep) and job.step >= nstep - 2
         if getattr(job, "status", "") == "suspending":
-            _cur = job.seg + 1 if (getattr(job, "seg_started", None) is None and job.seg) else job.seg
-            return f"Suspending — finishing shot {_cur} of {nseg}, then saving its place and freeing the GPU…"
+            if getattr(job, "seg_started", None) is None and job.seg:
+                # a resumed leg still reloading: the engine checks the request before rendering another shot
+                return "Suspending — saving its place and freeing the GPU once the model is loaded…"
+            return f"Suspending — finishing shot {max(1, job.seg)} of {nseg}, then saving its place and freeing the GPU…"
         if job.kind == "enhance":
             return "Polishing the finished video — smoothing motion, upscaling, cleaning up faces…"
         phase = getattr(job, "phase", "") or ""
@@ -2240,8 +2242,9 @@ class Studio(App):
         if phase == "warmup":
             return "Warming up the GPU — the first step is the slowest…"
         if phase == "redirecting":
-            if _blind_hidden(job.params, "steadiness"):   # evolve redirects every seam, hold every 3rd
-                return "Working…"
+            if _blind_hidden(job.params, "steadiness"):   # evolve redirects every seam, hold every 3rd:
+                # [[PHASE decoding]] always precedes a redirect, so it reads as a longer decode
+                return f"Finishing shot {job.seg} of {nseg} — turning the model's output into frames…"
             return f"The director is studying the last frame to plan shot {job.seg + 1} of {nseg}…"
         if phase == "decoding":
             return f"Finishing shot {job.seg} of {nseg} — turning the model's output into frames…"
@@ -2254,7 +2257,7 @@ class Studio(App):
             if job.seg <= 1:
                 return "Warming up — loading the model into memory (first run ~2 min)…"
             # before this leg's first [[SEG]], job.seg is the checkpointed shot: the next one is starting
-            _nxt = job.seg + 1 if getattr(job, "seg_started", None) is None else job.seg
+            _nxt = min(job.seg + 1, nseg) if getattr(job, "seg_started", None) is None else job.seg
             return f"Starting shot {_nxt} of {nseg}…"
         if job.step > 0:
             return f"Painting shot {job.seg} of {nseg} — step {job.step} of {nstep}." + ("  Almost done with this shot." if near_end else "")
@@ -2344,7 +2347,8 @@ class Studio(App):
                 mean = sum(ssecs) / len(ssecs)
                 seg, nseg = int(getattr(job, "seg", 0) or 0), int(getattr(job, "nseg", 1) or 1)
                 left = mean * max(0, nseg - seg)
-                if seg >= 1:                       # the shot in flight: its remainder, not zero
+                if seg >= 1 and getattr(job, "seg_started", None) is not None:   # the shot in flight: its remainder
+                    #                                (a resumed leg reloading has none: seg = its checkpoint)
                     t0 = getattr(job, "seg_started", None)
                     left += min(mean, max(0.0, mean - (time.time() - t0))) if t0 else mean
                 return max(0, int(left))
@@ -2880,7 +2884,9 @@ class Studio(App):
         # every later shot's warmup used to flip the header back to "5/5 · warming up" + a dead
         # "loading..." ETA twenty minutes into a render. Later warmups ride the smart bar instead.
         # the leg's model load, before its first [[SEG]] (a resumed leg starts at its checkpointed shot c)
-        initial_load = loading and not getattr(job, "saw_step", False) and (
+        _reloading = (not getattr(job, "phase", "") and getattr(job, "seg_started", None) is None
+                      and int(getattr(job, "seg", 0) or 0) >= 1)   # resumed leg before its first marker
+        initial_load = (loading or _reloading) and not getattr(job, "saw_step", False) and (
             int(getattr(job, "seg", 0) or 0) <= 1 or getattr(job, "seg_started", None) is None)
         # T25: latch the wall-clock the step counter last advanced (for intra-step interpolation),
         # keyed to (job, seg, step) so it only updates on a real step change — never every tick.

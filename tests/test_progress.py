@@ -118,6 +118,27 @@ async def main():
         jb = mkjob(4); jb.phase, jb.seg = "redirecting", 2
         jb.params.update(pair_blind=True, pair_revealed=False, pair_varied_dial="steadiness")
         check("blind steadiness redirect narration is neutral", "plan shot" not in app._phase_text(jb), app._phase_text(jb))
+        jb.phase = "decoding"; dec_txt = app._phase_text(jb); jb.phase = "redirecting"
+        check("...and reads exactly like the decode before it (no countable marker)", app._phase_text(jb) == dec_txt,
+              (app._phase_text(jb), dec_txt))
+        # suspending during a resumed leg's reload: no shot is finished first
+        jr.status, jr.phase = "suspending", "loading"
+        check("suspend during a resumed reload names no shot", "finishing shot" not in app._phase_text(jr), app._phase_text(jr))
+        j0 = mkjob(5); j0.status, j0.phase, j0.seg, j0.seg_started = "suspending", "loading", 0, None
+        check("suspend during a first load names shot 1 (not 0)", "shot 1 of 5" in app._phase_text(j0), app._phase_text(j0))
+        jr.status = "running"
+        # ETA during a resumed leg's reload: no phantom in-flight shot
+        jr.seg_secs = [100, 100]
+        check("resumed reload ETA = the remaining shots only", app._time_left(jr) == 300, app._time_left(jr))
+        # a resumed leg's import window (no marker yet) already shows the load bar
+        jr.phase, jr.load_step, jr.load_total = "", 0, 0
+        ACTIVE["job"] = jr; app._smart_max_id = None; app.tick(); await pilot.pause(0.05)
+        pt = str(app.query_one("#progtext").render())
+        check("resumed leg's import window shows the load bar, not 'shot 2 of 5'", "shot 2 of 5" not in pt, pt)
+        ACTIVE["job"] = None; app.tick()
+        # resuming from a final-shot checkpoint never says "shot 6 of 5"
+        jf = mkjob(5); jf.phase, jf.seg, jf.seg_started, jf.saw_step = "", 5, None, False
+        check("final-checkpoint resume never names shot N+1 of N", "6 of 5" not in app._phase_text(jf), app._phase_text(jf))
         # director redirect cadence in the budget matches director.py (every 3rd seam): 3 shots -> 0
         jd = mkjob(3); jd.params.update(mode="director", steadiness="hold", directive="storm")
         jc = mkjob(3)

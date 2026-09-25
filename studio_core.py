@@ -455,6 +455,8 @@ class JobManager:
             if proc is None:                # claimed but not spawned yet: _run kills it right after Popen
                 return
             paused = self.paused
+            if paused and cur in self.jobs:  # the paused span isn't this job's phase time (TIMING view)
+                self._unpause_clock(self.jobs[cur])
         try:
             if paused:
                 self._signal_group(proc, signal.SIGCONT)
