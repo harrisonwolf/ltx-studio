@@ -36,6 +36,16 @@ def _frame_files(d):
     return [os.path.join(d, f) for _, f in sorted(names)]
 
 
+def _run_secs(job):
+    """Wall time of the whole run across suspend/resume legs (what the experiment row records);
+    elapsed() alone covers only the current / last leg."""
+    f = getattr(job, "run_secs", None)
+    try:
+        return int(f()) if f else int(job.elapsed())
+    except Exception:
+        return int(job.elapsed())
+
+
 def _argv_core(cmd, keep_seed=False):
     """A worker argv minus the per-job output paths (and the seed, unless it is the varied dial): two
     runs whose cores match would render the same thing (used to refuse A/B and PAIR variants that
@@ -2764,7 +2774,7 @@ class Studio(App):
                 return (pre + "blind A/B " + str((j.params or {}).get("pair_id", ""))[-4:])[:30]
             return (pre + (j.title or ""))[:30]
         def _arow(j):
-            return (j.id, j.id, _atitle(j), j.status, _dt(j.started), _dt(j.finished), fmt(j.elapsed()),
+            return (j.id, j.id, _atitle(j), j.status, _dt(j.started), _dt(j.finished), fmt(_run_secs(j)),
                     "—" if _blind_hides(j, "seconds") else _vidlen(j))
         # a finished run's row is frozen: cache it on everything it reads, so ticks stop re-formatting
         # the whole history just for _sync_table to find the signature unchanged
@@ -2772,7 +2782,7 @@ class Studio(App):
         for j in m.archived():
             p = j.params or {}
             key = (j.status, j.title, j.kind, j.created, j.started, j.finished, p.get("favorite"), p.get("seconds"),
-                   p.get("pair_revealed"))
+                   p.get("pair_revealed"), getattr(j, "prior_secs", 0))
             hit = acache.get(j.id) if j.finished else None
             if hit is None or hit[0] != key:
                 hit = (key, _arow(j))
@@ -2961,13 +2971,17 @@ class Studio(App):
         if job.id != self._live_id:
             self._live_id, self._live_n, self._live_last = job.id, None, None
             live.clear()
-        tail = job.tail
         # tail is a 300-line ring: once full, len() stops growing while content rotates. Track the job's
         # monotonic tail_count (lines ever appended) -- re-anchoring on the TEXT of the last line
-        # dropped a repeated identical line.
-        total = getattr(job, "tail_count", None)
-        if total is None:                        # older manager without the counter: old behavior
-            total = len(tail)
+        # dropped a repeated identical line. Take the pair in ONE read (the runner appends concurrently).
+        snap = getattr(job, "tail_snapshot", None)
+        if snap is not None:
+            tail, total = snap()
+        else:                                    # a manager without the snapshot API (tests' fakes)
+            tail = job.tail
+            total = getattr(job, "tail_count", None)
+            if total is None:
+                total = len(tail)
         if self._live_n is None or total < self._live_n:
             new = list(tail)                     # first paint for this job (or the counter reset)
             if self._live_n is not None:
@@ -4706,7 +4720,7 @@ class Studio(App):
                        else max(int(getattr(job, "last_ckpt_seg", 0) or 0), (job.seg or 0) - 1, 0))
         if _blind and _varied in ("seconds", "fps", "res"):
             _shots_done = _HIDDEN                   # the shot count gives the varied length away
-        L += ["", "[#6dffab]RESULT[/#6dffab]", row("runtime", fmt(job.elapsed())),
+        L += ["", "[#6dffab]RESULT[/#6dffab]", row("runtime", fmt(_run_secs(job))),
               row("shots", _HIDDEN if _shots_done == _HIDDEN else f"{_shots_done} of {job.nseg} done"),
               row("output", os.path.basename(job.out or "?")), row("size", _filesize(job.out))]
         if job.out:
@@ -4808,7 +4822,7 @@ class Studio(App):
              row("finished", ts(job.finished))]
         if job.started and job.created:
             L.append(row("queued", f"{fmt(int(job.started - job.created))} wait"))
-        L.append(row("runtime", fmt(job.elapsed())))
+        L.append(row("runtime", fmt(_run_secs(job))))
         psecs = getattr(job, "phase_secs", {}) or {}
         if psecs:
             L += ["", "[#6dffab]PHASES[/#6dffab]"]

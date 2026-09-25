@@ -44,8 +44,8 @@ def build_record(job):
     """Build one tidy experiment row from a finished Job. Pure (no I/O) so it's easy to test."""
     p = job.params or {}
     enhance = job.kind == "enhance"
-    try:
-        runtime_s = int(job.elapsed())
+    try:   # a suspended+resumed run spans every leg (like seg_secs/phase_secs), not just the last
+        runtime_s = int(job.run_secs()) if hasattr(job, "run_secs") else int(job.elapsed())
     except Exception:
         runtime_s = int(job.finished - job.started) if (job.finished and job.started) else None
     return {

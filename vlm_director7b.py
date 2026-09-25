@@ -220,6 +220,8 @@ def extract_prompt(resp):
     s = re.sub(r"^\s*(next shot|in the next (frame|shot)|shot\s*\d+|prompt|plan)\s*[:\-,.]?\s*",
                "", s, flags=re.I).strip().strip("*").strip().strip('"').strip("'").strip()
     out = " ".join(s.split())
+    if re.fullmatch(r"[\s*_.!\"']*KEEP[\s*_.!\"']*", out, re.I):
+        out = ""                           # a bare KEEP token is a verdict, never a prompt (run_once falls back)
     if not plan_txt:                       # model skipped the "PLAN:" line -> salvage the reasoning head
         head = " ".join(re.split(_label("PROMPT"), resp, flags=re.I)[0].split())
         plan_txt = head[:300] if head else "(no explicit plan)"
@@ -230,8 +232,8 @@ def is_keep(resp):
     """KEEP detection hardened (audit F1): KEEP at response start, as any standalone line, or as the
     PROMPT -- each optionally markdown-bolded ('**KEEP**', '**PROMPT:** KEEP')."""
     return (re.match(r"\s*\*{0,2}KEEP\b", resp, re.I) is not None
-            or any(re.match(r"\s*\*{0,2}KEEP\s*[.!]?\s*\*{0,2}\s*$", ln, re.I) for ln in resp.splitlines())
-            or re.search(_label("PROMPT") + r"\s*KEEP\s*[.!]?\s*\*{0,2}\s*$", resp, re.I | re.M) is not None)
+            or any(re.match(r"\s*\*{0,2}KEEP\s*[.!]?\s*\*{0,2}\s*[.!]?\s*$", ln, re.I) for ln in resp.splitlines())
+            or re.search(_label("PROMPT") + r"\s*\*{0,2}KEEP\s*[.!]?\s*\*{0,2}\s*[.!]?\s*$", resp, re.I | re.M) is not None)
 
 
 def run_once(model, proc, dev):

@@ -115,6 +115,10 @@ async def main():
         f.status, f.seg = "failed", 0
         check("failed-before-shot-1 shows 0 of N done", "0 of 3 done" in app._fmt_inspect(f))
         f.status, f.seg, f.last_ckpt_seg, f.nseg = "suspended", 3, 3, 5      # suspended after shot 3
+        rj = studio_core.Job("resumedrun", "t", "chained", [], dict(a.params, pair_blind=False, nseg=3))
+        rj.status, rj.started, rj.finished, rj.prior_secs = "done", 1000.0, 1050.0, 100
+        check("inspect runtime spans every resumed leg", "runtime     " + studio.fmt(150) in app._fmt_inspect(rj),
+              [l for l in app._fmt_inspect(rj).splitlines() if "runtime" in l])
         check("suspended run counts its checkpointed shots", "3 of 5 done" in app._fmt_inspect(f), app._fmt_inspect(f)[-400:])
         # 7. two enhances of the same run queued back to back get distinct outputs
         src = studio_core.Job("srcrun", "src", "single", [], dict(a.params, pair_blind=False))

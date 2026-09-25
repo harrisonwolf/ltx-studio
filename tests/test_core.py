@@ -27,6 +27,8 @@ ap.add_argument("--step_sleep", type=float, default=0.02); ap.add_argument("--im
 ap.add_argument("--ckpt_dir"); ap.add_argument("--resume"); ap.add_argument("--preview")
 ap.add_argument("--badutf8", action="store_true"); ap.add_argument("--spam", type=int, default=0)
 ap.add_argument("--grandchild"); ap.add_argument("--save_sleep", type=float, default=0.0)
+ap.add_argument("--hang_seg", type=int, default=0); ap.add_argument("--hang", type=float, default=0.0)
+ap.add_argument("--numbered", type=int, default=0); ap.add_argument("--line_sleep", type=float, default=0.0)
 args = ap.parse_args()
 SUSP = [False]
 print("[[PHASE importing]]", flush=True)
@@ -40,6 +42,8 @@ if args.grandchild:
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 for _ in range(args.spam):
     print("warning: same", flush=True)
+for i in range(args.numbered):                    # numbered log lines: line i is the i-th tail line
+    print("n %d" % (i + 1), flush=True); time.sleep(args.line_sleep)
 if args.badutf8:
     sys.stdout.flush(); sys.stdout.buffer.write(b"lib says \xff\xfe garbage\n"); sys.stdout.buffer.flush()
 def ckpt(seg):
@@ -54,6 +58,8 @@ def shot(seg):
     for i in range(args.steps):
         if i == 0: print("[[PHASE generating]]", flush=True)
         print("[[STEP %d %d]]" % (i + 1, args.steps), flush=True)
+        if i == 0 and seg == args.hang_seg and not args.resume:
+            time.sleep(args.hang)                  # a long in-flight shot (to be hard-killed)
         if i + 1 == args.steps: print("[[PHASE decoding]]", flush=True)
         time.sleep(args.step_sleep)
 if args.resume:
@@ -207,6 +213,7 @@ settled(sj)
 blk = enq("blocker", "single", 1, "--steps", 40, "--step_sleep", 0.1)
 wait(lambda: m.current == blk.id)
 r0 = sj.resumes
+t0 = (sj.started, sj.finished, getattr(sj, "prior_secs", 0), sj.elapsed())
 m.resume_suspended(sj.id)
 q_ok = sj.status == "queued" and "--resume" in sj.cmd
 out5 = m.remove(sj.id)
@@ -214,6 +221,10 @@ check("#5 REMOVE on a resumed run puts it back to 'suspended' (json + checkpoint
       q_ok and sj.status == "suspended" and sj.id in m.jobs and os.path.exists(sj.jpath())
       and sc.Job._ckpt_valid(sj.ckpt_dir) and sj.resumes == r0 and sj in m.suspended(),
       (out5, sj.status, os.path.exists(sj.jpath())))
+t1 = (sj.started, sj.finished, getattr(sj, "prior_secs", 0), sj.elapsed())
+disk = json.load(open(sj.jpath()))
+check("R4 REMOVE's undo-resume restores started/finished/prior_secs (elapsed() unchanged, persisted)",
+      t1 == t0 and t0[0] and disk.get("started") == t0[0] and disk.get("finished") == t0[1], (t0, t1))
 m.resume_suspended(sj.id)
 try:
     os.remove(os.path.join(sj.ckpt_dir, "state.json"))      # checkpoint no longer valid
@@ -299,6 +310,105 @@ settled(hk)
 check("#2 resume after a hard kill: the re-rendered shot isn't double counted",
       leg1 == "suspended" and hk.status == "done" and segs(hk.tok_counts) == [1, 2, 3, 4]
       and len(hk.seg_secs) == 4 and segs(hk.drift) == [1, 2, 3, 4], (leg1, hk.tok_counts, hk.seg_secs))
+
+# ======================= R1 runtime_s / phase_secs across legs =======================
+rt = enq("runtime", "director", 3, "--step_sleep", 0.3)
+wait(lambda: rt.seg == 2)
+m.suspend()
+settled(rt)
+leg1_st, leg1 = rt.status, rt.finished - rt.started
+m.resume_suspended(rt.id)
+settled(rt)
+leg2 = rt.finished - rt.started
+rr = rows(rt)
+disk = json.load(open(rt.jpath()))
+check("R1 resumed run: runtime_s spans every leg (prior_secs persisted); elapsed() stays the last leg",
+      leg1_st == "suspended" and rt.status == "done" and leg1 >= 1.0 and rr
+      and int(leg1 + leg2) <= rr[-1]["runtime_s"] <= int(leg1 + leg2) + 1
+      and abs(disk.get("prior_secs", 0) - leg1) < 0.01 and rt.elapsed() == int(leg2),
+      (leg1_st, leg1, leg2, rr and rr[-1]["runtime_s"], disk.get("prior_secs")))
+d = json.load(open(rt.jpath()))
+for k in ("prior_secs", "pre_resume", "phase_ckpt"):
+    d.pop(k, None)
+oldp = os.path.join(TMP, "legacy_rt.json"); json.dump(d, open(oldp, "w"))
+try:
+    lj = sc.Job.load(oldp)
+    legacy_ok = lj.prior_secs == 0 and lj.run_secs() == lj.elapsed() and el.build_record(lj)["runtime_s"] == lj.elapsed()
+except Exception as e:
+    legacy_ok = e
+check("R1 pre-fix JSON (no prior_secs) loads with prior_secs=0; runtime_s == elapsed()", legacy_ok is True, legacy_ok)
+
+hp = enq("hardkill-phases", "director", 3, "--hang_seg", 3, "--hang", 5.0)
+wait(lambda: hp.seg == 3 and hp.step >= 1)
+time.sleep(1.2)                                     # >=1.2s of in-flight 'generating' that will be lost
+m.hard_interrupt()
+settled(hp)
+leg1_st, gen1 = hp.status, hp.phase_secs.get("generating", 0)
+m.resume_suspended(hp.id)
+settled(hp)
+gen = hp.phase_secs.get("generating", 0)
+rg = rows(hp)
+check("R1 hard kill -> resume: the discarded in-flight shot's phase time is dropped from phase_secs",
+      leg1_st == "suspended" and hp.status == "done" and gen1 >= 1.0 and gen < 0.8 and len(hp.seg_secs) == 3
+      and rg and rg[-1]["phase_secs"].get("generating", 0) == gen, (leg1_st, gen1, gen, hp.seg_secs))
+
+# ======================= R2 resume from the FINAL checkpoint: no phantom shot =======================
+fk = enq("final-ckpt", "director", 3, "--save_sleep", 1.5)
+wait(lambda: fk.phase == "saving")
+m.hard_interrupt()                                   # killed while saving: the final checkpoint is valid
+settled(fk)
+leg1_st, n1 = fk.status, list(fk.seg_secs)
+m.resume_suspended(fk.id)                            # resumes with every shot done -> renders nothing
+settled(fk)
+rf = rows(fk)
+check("R2 resume from the final checkpoint doesn't append a phantom shot to seg_secs",
+      leg1_st == "suspended" and fk.status == "done" and len(n1) == 3 and len(fk.seg_secs) == 3
+      and rf and len(rf[-1]["seg_secs"]) == 3, (leg1_st, n1, fk.seg_secs))
+
+# ======================= R3 CANCEL / SUSPEND between the runner's claim and Popen =======================
+_cls_save = sc.Job.save
+GATE = {"title": None, "in": threading.Event(), "go": threading.Event()}
+def _gated_save(self):
+    if (self.title == GATE["title"] and threading.current_thread() is not threading.main_thread()
+            and m.current == self.id and m.proc is None and not GATE["in"].is_set()):
+        GATE["in"].set(); GATE["go"].wait(10)       # hold the runner inside the claim -> Popen window
+    return _cls_save(self)
+sc.Job.save = _gated_save
+try:
+    GATE.update(title="win-cancel"); GATE["in"].clear(); GATE["go"].clear()
+    wc = enq("win-cancel", "single", 1, "--steps", 40, "--step_sleep", 0.1)
+    held = GATE["in"].wait(10)
+    m.cancel(); GATE["go"].set(); t0 = time.time()
+    settled(wc)
+    check("R3 CANCEL in the claim->Popen window is honored (not silently dropped)",
+          held and wc.status == "cancelled" and time.time() - t0 < 3, (held, wc.status, time.time() - t0))
+    GATE.update(title="win-susp"); GATE["in"].clear(); GATE["go"].clear()
+    ws = enq("win-susp", "director", 3, "--step_sleep", 0.05)
+    held = GATE["in"].wait(10)
+    res = m.suspend(); GATE["go"].set()
+    settled(ws)
+    check("R3 SUSPEND in the claim->Popen window is held and lands 'suspended'",
+          held and isinstance(res, tuple) and res[0] and ws.status == "suspended" and sc.Job._ckpt_valid(ws.ckpt_dir)
+          and len(ws.seg_secs) < 3, (held, res, ws.status, ws.seg_secs))
+finally:
+    GATE["go"].set()
+    sc.Job.save = _cls_save
+
+# ======================= R6 LIVE log: tail + tail_count read as a consistent pair =======================
+nj = enq("numbered", "single", 1, "--numbered", 600, "--line_sleep", 0.003)
+wait(lambda: len(nj.tail) > 5)
+bad, seen = [], 0
+while nj.status == "running" and seen < 60:
+    t, n = nj.tail_snapshot()                        # exactly how studio.py's LIVE view reads it
+    last = t[-1] if t else None
+    time.sleep(0.005)                                # the runner keeps appending meanwhile...
+    if t and last.startswith("n "):
+        seen += 1
+        if t[-1] != last or last != "n %d" % n:      # ...but the snapshot never changes under us
+            bad.append((last, t[-1], n))
+settled(nj)
+check("R6 a reader's tail/tail_count pair always matches (count never ahead of / behind the list)",
+      seen >= 20 and not bad, (seen, bad[:5]))
 
 # ======================= #8 UI action racing the runner's final status =======================
 for label, fn in (("suspend", lambda: m.suspend()), ("pause", lambda: m.pause())):

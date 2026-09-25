@@ -29,7 +29,7 @@ _FIELDS = ["id", "title", "kind", "cmd", "params", "status", "seg", "nseg", "ste
            "phase", "load_step", "load_total", "load_msg", "saw_step", "first_step_ts", "first_step_seg",
            "ckpt_dir", "resumes", "last_ckpt_seg", "preview", "plans", "dir_ms",
            "phase_started", "phase_secs", "seg_started", "seg_secs", "peak_vram",
-           "seam_mse", "drift", "tok_counts", "dcfg", "qorder"]
+           "seam_mse", "drift", "tok_counts", "dcfg", "qorder", "prior_secs", "pre_resume", "phase_ckpt"]
 # Blind A/B pair state (pair_id, pair_variant, pair_blind, pair_varied_dial, pair_revealed) lives INSIDE
 # each job's `params` dict, which is itself in _FIELDS above and round-trips through save()/load() -- so
 # pair_revealed already survives an app restart with no extra top-level field needed.
@@ -50,8 +50,9 @@ class Job:
         self.created = time.time()
         self.qorder = self.created   # queue position (PROMOTE lowers it); `created` stays the true creation time
         self.started = self.finished = None
-        self.tail = []              # last log lines, in-memory
-        self.tail_count = 0         # total lines ever appended to tail in this process (not persisted)
+        self.prior_secs = 0         # wall seconds of EARLIER legs of a suspended+resumed run (run_secs())
+        self.pre_resume = None      # [started, finished, prior_secs] before RESUME, so REMOVE can undo it
+        self._tail_snap = ([], 0)   # (last log lines, lines ever appended) -- ONE tuple, see `tail` below
         # ---- load/phase tracking + checkpoint/suspend (per integration contract) ----
         self.phase = ""
         self.load_step, self.load_total, self.load_msg = 0, 0, ""
@@ -70,11 +71,41 @@ class Job:
         self.phase_secs = {}        # {phase: cumulative seconds}
         self.seg_started = None     # wall-clock the current shot began
         self.seg_secs = []          # [seconds per completed shot]
+        self.phase_ckpt = {}        # {str(seg): phase_secs as of that [[CKPT]]} -> resume drops the lost shot
         self.peak_vram = None       # max [[VRAM mb]] seen (experiment_log measured DV)
         # ---- Q3: measurement floor (seam/drift/token telemetry) ----
         self.seam_mse = []          # [[seg, mse*100], ...] seam continuity per continuation
         self.drift = []             # [[seg, pre*100, post*100], ...] drift vs the shot-1 anchor
         self.tok_counts = []        # [[seg, n_tokens], ...] prompt length per shot
+
+    # ---- LIVE log ring. The runner thread appends while the UI thread reads. The (lines, count) pair is
+    # published as ONE immutable tuple (a new list per line, never mutated in place): a reader that needs
+    # both must take them together via tail_snapshot() -- two separate attribute reads can straddle an
+    # append, and no ordering of two stores fixes that.
+    @property
+    def tail(self):
+        return self._tail_snap[0]
+
+    @tail.setter
+    def tail(self, lines):
+        self._tail_snap = (list(lines), self._tail_snap[1])
+
+    @property
+    def tail_count(self):
+        """Total lines ever appended (monotonic, not persisted). Use tail_snapshot() to pair it with tail."""
+        return self._tail_snap[1]
+
+    @tail_count.setter
+    def tail_count(self, n):
+        self._tail_snap = (self._tail_snap[0], int(n))
+
+    def tail_snapshot(self):
+        """(lines, tail_count) as one consistent pair."""
+        return self._tail_snap
+
+    def _tail_push(self, line):
+        lines, n = self._tail_snap
+        self._tail_snap = (lines[-299:] + [line], n + 1)
 
     def jpath(self):
         return os.path.join(RUNS_DIR, f"{self.id}.json")
@@ -121,18 +152,26 @@ class Job:
             j.status = "interrupted"
             j.finished = j.finished or (
                 os.path.getmtime(j.logpath()) if os.path.exists(j.logpath()) else j.started)
+        tail = []
         if os.path.exists(j.logpath()):
             try:
-                j.tail = open(j.logpath()).read().splitlines()[-300:]
+                tail = open(j.logpath()).read().splitlines()[-300:]
             except Exception:
                 pass
-        j.tail_count = len(j.tail)
+        j._tail_snap = (tail, len(tail))
         return j
 
     def elapsed(self):
+        """Wall seconds of the CURRENT (or last) leg."""
         a = self.started or self.created
         b = self.finished or time.time()
         return int(b - a)
+
+    def run_secs(self):
+        """Wall seconds of the whole run: every earlier leg of a suspended+resumed run + this leg."""
+        a = self.started or self.created
+        b = self.finished or time.time()
+        return int((self.prior_secs or 0) + (b - a))
 
     def pct(self):
         if self.nstep:
@@ -242,7 +281,10 @@ class JobManager:
             if "--resume" in j.cmd and j._ckpt_valid(ck):
                 j.status, j.ckpt_dir = "suspended", ck
                 j.resumes = max(0, int(j.resumes or 0) - 1)
-                j.finished = j.finished or time.time()     # resume_suspended cleared it; freeze elapsed()
+                if j.pre_resume:                           # restore the leg timing RESUME cleared/folded
+                    j.started, j.finished, j.prior_secs = j.pre_resume
+                    j.pre_resume = None
+                j.finished = j.finished or time.time()     # (pre-fix JSON: no stash) freeze elapsed()
                 j.save()
                 return "suspended"
             self.jobs.pop(jid, None)
@@ -380,12 +422,14 @@ class JobManager:
         # this one finished in between. The cancel request names THIS job, so it can't leak onto the next.
         with self._lock:
             proc, cur = self.proc, self.current
-            if not (proc and cur):
+            if not cur:
                 return
             if interrupt:
                 self._interrupt_req = cur   # stall-sentry kill -> 'interrupted' (ckpt kept)
             else:
                 self._cancel_req = cur      # explicit user cancel -> 'cancelled' (vs kernel OOM-kill -> 'interrupted')
+            if proc is None:                # claimed but not spawned yet: _run kills it right after Popen
+                return
             paused = self.paused
         try:
             if paused:
@@ -423,7 +467,7 @@ class JobManager:
         with self._lock:
             proc, cur = self.proc, self.current
             job = self.jobs.get(cur) if cur else None
-            if not (proc and job):
+            if not job:
                 return False, "no active run to suspend"
             if int(job.nseg or 1) <= 1:
                 return False, "single-shot run: nothing to checkpoint (use CANCEL)"
@@ -434,7 +478,7 @@ class JobManager:
                 if self.paused:                  # a SIGSTOP'd process must be continued to run its handler
                     self._signal_group(proc, signal.SIGCONT)
                     self.paused = False
-                if self._usr1_ready:
+                if self._usr1_ready and proc is not None:
                     proc.send_signal(signal.SIGUSR1)   # leader ONLY: children keep SIGUSR1's default (die)
                     msg = "suspending: checkpoints at the next shot boundary"
                 else:
@@ -452,6 +496,11 @@ class JobManager:
                 job.cmd = list(job.cmd) + ["--resume", job.ckpt_dir]
             job.status = "queued"
             job.resumes += 1
+            # fold the leg that just ended into prior_secs (run_secs() spans every leg); stash the
+            # pre-resume timing so REMOVE can undo this RESUME exactly
+            job.pre_resume = [job.started, job.finished, job.prior_secs or 0]
+            if job.started and job.finished:
+                job.prior_secs = (job.prior_secs or 0) + max(0.0, job.finished - job.started)
             job.started = job.finished = None
             job.save()
 
@@ -547,8 +596,10 @@ class JobManager:
             if job.status != "queued" or self.jobs.get(job.id) is not job:
                 return            # REMOVEd (or put back to 'suspended') after _loop picked it
             job.status, job.started, job.seg, job.step = "running", time.time(), 0, 0
+            job.pre_resume = None                 # started: REMOVE can no longer undo the RESUME
             self.current, self.paused = job.id, False
             self._usr1_ready, self._suspend_pending = False, None
+            self._suspend_req = False
         # reset load/phase tracking on every (re)start
         job.phase, job.load_step, job.load_total, job.load_msg = "", 0, 0, ""
         job.saw_step, job.first_step_ts, job.first_step_seg = False, None, 1
@@ -562,6 +613,9 @@ class JobManager:
             job.seg_secs = list(job.seg_secs or [])
             job.dir_ms = dict(job.dir_ms or {})
             job.seam_mse, job.drift, job.tok_counts = (list(x or []) for x in (job.seam_mse, job.drift, job.tok_counts))
+            job.phase_ckpt = {k: v for k, v in (job.phase_ckpt or {}).items() if c > 0 and int(k) <= c}
+            if str(c) in job.phase_ckpt:      # the killed leg's in-flight shot is re-rendered: drop its phases
+                job.phase_secs = dict(job.phase_ckpt[str(c)])
             if c > 0:
                 job.seg_secs = job.seg_secs[:c]
                 job.dir_ms = {k: v for k, v in job.dir_ms.items() if int(k) <= c}
@@ -569,28 +623,39 @@ class JobManager:
                     [e for e in x if e and int(e[0]) <= c] for x in (job.seam_mse, job.drift, job.tok_counts))
         else:
             job.phase_secs, job.seg_secs = {}, []
+            job.phase_ckpt, job.prior_secs = {}, 0
             job.dir_ms = {}
             job.dcfg = {}
             job.seam_mse, job.drift, job.tok_counts = [], [], []
         job.save()
-        self._suspend_req = False
         suspended_ckpt = None
         seg_closed = False        # the current shot's time is already in seg_secs (closed on saving/suspend)
+        seg_stepped = False       # a [[STEP]] ran since the last [[SEG]]: only then is it a real shot (a
+                                  # resume from the FINAL checkpoint prints [[SEG n+1]] and renders nothing)
         last_save = time.time()
         cwd = job.params.get("cwd") or REPO
 
         def _close_shot():
             nonlocal seg_closed
-            if job.seg_started is not None and not seg_closed:
+            if job.seg_started is not None and not seg_closed and seg_stepped:
                 job.seg_secs.append(int(time.time() - job.seg_started))
                 seg_closed = True
 
         with open(job.logpath(), "a" if resumed else "w") as lf:   # a resumed leg APPENDS to the run's log
             try:
                 # errors="replace": ONE non-UTF-8 byte from some library must not abort the read loop
-                self.proc = subprocess.Popen(job.cmd, cwd=cwd, env=env, stdout=subprocess.PIPE,
-                                             stderr=subprocess.STDOUT, text=True, errors="replace", bufsize=1,
-                                             start_new_session=True)   # own process group -> cancel can killpg children
+                proc = subprocess.Popen(job.cmd, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                                        stderr=subprocess.STDOUT, text=True, errors="replace", bufsize=1,
+                                        start_new_session=True)   # own process group -> cancel can killpg children
+                with self._lock:
+                    self.proc = proc
+                    # a CANCEL that landed between the claim and here (proc was still None) is only
+                    # recorded -> act on it now. A held SUSPEND stays in _suspend_pending (sent below).
+                    if job.id in (self._cancel_req, self._interrupt_req):
+                        try:
+                            os.killpg(proc.pid, signal.SIGKILL)
+                        except Exception:
+                            proc.kill()
                 for line in self.proc.stdout:
                     line = line.rstrip()
                     lf.write(line + "\n"); lf.flush()
@@ -610,14 +675,15 @@ class JobManager:
                         a, b = int(m.group(2)), int(m.group(3))
                         if m.group(1) == "SEG":
                             _now = time.time()
-                            if job.seg_started is not None and a > job.seg and not seg_closed:
+                            if job.seg_started is not None and a > job.seg and not seg_closed and seg_stepped:
                                 job.seg_secs.append(int(_now - job.seg_started))
-                            seg_closed = False
+                            seg_closed = seg_stepped = False
                             job.seg, job.nseg, job.step = a, b, 0
                             job.seg_started = _now
                             transition = True
                         else:
                             job.step, job.nstep = a, b
+                            seg_stepped = True
                             if not job.saw_step:
                                 job.saw_step, job.first_step_ts = True, time.time()
                                 job.first_step_seg = job.seg
@@ -672,6 +738,10 @@ class JobManager:
                     ck = _CKPT.search(line)
                     if ck:
                         job.last_ckpt_seg = int(ck.group(1))
+                        snap = dict(job.phase_secs)     # phases as of this commit (open phase up to now)
+                        if job.phase and job.phase_started is not None:
+                            snap[job.phase] = snap.get(job.phase, 0) + (time.time() - job.phase_started)
+                        job.phase_ckpt[ck.group(1)] = snap
                         transition = True
                     su = _SUSP.search(line)
                     if su:
@@ -679,8 +749,7 @@ class JobManager:
                         _close_shot()           # printed where the next [[SEG]] would be: last shot of this leg
                         transition = True
                     if line and "vision_model" not in line and not line.startswith("[["):
-                        job.tail.append(line); job.tail = job.tail[-300:]
-                        job.tail_count += 1     # monotonic: lets the LIVE view re-anchor on a full ring
+                        job._tail_push(line)    # list + monotonic count published together (LIVE re-anchor)
                     now = time.time()
                     if transition or (now - last_save) >= 3:
                         job.save(); last_save = now

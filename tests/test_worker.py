@@ -708,6 +708,13 @@ def bug12_markdown_labels():
     check("#12 KEEP detected with markdown bold, not in ordinary prompts",
           keep is not None and all(keep(c) for c in kc) and not any(keep(c) for c in nk),
           keep and [(c, keep(c)) for c in kc + nk])
+    bolds = ["", "*", "**"]
+    kc2 = ["%sPROMPT:%s %sKEEP%s%s" % (a, a, b, b, dot) for a in bolds for b in bolds for dot in ("", ".")]
+    kc2 += ["**PROMPT**: **KEEP**", "PLAN: fits\n**PROMPT:** **KEEP**", "PLAN: fits\nPROMPT: **KEEP.**"]
+    bad2 = [(c, keep and keep(c), ep(c)[0]) for c in kc + kc2
+            if not (keep and keep(c)) or ep(c)[0].strip("*. ").upper() == "KEEP"]
+    check("R5 KEEP (any */** around label and/or KEEP) is detected; extract_prompt never returns a bare KEEP",
+          not bad2, bad2)
 
 
 print("RESULT:", "PASS" if ok else "FAIL", "(%.1fs)" % (time.time() - T0))
