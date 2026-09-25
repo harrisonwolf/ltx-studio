@@ -411,10 +411,22 @@ class JobManager:
             if proc and job and not self.paused and job.status in ("running", "suspending"):
                 try:
                     self._signal_group(proc, signal.SIGSTOP)
-                    self.paused = True
+                    self.paused, self._paused_at = True, time.time()
                     job.status = "paused"; job.save()
                 except Exception:
                     pass
+
+    def _unpause_clock(self, job):
+        """Shift the running shot / phase / step-rate baselines past a PAUSE (call under _lock, BEFORE
+        SIGCONT: the worker's next marker then closes its interval against the shifted start). Doing
+        it from the UI's next tick instead raced markers printed right after SIGCONT and wrote the
+        pause into one interval and a negative time into the next."""
+        gap = max(0.0, time.time() - (getattr(self, "_paused_at", None) or time.time()))
+        for attr in ("seg_started", "phase_started", "first_step_ts"):
+            v = getattr(job, attr, None)
+            if v:
+                setattr(job, attr, v + gap)
+        self._paused_at = None
 
     def resume(self):
         with self._lock:
@@ -422,6 +434,7 @@ class JobManager:
             job = self.jobs.get(cur) if cur else None
             if proc and job and self.paused and job.status == "paused":
                 try:
+                    self._unpause_clock(job)
                     self._signal_group(proc, signal.SIGCONT)
                     self.paused = False
                     job.status = "running"; job.save()
@@ -487,6 +500,7 @@ class JobManager:
             try:
                 self._suspend_req = True
                 if self.paused:                  # a SIGSTOP'd process must be continued to run its handler
+                    self._unpause_clock(job)
                     self._signal_group(proc, signal.SIGCONT)
                     self.paused = False
                 if self._usr1_ready and proc is not None:
@@ -607,7 +621,9 @@ class JobManager:
         with self._lock:
             if job.status != "queued" or self.jobs.get(job.id) is not job:
                 return            # REMOVEd (or put back to 'suspended') after _loop picked it
-            job.status, job.started, job.seg, job.step = "running", time.time(), 0, 0
+            # a resumed leg starts AFTER its checkpointed shots (the bar/shot text must not restart at 0)
+            job.status, job.started, job.step = "running", time.time(), 0
+            job.seg = self._resume_seg(job) if "--resume" in job.cmd else 0
             job.pre_resume = None                 # started: REMOVE can no longer undo the RESUME
             self.current, self.paused = job.id, False
             self._usr1_ready, self._suspend_pending = False, None

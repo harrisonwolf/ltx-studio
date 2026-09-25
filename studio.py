@@ -58,6 +58,12 @@ def _blind_hidden(p, *dials):
     return any(d in hit for d in dials)
 
 
+def _ckpt_shots(job):
+    """Shots a stopped run has safely behind it: its last checkpoint, or the shots before the one it
+    was on (after a hard kill job.seg is the LOST in-flight shot, one more than the checkpoint holds)."""
+    return max(int(getattr(job, "last_ckpt_seg", 0) or 0), int(getattr(job, "seg", 0) or 0) - 1, 0)
+
+
 def _run_secs(job):
     """Wall time of the whole run across suspend/resume legs (what the experiment row records);
     elapsed() alone covers only the current / last leg."""
@@ -2530,7 +2536,8 @@ class Studio(App):
         queue action + on_data_table_row_highlighted keep working unchanged."""
         m = self.mgr
         items = [(j, "QUEUED · #%d" % (i + 1), SPAL["accent"]) for i, j in enumerate(m.queued())]
-        items += [(j, ("SUSPENDED" if _blind_hidden(j.params, "shape") else "SUSPENDED · shot %s/%s" % (j.seg, j.nseg)),
+        items += [(j, ("SUSPENDED" if _blind_hidden(j.params, "shape")
+                       else "SUSPENDED · shot %s/%s" % (_ckpt_shots(j), j.nseg)),
                    SPAL["warning"]) for j in m.suspended()]
         t = self.query_one("#qtable", DataTable)
         try:
@@ -2717,7 +2724,7 @@ class Studio(App):
         except Exception:
             pass
 
-    def _absorb_standby_gap(self, job, gap, standby=True):
+    def _absorb_standby_gap(self, job, gap):
         """Modern Standby froze the VM for `gap` wall-seconds (this platform enters standby when
         the display goes dark, ES_SYSTEM_REQUIRED or not — Kernel-Power confirmed, twice). Shift
         every wall-clock baseline forward so pace / this-shot / time-left math self-heals at wake
@@ -2727,8 +2734,7 @@ class Studio(App):
                 v = getattr(job, attr, None)
                 if v:
                     setattr(job, attr, v + gap)
-            if standby:
-                job.slept = getattr(job, "slept", 0.0) + gap
+            job.slept = getattr(job, "slept", 0.0) + gap
             try:
                 self._smart_step_wall += gap
             except Exception:
@@ -2762,16 +2768,17 @@ class Studio(App):
                 self._absorb_standby_gap(_aj, _gap)
             if getattr(self, "_paused_since", None):   # already absorbed -> don't count it again at resume
                 self._paused_since = (self._paused_since[0], self._paused_since[1] + _gap)
-        # A PAUSE (SIGSTOP) freezes the render but not the wall clock: shift the pace / this-shot /
-        # time-left baselines by the paused span at resume, as for standby (minus the standby tally).
+        # A PAUSE (SIGSTOP) freezes the render but not the wall clock. The manager shifts the job's
+        # shot / phase / step baselines at resume (before SIGCONT, so no marker races it); the UI
+        # only shifts its own intra-step latch.
         if _aj is not None and m.paused:
             if getattr(self, "_paused_since", None) is None:
                 self._paused_since = (_aj.id, _wall)
         elif getattr(self, "_paused_since", None):
             _pid, _t0 = self._paused_since
             self._paused_since = None
-            if _aj is not None and _aj.id == _pid:
-                self._absorb_standby_gap(_aj, max(0.0, _wall - _t0), standby=False)
+            if _aj is not None and _aj.id == _pid and getattr(self, "_smart_step_wall", None):
+                self._smart_step_wall += max(0.0, _wall - _t0)
         # GPU STATUS — from our OWN job state ONLY, never nvidia-smi. REPRODUCED: nvidia-smi polling
         # in this WSL2 (RTX 5070 Blackwell + driver 591.74) destabilizes the dxg passthrough and
         # restarts the WHOLE VM after ~30 calls, EVEN WITH NO CUDA RUNNING. So there is no live VRAM%
@@ -2846,8 +2853,9 @@ class Studio(App):
             if self._live_id is not None:
                 self._live_id = None
                 self._preview_id = None
-            self._smart_step_wall = self._smart_step_key = None   # T25: reset smart-bar latches
-            self._smart_max, self._smart_max_id = 0, None
+            self._smart_step_wall = self._smart_step_key = None   # T25: reset the intra-step latch; the
+            # running-max latch is keyed by job id (reset when a DIFFERENT job starts), so a resumed
+            # run's next leg doesn't restart the bar at 0%
             return
         tag = "‖ PAUSED" if m.paused else "▶ RUNNING"
         kglyph, klabel = _run_kind(job)
@@ -3275,6 +3283,19 @@ class Studio(App):
         if seg not in (None, ""):                  # skip for single runs so the form keeps its default
             c["seg"] = seg
         return {k: v for k, v in c.items() if v is not None}
+
+    def _blind_refuse(self, job, panel, verb):
+        """A run derived from an UNREVEALED blind A/B run (clone, re-roll, replicate, enhance) would show
+        the hidden value -- in the form, its dialog, or the new run's title / card. Refuse until REVEAL."""
+        if not _blind_hidden(job.params, (job.params or {}).get("pair_varied_dial")):
+            return False
+        try:
+            self.query_one(panel, Static).update(
+                f"[#ffcf5c]{verb} would show this blind run's hidden value — rate the pair and "
+                f"↯ REVEAL it first.[/#ffcf5c]")
+        except Exception:
+            pass
+        return True
 
     def _echo_refusal(self):
         """_queue_current_run reports a refusal on NEW RUN's #newinfo; from an ARCHIVE action that
@@ -4012,6 +4033,8 @@ class Studio(App):
             job = self.mgr.jobs.get(jid)
             if not job:
                 return
+            if self._blind_refuse(job, "#qinspect", "CLONE"):
+                return
             if (job.params.get("mode") or job.kind) == "enhance":
                 self.query_one("#qinspect", Static).update(
                     "[#ffcf5c]Enhance runs can't be cloned — they're a post-process of another run.[/#ffcf5c]")
@@ -4096,6 +4119,8 @@ class Studio(App):
             job = self.mgr.jobs.get(jid)
             if not job:
                 return
+            if self._blind_refuse(job, "#inspectinfo", "CLONE"):
+                return
             if (job.params.get("mode") or job.kind) == "enhance":
                 self.query_one("#inspectinfo", Static).update(
                     "[#ffcf5c]Enhance runs can't be cloned — they're a post-process of another run. "
@@ -4118,6 +4143,8 @@ class Studio(App):
                 return
             job = self.mgr.jobs.get(jid)
             if not job:
+                return
+            if self._blind_refuse(job, "#inspectinfo", "RE-ROLL"):
                 return
             if (job.params.get("mode") or job.kind) == "enhance":
                 self.query_one("#inspectinfo", Static).update(
@@ -4220,6 +4247,8 @@ class Studio(App):
             job = self.mgr.jobs.get(jid)
             if not job:
                 return
+            if self._blind_refuse(job, "#inspectinfo", "×N"):
+                return
             if (job.params.get("mode") or job.kind) == "enhance":
                 self.query_one("#inspectinfo", Static).update(
                     "[#ffcf5c]Enhance runs can't be replicated — they have no seed. Replicate the original render.[/#ffcf5c]")
@@ -4316,6 +4345,8 @@ class Studio(App):
                 return
             job = self.mgr.jobs.get(jid)
             if not job:
+                return
+            if self._blind_refuse(job, "#inspectinfo", "ENHANCE"):
                 return
             src_rel = job.params.get("frames_dir", "")
             src_abs = os.path.join(REPO, src_rel) if src_rel else ""
@@ -4513,7 +4544,7 @@ class Studio(App):
                 note = "[#ffcf5c]≡ queued — not run yet (config below; no results until it renders)[/#ffcf5c]\n\n"
             elif getattr(job, "status", "") == "suspended":
                 where = ("" if _blind_hidden(job.params, "shape")
-                         else " @ shot %s/%s" % (getattr(job, "seg", "?"), getattr(job, "nseg", "?")))
+                         else " @ shot %s/%s" % (_ckpt_shots(job), getattr(job, "nseg", "?")))
                 note = "[#ffcf5c]▽ suspended%s — will resume from its checkpoint[/#ffcf5c]\n\n" % where
         except Exception:
             note = ""
@@ -4753,8 +4784,7 @@ class Studio(App):
             if p.get("source_root") and p.get("source_root") != p.get("source_id"):
                 L.append(row("original", p.get("source_root")))
         # done = every shot; otherwise the last checkpointed shot, or the shots before the one in flight
-        _shots_done = (job.nseg if job.status == "done"
-                       else max(int(getattr(job, "last_ckpt_seg", 0) or 0), (job.seg or 0) - 1, 0))
+        _shots_done = job.nseg if job.status == "done" else _ckpt_shots(job)
         if _len_blind:
             _shots_done = _HIDDEN                   # the shot count gives the varied length away
         L += ["", "[#6dffab]RESULT[/#6dffab]", row("runtime", fmt(_run_secs(job))),

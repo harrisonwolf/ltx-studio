@@ -135,6 +135,30 @@ async def main():
               [l for l in txt.splitlines() if "whale" in l])
         a.kind, a.plans, a.director = "chained", [], ""
         a.params["pair_blind"] = False
+        # derived runs (clone / re-roll / ×N / enhance) of an unrevealed blind run are refused
+        br = studio_core.Job("blindsrc", "t", "single", [], dict(a.params, pair_blind=True, pair_revealed=False,
+                                                                   pair_varied_dial="seed", pair_id="blind-z"))
+        br.status, br.started, br.finished, br.save = "done", 1.0, 2.0, (lambda: None)
+        jobs[br.id] = br
+        app.query_one(studio.TabbedContent).active = "tab-arch"; app.tick(); await pilot.pause(0.2)
+        n_before = len(jobs)
+        for btn in ("clonebtn", "rerollbtn", "replbtn", "enhancebtn"):
+            t.move_cursor(row=list(t.rows).index(next(k for k in t.rows if k.value == "blindsrc")))
+            await pilot.pause(0.05)
+            app.query_one("#" + btn).press(); await pilot.pause(0.2)
+            info = str(app.query_one("#inspectinfo").render())
+            check(f"{btn} on an unrevealed blind run is refused", "REVEAL" in info and app.screen is app.screen_stack[0], info[:80])
+        check("no derived run queued from a blind run", len(jobs) == n_before)
+        jobs.pop("blindsrc")
+        # a hard-killed suspended run's card counts its CHECKPOINTED shots (job.seg is the lost one)
+        hk = studio_core.Job("hardkilled", "t", "chained", [], dict(a.params, pair_blind=False, nseg=6))
+        hk.status, hk.seg, hk.last_ckpt_seg, hk.save = "suspended", 3, 2, (lambda: None)
+        jobs[hk.id] = hk
+        app._sync_queue_cards(); await pilot.pause(0.1)
+        qt = app.query_one("#qtable", DataTable)
+        cards = " ".join(str(qt.get_row(k)) for k in qt.rows)
+        check("hard-killed SUSPENDED card counts checkpointed shots", "shot 2/6" in cards and "shot 3/6" not in cards, cards[:200])
+        jobs.pop("hardkilled")
         # 6. "shots done" is honest for a run that failed before its first shot completed
         f = studio_core.Job("failrun", "t", "chained", [], dict(a.params, pair_blind=False, nseg=3))
         f.status, f.seg = "failed", 0

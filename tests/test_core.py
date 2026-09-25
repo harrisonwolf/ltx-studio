@@ -478,6 +478,31 @@ os.utime(sj2.logpath(), (sj2.started - 400, sj2.started - 400))
 lj2 = sc.Job.load(sj2.jpath())
 check("R7 a leg's reloaded end is never before its start (no negative runtime)",
       lj2.finished is not None and lj2.finished >= lj2.started and lj2.run_secs() >= 0, (lj2.started, lj2.finished))
+# ======================= R9 PAUSE -> RESUME never writes negative / pause-inflated times =======================
+pj = enq("pausing", "director", 4, "--steps", 6, "--step_sleep", 0.05)
+for _ in range(3):                       # pause mid-shot a few times; markers follow SIGCONT immediately
+    wait(lambda: pj.status == "running" and pj.step >= 2)
+    m.pause(); time.sleep(1.2); m.resume()
+    time.sleep(0.1)
+settled(pj)
+ps = dict(pj.phase_secs or {})
+# a shot is ~6 x 0.05 s of steps: whole seconds (seg_secs are int) only if a 1.2 s pause leaked in
+check("R9 pause/resume: no negative or pause-inflated shot / phase times",
+      pj.status == "done" and pj.seg_secs and min(pj.seg_secs) >= 0 and max(pj.seg_secs) < 1
+      and all(v >= 0 for v in ps.values()) and ps.get("generating", 0) < 2.5, (pj.status, pj.seg_secs, ps))
+# ======================= R10 a resumed leg starts after its checkpointed shots =======================
+rs = enq("resume-seg", "director", 4, "--steps", 3, "--step_sleep", 0.1)
+wait(lambda: rs.seg >= 2 and rs.step >= 1)
+m.suspend(); settled(rs)
+seen = []
+if rs.status == "suspended":
+    m.resume_suspended(rs.id)
+    wait(lambda: rs.status == "running")
+    end = time.time() + 5
+    while time.time() < end and rs.status == "running":
+        seen.append(rs.seg); time.sleep(0.01)
+    settled(rs)
+check("R10 a resumed leg never shows shot 0 (it starts after its checkpoint)", seen and min(seen) >= 1, seen[:10])
 # ======================= R8 resume_suspended takes the manager lock (runner claims under it) =======================
 rj = sc.Job("resume_lock", "t", "chained", W("--nseg", 3), P(3))
 rj.status, rj.started, rj.finished, rj.ckpt_dir = "suspended", time.time() - 100, time.time() - 50, ck

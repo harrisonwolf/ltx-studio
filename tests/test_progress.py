@@ -59,7 +59,8 @@ async def main():
         # single-shot runs keep the old whole-run behavior
         j1 = mkjob(1); j1.phase, j1.seg, j1.step, j1.phase_started = "decoding", 1, 25, time.time()
         check("single-shot decode still late in the bar", app._smart_pct(j1) >= 60, app._smart_pct(j1))
-        # a pause shifts the time-left baselines at resume
+        # a pause: the MANAGER shifts the job's shot/phase baselines (before SIGCONT, race-free); the UI's
+        # later tick must not shift them again -- only its own intra-step latch
         j2 = mkjob(3); j2.phase, j2.seg, j2.step = "generating", 2, 10
         t0 = time.time()
         j2.seg_started = t0 - 100; j2.phase_started = t0 - 50; j2.first_step_ts = t0 - 400
@@ -67,8 +68,11 @@ async def main():
         app.tick()
         ACTIVE["paused"] = True; app.tick()
         app._paused_since = (j2.id, app._paused_since[1] - 600)   # pretend the pause lasted 10 minutes
+        wall0 = app._smart_step_wall = time.time() - 700
         ACTIVE["paused"] = False; app.tick()
-        check("resume shifts seg_started by the paused span", abs((j2.seg_started - (t0 - 100)) - 600) < 5, j2.seg_started - (t0 - 100))
+        check("the UI leaves the job's timing to the manager on resume", abs(j2.seg_started - (t0 - 100)) < 1, j2.seg_started - (t0 - 100))
+        check("the UI shifts its own step latch past the pause", app._smart_step_wall is None or app._smart_step_wall - wall0 >= 590,
+              app._smart_step_wall and app._smart_step_wall - wall0)
         check("a pause is not tallied as standby", not getattr(j2, "slept", 0.0), getattr(j2, "slept", None))
         ACTIVE["job"] = None
         # LIVE log: once the 300-line tail ring is full, a repeated identical line still shows up
