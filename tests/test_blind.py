@@ -25,6 +25,7 @@ class FakeMgr:
     def enhance_children(self, jid): return []
     def enqueue(self, title, kind, cmd, params):
         j = studio_core.Job(f"q{len(jobs)}", title, kind, cmd, params)   # real Job, never saved to disk
+        j.params_at_enqueue = dict(params)
         j.save = lambda: None
         jobs[j.id] = j; return j
     def remove(self, jid):
@@ -67,6 +68,13 @@ async def main():
         app._run_blind("steps", "30", "40")
         pair = [j for j in jobs.values() if j.params.get("pair_blind")]
         check("a real blind pair queues both runs", len(pair) == 2, len(pair))
+        # 3b. a SEED pair is a real pair (the seed is the variable; only it differs)
+        before, handed = len(jobs), len(getattr(app, "_handed_slugs", ()) or ())
+        app._run_blind("seed", "111", "222")
+        check("blind A/B on SEED queues both runs", len(jobs) == before + 2, len(jobs) - before)
+        # dry comparison builds don't burn output names: exactly the two queued runs reserved one each
+        check("pre-flight builds don't consume output names", len(app._handed_slugs) - handed == 2,
+              len(app._handed_slugs) - handed)
         # 4. if the 2nd variant is refused after the 1st queued, the 1st is taken back
         real_q = app._queue_blind_variant
         calls = []
@@ -95,10 +103,19 @@ async def main():
         a.params["pair_revealed"] = True
         app.tick(); await pilot.pause(0.2)
         check("revealed run shows its prompt again", "lighthouse" in str(t.get_row(a.id)), t.get_row(a.id))
+        # 5b. a LENGTH pair: single-vs-chained and the shot count would give the length away
+        a.params.update(pair_varied_dial="seconds", pair_revealed=False)
+        a.kind, a.nseg = "chained", 4
+        txt = app._fmt_inspect(a)
+        check("length-blind inspect hides kind and shot count", "chained" not in txt and "of 4 done" not in txt and "4  ×" not in txt,
+              [l for l in txt.splitlines() if "chained" in l or "of 4" in l or "4  ×" in l])
+        a.params["pair_blind"] = False
         # 6. "shots done" is honest for a run that failed before its first shot completed
         f = studio_core.Job("failrun", "t", "chained", [], dict(a.params, pair_blind=False, nseg=3))
         f.status, f.seg = "failed", 0
         check("failed-before-shot-1 shows 0 of N done", "0 of 3 done" in app._fmt_inspect(f))
+        f.status, f.seg, f.last_ckpt_seg, f.nseg = "suspended", 3, 3, 5      # suspended after shot 3
+        check("suspended run counts its checkpointed shots", "3 of 5 done" in app._fmt_inspect(f), app._fmt_inspect(f)[-400:])
         # 7. two enhances of the same run queued back to back get distinct outputs
         src = studio_core.Job("srcrun", "src", "single", [], dict(a.params, pair_blind=False))
         src.status, src.started, src.finished, src.save = "done", 1.0, 2.0, (lambda: None)
@@ -120,7 +137,7 @@ async def main():
             outs.append([j for j in jobs.values() if j.kind == "enhance"][-1].params.get("out"))
         check("back-to-back enhances get distinct outputs", len(set(outs)) == 2, outs)
         ej = [j for j in jobs.values() if j.kind == "enhance"][-1]
-        check("enhance job carries cwd from enqueue", ej.params.get("cwd") == studio.AD_REPO)
+        check("enhance job carries cwd from enqueue", ej.params_at_enqueue.get("cwd") == studio.AD_REPO)
 
 asyncio.run(main())
 print("RESULT:", "PASS" if ok else "FAIL")

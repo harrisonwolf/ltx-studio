@@ -69,7 +69,11 @@ async def run(screen_cls, msg_id, send_id, status_id, log_id):
         check(f"{tag}: SEND stays off mid-reply", scr.query_one(send_id).disabled and scr._inflight)
         check(f"{tag}: 'thinking' status not clobbered", "thinking" in text(scr.query_one(status_id)), text(scr.query_one(status_id)))
         # 4. RESET mid-reply: the late answer is dropped, not appended to the fresh chat
-        scr.action_reset(); await pilot.pause(1.0)
+        scr._on_chunk("partial old answer", scr._gen); await pilot.pause(0.05)
+        scr.action_reset(); await pilot.pause(0.05)
+        sp = scr.query_one("#streampreview" if tag == "ConsultScreen" else "#rawstream")
+        check(f"{tag}: RESET hides the old answer's stream preview", not sp.display and "partial" not in text(sp))
+        await pilot.pause(1.0)
         check(f"{tag}: RESET mid-reply drops the late answer", scr.history == [], scr.history)
         check(f"{tag}: SEND usable again after the dropped reply", not scr.query_one(send_id).disabled)
         d.delay = 0.05
@@ -80,6 +84,15 @@ async def run(screen_cls, msg_id, send_id, status_id, log_id):
         # 6. a load error stays visible (not overwritten by 'loading…')
         d.ready = False; d.last_error = "CUDA out of memory"; await pilot.pause(0.6)
         check(f"{tag}: load error stays visible", "out of memory" in text(scr.query_one(status_id)), text(scr.query_one(status_id)))
+        # 6b. the retry respawned (alive, loading) but the last failure is still the news -> keep it up
+        d.up = True; await pilot.pause(0.6)
+        check(f"{tag}: load error stays up while the retry loads", "out of memory" in text(scr.query_one(status_id)), text(scr.query_one(status_id)))
+        # 6c. keyboard send can't bypass a disabled SEND while the daemon is down
+        d.ready, d.up, d.last_error = True, False, ""      # reported ready, then died
+        n = len(scr.history)
+        ta.text = "should not send"; ta.focus()
+        await pilot.press("ctrl+enter"); await pilot.pause(0.3)
+        check(f"{tag}: ctrl+enter can't send to a dead daemon", len(scr.history) == n, scr.history[n:])
         # 7. back up -> ready line + SEND re-enabled
         d.ready, d.up, d.last_error = True, True, ""; await pilot.pause(0.6)
         check(f"{tag}: recovers to ready", not scr.query_one(send_id).disabled and "ready" in text(scr.query_one(status_id)))

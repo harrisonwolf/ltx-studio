@@ -36,10 +36,11 @@ def _frame_files(d):
     return [os.path.join(d, f) for _, f in sorted(names)]
 
 
-def _argv_core(cmd):
-    """A worker argv minus the per-job output paths and the seed: two runs whose cores match would
-    render the same thing (used to refuse A/B and PAIR variants that differ only in a dropped dial)."""
-    skip = {"--out", "--frames_dir", "--seed"}
+def _argv_core(cmd, keep_seed=False):
+    """A worker argv minus the per-job output paths (and the seed, unless it is the varied dial): two
+    runs whose cores match would render the same thing (used to refuse A/B and PAIR variants that
+    differ only in a dropped dial)."""
+    skip = {"--out", "--frames_dir"} if keep_seed else {"--out", "--frames_dir", "--seed"}
     return [a for i, a in enumerate(cmd) if a not in skip and (i == 0 or cmd[i - 1] not in skip)]
 
 
@@ -361,8 +362,7 @@ class ConsultDaemon:
                 return
             self._last_warm = time.time()
             self.ready = False
-            self.info = ""
-            self.last_error = ""
+            self.info = ""              # last_error is kept until a load succeeds: the UI shows it while retrying
             self.cpu_mode = cpu
             try:
                 try:                  # capture the daemon's load/error log so we're never blind again
@@ -407,6 +407,8 @@ class ConsultDaemon:
         obj = self._read_json()
         self.ready = bool(obj and obj.get("ready"))
         self.info = (obj.get("info") or "") if obj else ""
+        if self.ready:
+            self.last_error = ""
         if obj is None:              # the daemon died during load -> surface WHY instead of 'waking…' forever
             try:
                 lines = [l.strip() for l in open(os.path.join(REPO, "consult_daemon.err")).read().splitlines() if l.strip()]
@@ -606,8 +608,13 @@ class ConsultScreen(ModalScreen):
         if not inflight:
             send.disabled = True                      # re-armed (with the ready line) once it's back
         if d.alive():
-            self._status("[dim]waking the director… loading the model[/dim]")
+            if getattr(d, "last_error", ""):           # a retry is loading: keep the reason on screen
+                self._status(f"[#ff6d6d]director failed to load: {escape(d.last_error)} — retrying (loading again)…[/#ff6d6d]")
+            else:
+                self._status("[dim]waking the director… loading the model[/dim]")
             return
+        if inflight:                                   # a reply thread still reads this daemon's pipe:
+            return                                     # re-warm after it returns, never under it
         busy = self.app.mgr.active() is not None
         if getattr(d, "last_error", ""):
             self._status(f"[#ff6d6d]director failed to load: {escape(d.last_error)} — retrying…[/#ff6d6d]")
@@ -642,7 +649,8 @@ class ConsultScreen(ModalScreen):
     def _send(self):
         if getattr(self, "_inflight", False):   # a reply is streaming; a 2nd reader would corrupt the JSON framing
             return
-        if not self.app.consult.ready:
+        d = self.app.consult
+        if not (d.ready and d.alive()):         # Enter / Ctrl+Enter bypass the disabled SEND button
             return
         msg = (self.query_one("#chatmsg", TextArea).text or "").strip()
         if not msg:
@@ -745,6 +753,9 @@ class ConsultScreen(ModalScreen):
 
     def action_reset(self):
         self.app._consult_gen = getattr(self.app, "_consult_gen", 0) + 1
+        sp = self.query_one("#streampreview", Static)
+        sp.display = False
+        sp.update("")
         self.history.clear()
         self.cfg = {}
         self.query_one("#chatlog", RichLog).clear()
@@ -832,8 +843,13 @@ class ChatScreen(ModalScreen):
         if not inflight:
             send.disabled = True                      # re-armed (with the ready line) once it's back
         if d.alive():
-            self._status("[dim]waking the model… loading[/dim]")
+            if getattr(d, "last_error", ""):           # a retry is loading: keep the reason on screen
+                self._status(f"[#ff6d6d]model failed to load: {escape(d.last_error)} — retrying (loading again)…[/#ff6d6d]")
+            else:
+                self._status("[dim]waking the model… loading[/dim]")
             return
+        if inflight:                                   # a reply thread still reads this daemon's pipe:
+            return                                     # re-warm after it returns, never under it
         busy = self.app.mgr.active() is not None
         if getattr(d, "last_error", ""):
             self._status(f"[#ff6d6d]model failed to load: {escape(d.last_error)} — retrying…[/#ff6d6d]")
@@ -866,7 +882,8 @@ class ChatScreen(ModalScreen):
     def _send(self):
         if getattr(self, "_inflight", False):   # a reply is streaming; a 2nd reader would corrupt the JSON framing
             return
-        if not self.app.consult.ready:
+        d = self.app.consult
+        if not (d.ready and d.alive()):         # Enter / Ctrl+Enter bypass the disabled SEND button
             return
         msg = (self.query_one("#rawmsg", TextArea).text or "").strip()
         if not msg:
@@ -942,6 +959,9 @@ class ChatScreen(ModalScreen):
 
     def action_reset(self):
         self.app._chat_gen = getattr(self.app, "_chat_gen", 0) + 1
+        sp = self.query_one("#rawstream", Static)
+        sp.display = False
+        sp.update("")
         self.history.clear()
         self.query_one("#rawlog", RichLog).clear()
         self._status("[#9dffce]chat reset — start fresh.[/#9dffce]")
@@ -3039,7 +3059,7 @@ class Studio(App):
                 handed.add(cand)
                 return cand
 
-    def build(self, over=None):
+    def build(self, over=None, dry=False):
         # over: optional field-id -> value SNAPSHOT (blind-pair build). When present, every form read
         # goes through it instead of the live widgets, so a variant is constructed without mutating the
         # shared form (no on_select_changed/_sync_cfg_default clobber of cfg/steps). over may also carry
@@ -3049,7 +3069,8 @@ class Studio(App):
         W, H, fps, total_frames, seg_frames, nseg, chain = self._plan(over)
         seg_sec = round(seg_frames / fps, 2)
         slug = slugify(V("name")) or ("job_" + time.strftime("%H%M%S"))
-        slug = self._unique_slug(slug)
+        if not dry:                                   # dry: a comparison build -- don't reserve an output name
+            slug = self._unique_slug(slug)
         out, fdir = f"outputs/{slug}.mp4", f"outputs/{slug}_frames"
         prompt = (V("prompt") or "").strip()
         neg = (V("n_prompt") or "").strip() or NEG
@@ -3203,6 +3224,14 @@ class Studio(App):
         if seg not in (None, ""):                  # skip for single runs so the form keeps its default
             c["seg"] = seg
         return {k: v for k, v in c.items() if v is not None}
+
+    def _echo_refusal(self):
+        """_queue_current_run reports a refusal on NEW RUN's #newinfo; from an ARCHIVE action that
+        panel is hidden, so mirror it where the user is looking."""
+        try:
+            self.query_one("#inspectinfo", Static).update(_shown(self.query_one("#newinfo", Static)))
+        except Exception:
+            pass
 
     def _archive_over(self, job, **changes):
         """A build() snapshot of an archived run (+ `changes`) for RE-ROLL / PAIR / ×N. Built from the
@@ -3398,7 +3427,7 @@ class Studio(App):
             title, kind, cmd, params = self.build(over)
         except Exception as ex:   # bad numbers must never crash the app (a crash kills a live render)
             self.query_one("#newinfo", Static).update(
-                f"[#ff6d6d]Can't plan this run — check LENGTH / FPS / SEGMENT / STEPS / GUIDANCE are numbers ({type(ex).__name__}).[/#ff6d6d]")
+                f"[#ff6d6d]Can't plan this run — check LENGTH / FPS / SEGMENT / STEPS / GUIDANCE / COND STRENGTH are numbers ({type(ex).__name__}).[/#ff6d6d]")
             return None
         # GPU-budget gate: budget_ok() runs nvidia-smi, so ONLY probe when the board is idle
         # (nvidia-smi during live CUDA crashes the WSL VM). An active run -> this just queues behind it.
@@ -3742,12 +3771,12 @@ class Studio(App):
                 self._blind_msg(gate)
                 return
             try:
-                _t, _kind, cmd, _p = self.build(vcfg)
+                _t, _kind, cmd, _p = self.build(vcfg, dry=True)
                 kinds.append(_kind)
             except Exception as ex:
                 self._blind_msg(f"[#ff6d6d]Can't plan this pair — check the numbers ({type(ex).__name__}).[/#ff6d6d]")
                 return
-            cores.append(_argv_core(cmd))
+            cores.append(_argv_core(cmd, keep_seed=(var == "seed")))
         if cores[0] == cores[1]:
             self._blind_msg(f"[#ff6d6d]'{var}' A vs B would run the SAME command in this setup (the engine "
                             f"ignores it here) — nothing to compare. Not queued.[/#ff6d6d]")
@@ -4055,6 +4084,8 @@ class Studio(App):
                 if j:
                     self.query_one("#inspectinfo", Static).update(
                         f"[#9dffce]Re-rolled {job.id} → {j.id} with seed {seed}.[/#9dffce]")
+                else:
+                    self._echo_refusal()
             self.push_screen(RerollScreen((job.title or job.id)[:40], job.params.get("seed")), _do_reroll)
         elif b == "pairbtn":
             jid = self._selected("#atable")
@@ -4109,7 +4140,8 @@ class Studio(App):
                     return
                 cfg = self._archive_over(job, **{dial: value})   # KEEP the seed -- only the one dial differs
                 try:                                  # a dial build() drops for this run would queue a twin
-                    same = _argv_core(self.build(cfg)[2]) == _argv_core(self.build(self._archive_over(job))[2])
+                    same = (_argv_core(self.build(cfg, dry=True)[2], keep_seed=(dial == "seed"))
+                            == _argv_core(self.build(self._archive_over(job), dry=True)[2], keep_seed=(dial == "seed")))
                 except Exception:
                     same = False                      # let _queue_current_run report the planning error
                 if same:
@@ -4118,6 +4150,8 @@ class Studio(App):
                         f"it here) — nothing to pair.[/#ff6d6d]")
                     return
                 j = self._queue_current_run(over=cfg)         # same gated path as QUEUE RUN; form untouched
+                if not j:
+                    self._echo_refusal()
                 if j:
                     j.params["pair_id"] = job.id
                     j.params["pair_variant"] = "B"
@@ -4159,6 +4193,8 @@ class Studio(App):
                 if queued:
                     self.query_one("#inspectinfo", Static).update(
                         f"[#9dffce]Replicated {job.id} ×{len(queued)}: {', '.join(queued)}.[/#9dffce]")
+                else:
+                    self._echo_refusal()
             self.push_screen(ReplicateScreen((job.title or job.id)[:40]), _do_replicate)
         elif b == "favbtn":         # toggle ★ favorite on the selected ARCHIVE run (persisted in job.params)
             jid = self._selected("#atable")
@@ -4563,8 +4599,11 @@ class Studio(App):
             return row(k, _HIDDEN if (_blind and _varied == dial) else v)
 
         _KGLYPH = {"single": "▭", "chained": "▥", "director": "✦", "enhance": "▲"}
+        # a LENGTH / FPS / RES pair also differs in single-vs-chained and the shot count -> hide those too
+        _len_blind = _blind and _varied in ("seconds", "fps", "res")
+        _kind = "(hidden)" if _len_blind and job.kind in ("single", "chained") else job.kind
         L = [f"[b]{job.id}[/b]    {_status_glyph(job.status)} \[{job.status.upper()}]",
-             time.strftime(f"[dim]{_KGLYPH.get(job.kind, '·')} {job.kind} · %b %d  %H:%M[/dim]",
+             time.strftime(f"[dim]{'·' if _kind != job.kind else _KGLYPH.get(job.kind, '·')} {_kind} · %b %d  %H:%M[/dim]",
                            time.localtime(job.finished or job.created)),
              "─" * 48,
              "[#6dffab]PROMPT[/#6dffab]",
@@ -4577,12 +4616,14 @@ class Studio(App):
             L += ["[#6dffab]START IMAGE[/#6dffab]", f"  {p['image']}"]
         L += ["", "[#6dffab]SETTINGS[/#6dffab]"]
         if _blind and _varied == "steadiness":
-            L.append(row("mode", f"{job.kind} · {_HIDDEN}" if p.get("steadiness") else job.kind))
+            L.append(row("mode", f"{_kind} · {_HIDDEN}" if p.get("steadiness") else _kind))
         else:
-            L.append(row("mode", job.kind + (f" · {p['steadiness']}" if p.get("steadiness") else "")))
+            L.append(row("mode", _kind + (f" · {p['steadiness']}" if p.get("steadiness") else "")))
         L += [brow("resolution", p.get("res", "?"), "res"),
               brow("length", f"{p.get('seconds', '?')}s", "seconds")]
-        if int(job.nseg or 1) > 1:
+        if _len_blind:
+            L.append(row("shots", _HIDDEN))
+        elif int(job.nseg or 1) > 1:
             if _blind and _varied == "seg":
                 L.append(row("shots", f"{job.nseg}  ×  {_HIDDEN}"))
             else:
@@ -4660,8 +4701,13 @@ class Studio(App):
                   row("modes", "  ·  ".join(modes) if modes else "(not recorded)")]
             if p.get("source_root") and p.get("source_root") != p.get("source_id"):
                 L.append(row("original", p.get("source_root")))
+        # done = every shot; otherwise the last checkpointed shot, or the shots before the one in flight
+        _shots_done = (job.nseg if job.status == "done"
+                       else max(int(getattr(job, "last_ckpt_seg", 0) or 0), (job.seg or 0) - 1, 0))
+        if _blind and _varied in ("seconds", "fps", "res"):
+            _shots_done = _HIDDEN                   # the shot count gives the varied length away
         L += ["", "[#6dffab]RESULT[/#6dffab]", row("runtime", fmt(job.elapsed())),
-              row("shots", f"{job.nseg if job.status == 'done' else max(0, (job.seg or 0) - 1)} of {job.nseg} done"),
+              row("shots", _HIDDEN if _shots_done == _HIDDEN else f"{_shots_done} of {job.nseg} done"),
               row("output", os.path.basename(job.out or "?")), row("size", _filesize(job.out))]
         if job.out:
             out_abs = job.out if os.path.isabs(job.out) else os.path.join(REPO, job.out)
