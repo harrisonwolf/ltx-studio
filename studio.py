@@ -2726,9 +2726,10 @@ class Studio(App):
             fire_at = (getattr(self, "_stall_decode_secs", 600.0) if slow
                        else getattr(self, "_stall_secs", 240.0))
             if job.phase == "redirecting":
-                # a VLM call: director.py already times out each wait (daemon load 900 s + request 600 s)
-                # and recovers by itself, so only warn -- and only past that worst case (never escalate)
-                fire_at = max(getattr(self, "_stall_decode_secs", 600.0), 1800.0)
+                # a VLM call: director.py times out each wait and recovers by itself -- worst case daemon
+                # load 900 s + request 600 s + sidecar fallback 600 s = 2100 s -- so only warn, and only
+                # past that (never escalate; the 2 h catch-all still covers a real wedge)
+                fire_at = max(getattr(self, "_stall_decode_secs", 600.0), 2400.0)
             grace = (getattr(self, "_stall_decode_secs", 600.0) if slow
                      else getattr(self, "_stall_grace", 180.0))
             idle = now - prev["since"]
@@ -3056,12 +3057,22 @@ class Studio(App):
         psecs = getattr(job, "phase_secs", {}) or {}
         cur, cur_t0 = _live_phase(job), _live_phase_start(job)
         _redir_as_dec = _blind_hidden(p, "steadiness")   # redirect time shown inside the decode cell
+        _LOADS = ("importing", "offload", "loading_vlm")   # startup phases share the load cell (as in TIMING)
+        if cur in _LOADS:
+            cur = "loading"
+        _stale = 0.0                                       # post-[[SEG]] window: the previous phase's still-
+        if _post_seg_window(job):                          # open interval belongs to its own cell until the
+            _stale = max(0.0, job.seg_started - job.phase_started)   # [[PHASE warmup]] closes it
         cells = []
         for ph, lbl in (("loading", "load"), ("warmup", "warm"), ("generating", "gen"),
                         ("decoding", "decode"), ("saving", "save")):
             t = psecs.get(ph, 0)
+            if ph == "loading":
+                t += sum(psecs.get(x, 0) for x in _LOADS)
             if ph == "decoding" and _redir_as_dec:            # blind steadiness: redirects count as decode
                 t += psecs.get("redirecting", 0)
+            if _stale and ph == "decoding" and (job.phase == "decoding" or (job.phase == "redirecting" and _redir_as_dec)):
+                t += _stale
             if ph == cur and cur_t0:
                 cells.append(f"[#9dffce]{lbl} {fmt(int(t + time.time() - cur_t0))}[/#9dffce]")
             elif t > 0:

@@ -180,15 +180,29 @@ async def main():
         # recovers its own waits: daemon load 900 s + request 600 s)
         calls = []
         app.mgr.suspend = lambda: calls.append("suspend"); app.mgr.hard_interrupt = lambda: calls.append("kill")
-        for idle in (1250, 1600, 2500):
+        for idle in (1250, 2150, 2500):
             app._stall_state = {"sig": (jv.id, jv.phase, jv.seg, jv.step, 0), "pmt": 0.0,
                                 "since": time.monotonic() - idle, "fired": False, "susp": False, "killed": False}
             app._stall_note = ""
             app._alerts()
-            if idle == 1250:
-                check("1250 s into a redirect: no STALL banner yet", "STALL" not in (app._stall_note or ""), app._stall_note)
+            if idle in (1250, 2150):   # director.py's own worst case is 2100 s (900 + 600 + 600)
+                check(f"{idle} s into a redirect: no STALL banner yet", "STALL" not in (app._stall_note or ""), app._stall_note)
         check("a redirect is never auto-suspended or killed by the stall fuse", not calls, calls)
-        check("...but a redirect wedged past 30 min is flagged", "STALL" in (app._stall_note or ""), app._stall_note)
+        check("...but a redirect wedged past 40 min is flagged", "STALL" in (app._stall_note or ""), app._stall_note)
+        ACTIVE["job"] = None; app.tick()
+        # LIVE phase strip: startup phases tick in the load cell (matching TIMING), and the post-SEG window
+        # keeps the previous decode's time in its own cell
+        jl2 = mkjob(3); jl2.phase, jl2.seg, jl2.phase_started, jl2.seg_started = "offload", 0, time.time() - 20, None
+        jl2.phase_secs = {"importing": 30.0, "loading": 100.0}
+        ACTIVE["job"] = jl2; app.tick(); await pilot.pause(0.05)
+        tl = str(app.query_one("#ph_timeline").render())
+        check("LIVE load cell ticks during offload and includes importing", "load 2m30s" in tl, tl)
+        jl2.phase, jl2.seg, jl2.step = "decoding", 2, 25
+        jl2.phase_secs = {"loading": 100.0, "decoding": 10.0}
+        jl2.phase_started = time.time() - 45; jl2.seg_started = time.time() - 0.001
+        app.tick(); await pilot.pause(0.05)
+        tl = str(app.query_one("#ph_timeline").render())
+        check("post-SEG window keeps the open decode in the decode cell", "decode 54s" in tl or "decode 55s" in tl, tl)
         ACTIVE["job"] = None; app.tick()
         # suspending during a resumed leg's reload: no shot is finished first
         jr.status, jr.phase = "suspending", "loading"
